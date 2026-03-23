@@ -8,7 +8,7 @@ import (
 	"os"
 )
 
-var Version = "1.0.0"
+var Version = "dev"
 
 const (
 	ExitOK         = 0

@@ -259,9 +259,9 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 		if err := saveAuthFile(path, creds); err != nil {
 			return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", err)
 		}
-		if infoOut != nil {
-			fmt.Fprintf(infoOut, "[INFO] Migrated v1 encrypted password to latest format in config file: %s\n", path)
-		}
+		// if infoOut != nil {
+		// 	fmt.Fprintf(infoOut, "[INFO] Migrated v1 encrypted password to latest format in config file: %s\n", path)
+		// }
 	case strings.HasPrefix(value, "enc:v2:"):
 		password, err := decryptPassword(value)
 		if err != nil {

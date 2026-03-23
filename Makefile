@@ -10,8 +10,8 @@ APP_PKG ?= ./pkg/client/...
 GOFILES := $(shell find cmd pkg -name '*.go' -type f | sort)
 GOCACHE ?= /tmp/qbitctl-gocache
 CGO_ENABLED ?= 0
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS ?= -X github.com/naterator/qbitctl/pkg/client.Version=$(VERSION)
+VERSION ?= dev-$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo unknown)
+LDFLAGS ?= -X github.com/naterator/qbitctl/pkg/client.Version=$(VERSION) -s -w
 
 export GOCACHE
 

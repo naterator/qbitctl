@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,51 @@ func TestAddTorrentVariants(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestAddTorrentEmptySource(t *testing.T) {
+	server := newQBTestServer(t)
+	app := server.newApp()
+
+	err := app.AddTorrent("")
+	if err == nil {
+		t.Fatal("AddTorrent unexpectedly succeeded with empty source")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("AddTorrent err = %v, want ExitBadArgs", err)
+	}
+}
+
+func TestMoveTorrentEmptyPath(t *testing.T) {
+	server := newQBTestServer(t)
+	app := server.newApp()
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+
+	err := app.MoveTorrent(fullHash, "")
+	if err == nil {
+		t.Fatal("MoveTorrent unexpectedly succeeded with empty path")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("MoveTorrent err = %v, want ExitBadArgs", err)
+	}
+}
+
+func TestPauseTorrentHTTPError(t *testing.T) {
+	server := newQBTestServer(t)
+	server.statusQueue["/api/v2/torrents/stop"] = []int{http.StatusInternalServerError}
+	app := server.newApp()
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+
+	err := app.PauseTorrent(fullHash)
+	if err == nil {
+		t.Fatal("PauseTorrent unexpectedly succeeded on HTTP error")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitActionFail {
+		t.Fatalf("PauseTorrent err = %v, want ExitActionFail", err)
+	}
 }
 
 func TestActionSequencingAndForms(t *testing.T) {

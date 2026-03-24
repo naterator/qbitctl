@@ -1,6 +1,9 @@
 package client
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestSetCategoryVariants(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
@@ -129,5 +132,68 @@ func TestSetLimitAndShareRequests(t *testing.T) {
 	}
 	if got := server.forms["/api/v2/torrents/setShareLimits"][1].Get("inactiveSeedingTimeLimit"); got != "14400" {
 		t.Fatalf("inactiveSeedingTimeLimit preserved = %q, want 14400", got)
+	}
+}
+
+func TestSetFieldUnknown(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	app := server.newApp()
+
+	err := app.SetField(fullHash, "nonexistent", "value")
+	if err == nil {
+		t.Fatal("SetField unexpectedly succeeded for unknown field")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("SetField err = %v, want CodedError with ExitBadArgs", err)
+	}
+}
+
+func TestSetTagsAndSuperseed(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	app := server.newApp()
+
+	if err := app.SetTags(fullHash, "linux,iso"); err != nil {
+		t.Fatalf("SetTags err = %v", err)
+	}
+	if got := server.forms["/api/v2/torrents/setTags"][0].Get("tags"); got != "linux,iso" {
+		t.Fatalf("tags = %q, want linux,iso", got)
+	}
+
+	if err := app.SetSuperseed(fullHash, "true"); err != nil {
+		t.Fatalf("SetSuperseed err = %v", err)
+	}
+	if got := server.forms["/api/v2/torrents/setSuperSeeding"][0].Get("value"); got != "true" {
+		t.Fatalf("superseed value = %q, want true", got)
+	}
+}
+
+func TestSetAutoTMM(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	app := server.newApp()
+
+	if err := app.SetAutoTMM(fullHash, "true"); err != nil {
+		t.Fatalf("SetAutoTMM err = %v", err)
+	}
+	if got := server.forms["/api/v2/torrents/setAutoManagement"][0].Get("enable"); got != "true" {
+		t.Fatalf("autotmm enable = %q, want true", got)
+	}
+}
+
+func TestSetFieldInvalidToggleValue(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	app := server.newApp()
+
+	err := app.SetSuperseed(fullHash, "maybe")
+	if err == nil {
+		t.Fatal("SetSuperseed unexpectedly accepted invalid value")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("SetSuperseed err = %v, want ExitBadArgs", err)
 	}
 }

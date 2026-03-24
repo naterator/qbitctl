@@ -31,6 +31,9 @@ type qbTestServer struct {
 	addFiles          []uploadedTorrent
 	callOrder         []string
 	skipSeqToggle     bool
+	appVersion        string
+	apiVersion        string
+	transferInfo      *qbt.TransferInfo
 }
 
 type uploadedTorrent struct {
@@ -193,6 +196,31 @@ func (s *qbTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		s.recordForm(r.URL.Path, r)
 	case "/api/v2/torrents/setLocation":
 		s.recordForm(r.URL.Path, r)
+	case "/api/v2/app/version":
+		v := s.appVersion
+		if v == "" {
+			v = "v5.0.0"
+		}
+		_, _ = io.WriteString(w, v)
+	case "/api/v2/app/webapiVersion":
+		v := s.apiVersion
+		if v == "" {
+			v = "2.11.0"
+		}
+		_, _ = io.WriteString(w, v)
+	case "/api/v2/transfer/info":
+		info := s.transferInfo
+		if info == nil {
+			info = &qbt.TransferInfo{
+				DLInfoSpeed:      1024000,
+				UPInfoSpeed:      512000,
+				DLInfoData:       1073741824,
+				UPInfoData:       536870912,
+				ConnectionStatus: "connected",
+				DHTNodes:         42,
+			}
+		}
+		_ = json.NewEncoder(w).Encode(info)
 	default:
 		s.t.Fatalf("unexpected path: %s", r.URL.Path)
 	}
@@ -668,6 +696,94 @@ func TestTargetedCommandsAcceptPositionalHash(t *testing.T) {
 		}
 		if got := server.forms["/api/v2/torrents/setLocation"][0].Get("location"); got != "/downloads/linux" {
 			t.Fatalf("move location = %q, want /downloads/linux", got)
+		}
+	})
+}
+
+func TestBatchStartMultipleHashes(t *testing.T) {
+	hash1 := "0123456789abcdef0123456789abcdef01234567"
+	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
+	server := newQBTestServer(t)
+	server.torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
+
+	withQBServerClientFactory(t, server)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{
+		"--url", server.creds().URL,
+		"--user", "admin",
+		"--pass", "secret",
+		"start", hash1[:8], hash2[:8],
+	})
+
+	if _, stderr := captureOutput(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute returned error: %v", err)
+		}
+	}); strings.TrimSpace(stderr) != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	got := server.forms["/api/v2/torrents/start"][0].Get("hashes")
+	if got != hash1+"|"+hash2 {
+		t.Fatalf("start hashes = %q, want %q", got, hash1+"|"+hash2)
+	}
+}
+
+func TestBatchRemoveMultipleHashes(t *testing.T) {
+	hash1 := "0123456789abcdef0123456789abcdef01234567"
+	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
+	server := newQBTestServer(t)
+	server.torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
+
+	withQBServerClientFactory(t, server)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{
+		"--url", server.creds().URL,
+		"--user", "admin",
+		"--pass", "secret",
+		"remove", hash1[:8], hash2[:8],
+	})
+
+	if _, stderr := captureOutput(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute returned error: %v", err)
+		}
+	}); strings.TrimSpace(stderr) != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	// Should have paused and then deleted both
+	stopHashes := server.forms["/api/v2/torrents/stop"][0].Get("hashes")
+	deleteHashes := server.forms["/api/v2/torrents/delete"][0].Get("hashes")
+	wantHashes := hash1 + "|" + hash2
+	if stopHashes != wantHashes {
+		t.Fatalf("stop hashes = %q, want %q", stopHashes, wantHashes)
+	}
+	if deleteHashes != wantHashes {
+		t.Fatalf("delete hashes = %q, want %q", deleteHashes, wantHashes)
+	}
+}
+
+func TestCollectHashInputs(t *testing.T) {
+	t.Run("positional args take precedence", func(t *testing.T) {
+		opts := &CLIOptions{Hash: "from-flag"}
+		got := collectHashInputs(opts, []string{"arg1", "arg2"})
+		if len(got) != 2 || got[0] != "arg1" || got[1] != "arg2" {
+			t.Fatalf("collectHashInputs = %v, want [arg1 arg2]", got)
+		}
+	})
+
+	t.Run("falls back to flag", func(t *testing.T) {
+		opts := &CLIOptions{Hash: "from-flag"}
+		got := collectHashInputs(opts, nil)
+		if len(got) != 1 || got[0] != "from-flag" {
+			t.Fatalf("collectHashInputs = %v, want [from-flag]", got)
+		}
+	})
+
+	t.Run("returns nil when empty", func(t *testing.T) {
+		opts := &CLIOptions{}
+		got := collectHashInputs(opts, nil)
+		if got != nil {
+			t.Fatalf("collectHashInputs = %v, want nil", got)
 		}
 	})
 }

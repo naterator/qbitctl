@@ -25,6 +25,9 @@ type qbTestServer struct {
 	addFiles          []uploadedTorrent
 	callOrder         []string
 	skipSeqToggle     bool
+	appVersion        string
+	apiVersion        string
+	transferInfo      *TransferInfo
 }
 
 type uploadedTorrent struct {
@@ -198,6 +201,31 @@ func (s *qbTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		s.recordForm(r.URL.Path, r)
 	case "/api/v2/torrents/setLocation":
 		s.recordForm(r.URL.Path, r)
+	case "/api/v2/app/version":
+		v := s.appVersion
+		if v == "" {
+			v = "v5.0.0"
+		}
+		_, _ = io.WriteString(w, v)
+	case "/api/v2/app/webapiVersion":
+		v := s.apiVersion
+		if v == "" {
+			v = "2.11.0"
+		}
+		_, _ = io.WriteString(w, v)
+	case "/api/v2/transfer/info":
+		info := s.transferInfo
+		if info == nil {
+			info = &TransferInfo{
+				DLInfoSpeed:      1024000,
+				UPInfoSpeed:      512000,
+				DLInfoData:       1073741824,
+				UPInfoData:       536870912,
+				ConnectionStatus: "connected",
+				DHTNodes:         42,
+			}
+		}
+		_ = json.NewEncoder(w).Encode(info)
 	default:
 		s.t.Fatalf("unexpected path: %s", r.URL.Path)
 	}

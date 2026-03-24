@@ -12,6 +12,10 @@ Use it as a **standalone command-line tool** to manage torrents from the termina
 - Self-update from GitHub releases
 - Embed as a library with configurable I/O, context support, and no hardcoded stdout/stderr
 
+## Compatibility
+
+Requires **qBittorrent 5.0.0** or later (WebAPI v2.11.0+). Earlier versions used different endpoint names (`/api/v2/torrents/pause` and `/api/v2/torrents/resume`) that are not supported.
+
 ## Install
 
 Download the latest release for your platform:
@@ -204,17 +208,24 @@ qbitctl move /downloads/linux 9c328901
 
 #### remove (aliases: r, rm) / delete (aliases: d, de)
 
+Remove and delete also accept multiple hashes:
+
 ```bash
-qbitctl remove 9c328901        # remove torrent, keep data
-qbitctl delete 9c328901        # remove torrent and delete data
+qbitctl remove 9c328901             # remove torrent, keep data
+qbitctl delete 9c328901             # remove torrent and delete data
+qbitctl remove 9c328901 fedcba98    # remove multiple torrents
 ```
 
 ### Control commands
+
+Control commands accept one or more hashes:
 
 ```bash
 qbitctl start 9c328901         # (alias: st)
 qbitctl pause 9c328901         # (aliases: p, pa)
 qbitctl force-start 9c328901   # (aliases: f, fo, fs)
+qbitctl start 9c328901 fedcba98   # start multiple torrents
+qbitctl pause 9c32 fedc           # short hashes work too
 ```
 
 ### Setup

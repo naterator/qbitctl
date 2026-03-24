@@ -95,6 +95,18 @@ func applyPositionalHash(opts *CLIOptions, positionalHash string) {
 	}
 }
 
+// collectHashInputs gathers hash inputs from positional args and the --hash flag.
+// Positional args take precedence; if none are provided, the --hash flag value is used.
+func collectHashInputs(opts *CLIOptions, args []string) []string {
+	if len(args) > 0 {
+		return args
+	}
+	if opts.Hash != "" {
+		return []string{opts.Hash}
+	}
+	return nil
+}
+
 func executeConfigWrite(opts CLIOptions, outputPath string) error {
 	return result(qbt.ExecuteConfigWrite(opts, outputPath, os.Stderr))
 }
@@ -151,9 +163,9 @@ func newRootCmd() *cobra.Command {
 		newShowCmd(&opts),
 		newGetCmd(&opts),
 		newSetCmd(&opts),
-		newHashCmd(&opts, "start [hash]", "Start a torrent", []string{"st"}, (*App).StartTorrent),
-		newHashCmd(&opts, "pause [hash]", "Pause a torrent", []string{"p", "pa"}, (*App).PauseTorrent),
-		newHashCmd(&opts, "force-start [hash]", "Force start a torrent", []string{"f", "fo", "fs"}, (*App).ForceStartTorrent),
+		newHashCmd(&opts, "start [hash...]", "Start one or more torrents", []string{"st"}, (*App).StartTorrent),
+		newHashCmd(&opts, "pause [hash...]", "Pause one or more torrents", []string{"p", "pa"}, (*App).PauseTorrent),
+		newHashCmd(&opts, "force-start [hash...]", "Force start one or more torrents", []string{"f", "fo", "fs"}, (*App).ForceStartTorrent),
 		newMoveCmd(&opts),
 		newRemoveCmd(&opts, false),
 		newRemoveCmd(&opts, true),

@@ -66,6 +66,91 @@ func TestResolveHashScenarios(t *testing.T) {
 	}
 }
 
+func TestResolveHashes(t *testing.T) {
+	hash1 := "0123456789abcdef0123456789abcdef01234567"
+	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
+
+	t.Run("multiple full hashes", func(t *testing.T) {
+		server := newQBTestServer(t)
+		app := server.newApp()
+
+		got, err := app.ResolveHashes([]string{hash1, hash2})
+		if err != nil {
+			t.Fatalf("ResolveHashes err = %v", err)
+		}
+		if len(got) != 2 || got[0] != hash1 || got[1] != hash2 {
+			t.Fatalf("ResolveHashes = %v, want [%s %s]", got, hash1, hash2)
+		}
+	})
+
+	t.Run("multiple short hashes", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
+		app := server.newApp()
+
+		got, err := app.ResolveHashes([]string{hash1[:8], hash2[:8]})
+		if err != nil {
+			t.Fatalf("ResolveHashes err = %v", err)
+		}
+		if len(got) != 2 || got[0] != hash1 || got[1] != hash2 {
+			t.Fatalf("ResolveHashes = %v", got)
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		server := newQBTestServer(t)
+		app := server.newApp()
+
+		_, err := app.ResolveHashes(nil)
+		if err == nil {
+			t.Fatal("ResolveHashes unexpectedly succeeded with nil input")
+		}
+		var coded *CodedError
+		if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+			t.Fatalf("ResolveHashes err = %v, want ExitBadArgs", err)
+		}
+	})
+
+	t.Run("one bad short hash fails all", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.torrents = []TorrentInfo{{Hash: hash1}}
+		app := server.newApp()
+
+		_, err := app.ResolveHashes([]string{hash1[:8], "deadbeef"})
+		if err == nil {
+			t.Fatal("ResolveHashes unexpectedly succeeded with bad hash")
+		}
+	})
+
+	t.Run("mixed full and short hashes", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
+		app := server.newApp()
+
+		got, err := app.ResolveHashes([]string{hash1, hash2[:6]})
+		if err != nil {
+			t.Fatalf("ResolveHashes err = %v", err)
+		}
+		if len(got) != 2 || got[0] != hash1 || got[1] != hash2 {
+			t.Fatalf("ResolveHashes = %v", got)
+		}
+	})
+}
+
+func TestResolveHashEmpty(t *testing.T) {
+	server := newQBTestServer(t)
+	app := server.newApp()
+
+	_, err := app.ResolveHash("")
+	if err == nil {
+		t.Fatal("ResolveHash unexpectedly succeeded with empty input")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("ResolveHash err = %v, want ExitBadArgs", err)
+	}
+}
+
 func TestGetTorrentInfoErrors(t *testing.T) {
 	t.Run("invalid json", func(t *testing.T) {
 		server := newQBTestServer(t)

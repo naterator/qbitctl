@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	qbt "github.com/naterator/qbitctl/pkg/client"
 
@@ -281,20 +282,18 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 		Aliases: aliases,
 		Short:   short,
 		GroupID: "control",
-		Args:    cobra.RangeArgs(0, 1),
+		Args:    cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 {
-				applyPositionalHash(opts, args[0])
-			}
+			hashInputs := collectHashInputs(opts, args)
 			app, err := newAuthenticatedApp(opts)
 			if err != nil {
 				return err
 			}
-			hash, err := app.ResolveHash(opts.Hash)
+			hashes, err := app.ResolveHashes(hashInputs)
 			if err != nil {
 				return result(err)
 			}
-			return result(fn(app, hash))
+			return result(fn(app, strings.Join(hashes, "|")))
 		},
 	}
 }
@@ -324,12 +323,12 @@ func newMoveCmd(opts *CLIOptions) *cobra.Command {
 }
 
 func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
-	use := "remove [hash]"
-	short := "Remove a torrent but keep data"
+	use := "remove [hash...]"
+	short := "Remove torrents but keep data"
 	aliases := []string{"r", "rm"}
 	if deleteFiles {
-		use = "delete [hash]"
-		short = "Remove a torrent and delete data"
+		use = "delete [hash...]"
+		short = "Remove torrents and delete data"
 		aliases = []string{"d", "de"}
 	}
 	return &cobra.Command{
@@ -337,20 +336,18 @@ func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
 		Aliases: aliases,
 		Short:   short,
 		GroupID: "change",
-		Args:    cobra.RangeArgs(0, 1),
+		Args:    cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 {
-				applyPositionalHash(opts, args[0])
-			}
+			hashInputs := collectHashInputs(opts, args)
 			app, err := newAuthenticatedApp(opts)
 			if err != nil {
 				return err
 			}
-			hash, err := app.ResolveHash(opts.Hash)
+			hashes, err := app.ResolveHashes(hashInputs)
 			if err != nil {
 				return result(err)
 			}
-			return result(app.StopAndRemoveTorrent(hash, deleteFiles))
+			return result(app.StopAndRemoveTorrent(strings.Join(hashes, "|"), deleteFiles))
 		},
 	}
 }

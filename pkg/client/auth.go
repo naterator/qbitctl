@@ -230,6 +230,16 @@ func saveAuthFile(path string, creds Credentials) error {
 	return os.Chmod(path, 0o600)
 }
 
+func warnLoosePermissions(path string, infoOut io.Writer) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		fmt.Fprintf(infoOut, "[WARN] Config file %s has permissions %04o; recommended 0600. Fix with: chmod 600 %s\n", path, perm, path)
+	}
+}
+
 func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -237,6 +247,10 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 			return Credentials{}, false, nil
 		}
 		return Credentials{}, false, err
+	}
+
+	if infoOut != nil {
+		warnLoosePermissions(path, infoOut)
 	}
 
 	var diskConfig configFile

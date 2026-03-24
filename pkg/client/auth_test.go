@@ -194,7 +194,7 @@ func TestLoadAuthFileMigratesPlaintextPasswordToEncryptedConfig(t *testing.T) {
 func TestLoadAuthFileMigratesV1ToV2(t *testing.T) {
 	withMockMasterKey(t)
 	path := filepath.Join(t.TempDir(), "config.json")
-	
+
 	// Manual v1 encryption
 	block, _ := aes.NewCipher(deriveAuthKeyV1())
 	gcm, _ := cipher.NewGCM(block)
@@ -295,6 +295,38 @@ func TestRunInteractiveConfigValidatesURLAndSaves(t *testing.T) {
 	}
 	if savedCreds.User != "alice" || savedCreds.Pass != "secret" {
 		t.Fatalf("saved creds = %#v", savedCreds)
+	}
+}
+
+func TestWarnLoosePermissions(t *testing.T) {
+	withMockMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	creds := Credentials{URL: "http://localhost:8080", User: "admin", Pass: "secret"}
+	if err := saveAuthFile(path, creds); err != nil {
+		t.Fatalf("saveAuthFile failed: %v", err)
+	}
+
+	// With 0600, no warning expected
+	var out strings.Builder
+	_, _, err := loadAuthFile(path, &out)
+	if err != nil {
+		t.Fatalf("loadAuthFile err = %v", err)
+	}
+	if strings.Contains(out.String(), "[WARN]") {
+		t.Fatalf("unexpected warning for 0600 perms: %q", out.String())
+	}
+
+	// Loosen permissions to 0644
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod failed: %v", err)
+	}
+	out.Reset()
+	_, _, err = loadAuthFile(path, &out)
+	if err != nil {
+		t.Fatalf("loadAuthFile err = %v", err)
+	}
+	if !strings.Contains(out.String(), "[WARN]") || !strings.Contains(out.String(), "0644") {
+		t.Fatalf("expected permission warning, got: %q", out.String())
 	}
 }
 

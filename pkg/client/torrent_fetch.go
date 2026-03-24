@@ -48,6 +48,74 @@ func (a *App) ResolveHash(shortHash string) (string, error) {
 	}
 }
 
+// ResolveHashes resolves multiple short hashes to full hashes.
+// It fetches the torrent list once and resolves all inputs against it.
+func (a *App) ResolveHashes(inputs []string) ([]string, error) {
+	if len(inputs) == 0 {
+		return nil, codedErrf(ExitBadArgs, "At least one hash required for this operation")
+	}
+
+	// Check if all inputs are already full hashes
+	allFull := true
+	for _, input := range inputs {
+		if len(input) != 40 {
+			allFull = false
+			break
+		}
+	}
+	if allFull {
+		resolved := make([]string, len(inputs))
+		for i, input := range inputs {
+			lower := strings.ToLower(input)
+			if !validateHash(lower) {
+				return nil, codedErrf(ExitBadArgs, "Resolved hash is invalid: '%s'", input)
+			}
+			resolved[i] = lower
+		}
+		return resolved, nil
+	}
+
+	hashes, err := a.fetchAllHashes()
+	if err != nil {
+		return nil, err
+	}
+
+	resolved := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		lower := strings.ToLower(input)
+
+		if len(input) == 40 {
+			if !validateHash(lower) {
+				return nil, codedErrf(ExitBadArgs, "Resolved hash is invalid: '%s'", input)
+			}
+			resolved = append(resolved, lower)
+			continue
+		}
+
+		match := ""
+		matches := 0
+		for _, hash := range hashes {
+			if strings.HasPrefix(strings.ToLower(hash), lower) {
+				match = hash
+				matches++
+			}
+		}
+
+		switch {
+		case matches == 0:
+			return nil, codedErrf(ExitBadArgs, "No torrent matches short hash: %s", input)
+		case matches > 1:
+			return nil, codedErrf(ExitBadArgs, "Short hash is ambiguous: %s", input)
+		case !validateHash(strings.ToLower(match)):
+			return nil, codedErrf(ExitBadArgs, "Resolved hash is invalid: '%s'", match)
+		default:
+			resolved = append(resolved, strings.ToLower(match))
+		}
+	}
+
+	return resolved, nil
+}
+
 func (a *App) fetchAllHashes() ([]string, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/torrents/info", nil)
 	if err != nil {

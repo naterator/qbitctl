@@ -32,6 +32,8 @@ Once installed, keep it up to date with:
 qbitctl selfupdate
 ```
 
+Self-update verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl selfupdate`.
+
 ## Build from source
 
 Requirements: Go 1.26+
@@ -46,10 +48,10 @@ For a stripped static binary:
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o qbitctl ./cmd/qbitctl
 ```
 
-The version is injected at build time via `-ldflags`. The Makefile handles this automatically:
+The version is injected at build time via `-ldflags`. The Makefile handles this automatically with `VERSION`, defaulting to `dev-<short-sha>`:
 
 ```bash
-make            # build with version from git describe
+make            # build with VERSION or dev-<short-sha>
 make run        # go run
 make test       # go test ./...
 make check      # test + vet + fmt-check
@@ -77,14 +79,15 @@ qbitctl start 9c328901            # start a torrent
 
 ## Authentication
 
-qbitctl needs qBittorrent Web API credentials. They are resolved in this order:
+qbitctl needs qBittorrent Web API credentials. It loads the first matching config file in this order, then applies command-line overrides:
 
 1. `-c/--config <path>` (explicit config file)
 2. `$XDG_CONFIG_HOME/qbitctl/config.json`
 3. `./config.json`
-4. Command-line overrides with `-u/--url`, `-U/--user`, `-p/--pass`
 
-If `config.json` contains a cleartext password, qbitctl rewrites it in place with the encrypted `enc:v1:...` format.
+Command-line overrides use `-u/--url`, `-U/--user`, and `-p/--pass`.
+
+If `config.json` contains a cleartext password, qbitctl rewrites it in place with the encrypted `enc:v...` format.
 
 ### Interactive config
 
@@ -137,6 +140,7 @@ qbitctl list
 qbitctl list -j             # output as JSON
 qbitctl list -J             # raw server JSON response
 qbitctl list -t '{{range .}}{{.Hash}} {{.Name}}{{"\n"}}{{end}}'
+qbitctl list --fields hash,name,progress
 ```
 
 #### show (aliases: s, sh)
@@ -148,6 +152,7 @@ qbitctl show 9c328901
 qbitctl show 9c328901 -j    # output as JSON
 qbitctl show 9c328901 -J    # raw server JSON response
 qbitctl show 9c328901 -t '{{.Name}}'
+qbitctl show 9c328901 --fields name,state,ratio --no-header
 ```
 
 #### get (alias: g)
@@ -254,6 +259,8 @@ Commands in the View group support these output flags:
 | `--json` | `-j` | Output the normal display data as JSON |
 | `--server-json` | `-J` | Output the raw qBittorrent API JSON response |
 | `--template` | `-t` | Render output with a Go template (list and show only) |
+| `--fields` | | Render selected fields as tab-separated rows (list and show only) |
+| `--no-header` | | Omit the header row when using `--fields` |
 
 ## Torrent hashes
 
@@ -282,14 +289,21 @@ qbitctl start 9c32
 The `pkg/client` package can be used as a standalone Go library. All I/O is configurable through `App.Stdout` and `App.Stderr`, and all requests respect `App.Ctx` for cancellation and timeouts.
 
 ```go
-import "github.com/naterator/qbitctl/pkg/client"
+import (
+    "bytes"
+    "context"
+    "io"
+    "log"
+    "time"
+
+    "github.com/naterator/qbitctl/pkg/client"
+)
 
 app, err := client.NewClient(&client.Options{
     URL:  "http://localhost:8080",
     User: "admin",
     Pass: "secret",
-    Hash: "9c328901",
-}, true)
+})
 if err != nil {
     log.Fatal(err)
 }
@@ -304,9 +318,19 @@ defer cancel()
 app.Ctx = ctx
 
 // Use the API
-rc := app.ShowSingleTorrentInfo()
-rc = app.SetField("category", "linux")
-rc = app.StartTorrent()
+hash, err := app.ResolveHash("9c328901")
+if err != nil {
+    log.Fatal(err)
+}
+if err := app.ShowSingleTorrentInfo(hash); err != nil {
+    log.Fatal(err)
+}
+if err := app.SetField(hash, "category", "linux"); err != nil {
+    log.Fatal(err)
+}
+if err := app.StartTorrent(hash); err != nil {
+    log.Fatal(err)
+}
 ```
 
 Key library types:

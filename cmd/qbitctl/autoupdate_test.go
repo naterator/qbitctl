@@ -143,6 +143,15 @@ func TestGitHubReleaseUpdaterReplacesExecutable(t *testing.T) {
 		executablePath: func() (string, error) {
 			return exePath, nil
 		},
+		verifyAsset: func(ctx context.Context, releaseTag, filePath string) error {
+			if releaseTag != "v9.9.9" {
+				t.Fatalf("verify releaseTag = %q, want v9.9.9", releaseTag)
+			}
+			if filepath.Base(filePath) != binaryName {
+				t.Fatalf("verify filePath = %q, want basename %q", filePath, binaryName)
+			}
+			return nil
+		},
 		goos:   runtime.GOOS,
 		goarch: runtime.GOARCH,
 	}
@@ -207,6 +216,10 @@ func TestGitHubReleaseUpdaterSkipsCurrentVersion(t *testing.T) {
 		executablePath: func() (string, error) {
 			return exePath, nil
 		},
+		verifyAsset: func(ctx context.Context, releaseTag, filePath string) error {
+			t.Fatal("verifyAsset unexpectedly called for current version")
+			return nil
+		},
 		goos:   runtime.GOOS,
 		goarch: runtime.GOARCH,
 	}
@@ -268,6 +281,10 @@ func TestGitHubReleaseUpdaterRejectsChecksumMismatch(t *testing.T) {
 		executablePath: func() (string, error) {
 			return exePath, nil
 		},
+		verifyAsset: func(ctx context.Context, releaseTag, filePath string) error {
+			t.Fatal("verifyAsset unexpectedly called after checksum mismatch")
+			return nil
+		},
 		goos:   runtime.GOOS,
 		goarch: runtime.GOARCH,
 	}
@@ -277,6 +294,70 @@ func TestGitHubReleaseUpdaterRejectsChecksumMismatch(t *testing.T) {
 		t.Fatal("Run unexpectedly succeeded")
 	}
 	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("Run error = %v", err)
+	}
+
+	got, readErr := os.ReadFile(exePath)
+	if readErr != nil {
+		t.Fatalf("ReadFile returned error: %v", readErr)
+	}
+	if string(got) != "old-binary" {
+		t.Fatalf("executable content = %q, want old-binary", string(got))
+	}
+}
+
+func TestGitHubReleaseUpdaterRejectsAttestationFailure(t *testing.T) {
+	exePath := filepath.Join(t.TempDir(), "qbitctl")
+	if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	binaryCandidates, checksumCandidates := releaseAssetCandidates(runtime.GOOS, runtime.GOARCH)
+	binaryName := binaryCandidates[0]
+	checksumName := checksumCandidates[0]
+	binaryBody := []byte("new-binary-content")
+	sum := sha256.Sum256(binaryBody)
+	checksumBody := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), binaryName)
+
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/naterator/qbitctl/releases/latest":
+			_ = json.NewEncoder(w).Encode(githubRelease{
+				TagName: "v9.9.9",
+				Assets: []githubReleaseAsset{
+					{Name: binaryName, BrowserDownloadURL: server.URL + "/download/" + binaryName},
+					{Name: checksumName, BrowserDownloadURL: server.URL + "/download/" + checksumName},
+				},
+			})
+		case "/download/" + binaryName:
+			_, _ = w.Write(binaryBody)
+		case "/download/" + checksumName:
+			_, _ = io.WriteString(w, checksumBody)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	updater := &githubReleaseUpdater{
+		client:           server.Client(),
+		latestReleaseURL: server.URL + "/repos/naterator/qbitctl/releases/latest",
+		executablePath: func() (string, error) {
+			return exePath, nil
+		},
+		verifyAsset: func(ctx context.Context, releaseTag, filePath string) error {
+			return errors.New("missing attestation")
+		},
+		goos:   runtime.GOOS,
+		goarch: runtime.GOARCH,
+	}
+
+	err := updater.Run(context.Background(), "1.0.0", false, io.Discard)
+	if err == nil {
+		t.Fatal("Run unexpectedly succeeded")
+	}
+	if !strings.Contains(err.Error(), "verify release asset attestation") {
 		t.Fatalf("Run error = %v", err)
 	}
 

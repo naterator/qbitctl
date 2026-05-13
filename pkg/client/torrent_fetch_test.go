@@ -9,7 +9,7 @@ import (
 func TestFetchAllTorrentsSupportsLargeResponses(t *testing.T) {
 	server := newQBTestServer(t)
 	for i := 0; i < 1500; i++ {
-		server.torrents = append(server.torrents, TorrentInfo{
+		server.Torrents = append(server.Torrents, TorrentInfo{
 			Name: strings.Repeat("x", 1024),
 			Hash: "0123456789abcdef0123456789abcdef01234567",
 		})
@@ -20,8 +20,8 @@ func TestFetchAllTorrentsSupportsLargeResponses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchAllTorrents err = %v", err)
 	}
-	if len(torrents) != len(server.torrents) {
-		t.Fatalf("torrent count = %d, want %d", len(torrents), len(server.torrents))
+	if len(torrents) != len(server.Torrents) {
+		t.Fatalf("torrent count = %d, want %d", len(torrents), len(server.Torrents))
 	}
 }
 
@@ -46,7 +46,7 @@ func TestResolveHashScenarios(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newQBTestServer(t)
-			server.torrents = tt.torrents
+			server.Torrents = tt.torrents
 			app := server.newApp()
 
 			gotHash, err := app.ResolveHash(tt.input)
@@ -85,7 +85,7 @@ func TestResolveHashes(t *testing.T) {
 
 	t.Run("multiple short hashes", func(t *testing.T) {
 		server := newQBTestServer(t)
-		server.torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
+		server.Torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
 		app := server.newApp()
 
 		got, err := app.ResolveHashes([]string{hash1[:8], hash2[:8]})
@@ -113,7 +113,7 @@ func TestResolveHashes(t *testing.T) {
 
 	t.Run("one bad short hash fails all", func(t *testing.T) {
 		server := newQBTestServer(t)
-		server.torrents = []TorrentInfo{{Hash: hash1}}
+		server.Torrents = []TorrentInfo{{Hash: hash1}}
 		app := server.newApp()
 
 		_, err := app.ResolveHashes([]string{hash1[:8], "deadbeef"})
@@ -124,7 +124,7 @@ func TestResolveHashes(t *testing.T) {
 
 	t.Run("mixed full and short hashes", func(t *testing.T) {
 		server := newQBTestServer(t)
-		server.torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
+		server.Torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
 		app := server.newApp()
 
 		got, err := app.ResolveHashes([]string{hash1, hash2[:6]})
@@ -154,7 +154,7 @@ func TestResolveHashEmpty(t *testing.T) {
 func TestGetTorrentInfoErrors(t *testing.T) {
 	t.Run("invalid json", func(t *testing.T) {
 		server := newQBTestServer(t)
-		server.infoRawBody = "{"
+		server.InfoRawBody = "{"
 		app := server.newApp()
 		hash := "0123456789abcdef0123456789abcdef01234567"
 
@@ -170,7 +170,7 @@ func TestGetTorrentInfoErrors(t *testing.T) {
 
 	t.Run("empty array", func(t *testing.T) {
 		server := newQBTestServer(t)
-		server.infoRawBody = "[]"
+		server.InfoRawBody = "[]"
 		app := server.newApp()
 		hash := "0123456789abcdef0123456789abcdef01234567"
 

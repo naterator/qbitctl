@@ -389,6 +389,9 @@ func NewClient(opts *Options) (*App, error) {
 	if err := app.client.login(); err != nil {
 		return nil, codedErrf(ExitLoginFail, "Login failed: %v", err)
 	}
+	if err := app.CheckCompatibility(); err != nil {
+		return nil, err
+	}
 
 	return app, nil
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -27,6 +28,7 @@ type githubReleaseUpdater struct {
 	client           *http.Client
 	latestReleaseURL string
 	executablePath   func() (string, error)
+	verifyAsset      func(context.Context, string, string) error
 	goos             string
 	goarch           string
 }
@@ -50,6 +52,7 @@ func newDefaultReleaseUpdater() releaseUpdater {
 		},
 		latestReleaseURL: githubLatestReleaseURL,
 		executablePath:   os.Executable,
+		verifyAsset:      verifyGitHubReleaseAsset,
 		goos:             runtime.GOOS,
 		goarch:           runtime.GOARCH,
 	}
@@ -113,7 +116,7 @@ func (u *githubReleaseUpdater) Run(ctx context.Context, currentVersion string, d
 	}
 
 	fmt.Fprintf(stdout, "Updating qbitctl from %s to %s\n", currentVersionText, latestVersion)
-	if err := u.downloadAndReplace(ctx, exePath, binaryAsset.BrowserDownloadURL, expectedChecksum); err != nil {
+	if err := u.downloadAndReplace(ctx, exePath, latestVersion, binaryAsset.Name, binaryAsset.BrowserDownloadURL, expectedChecksum); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Updated qbitctl to %s\n", latestVersion)
@@ -156,26 +159,31 @@ func (u *githubReleaseUpdater) fetchChecksum(ctx context.Context, checksumURL, b
 	return checksum, nil
 }
 
-func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, assetURL, expectedChecksum string) error {
+func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, releaseTag, assetName, assetURL, expectedChecksum string) error {
 	info, err := os.Stat(exePath)
 	if err != nil {
 		return fmt.Errorf("stat current executable %q: %w", exePath, err)
 	}
 
 	dir := filepath.Dir(exePath)
-	tempFile, err := os.CreateTemp(dir, ".qbitctl-selfupdate-*")
+	tempDir, err := os.MkdirTemp(dir, ".qbitctl-selfupdate-*")
+	if err != nil {
+		return fmt.Errorf("create temporary download directory: %w", err)
+	}
+	tempPath := filepath.Join(tempDir, assetName)
+
+	removeTemp := true
+	defer func() {
+		if removeTemp {
+			_ = os.RemoveAll(tempDir)
+		}
+	}()
+
+	tempFile, err := os.Create(tempPath)
 	if err != nil {
 		return fmt.Errorf("create temporary download file: %w", err)
 	}
-
-	tempPath := tempFile.Name()
-	removeTemp := true
-	defer func() {
-		_ = tempFile.Close()
-		if removeTemp {
-			_ = os.Remove(tempPath)
-		}
-	}()
+	defer tempFile.Close()
 
 	resp, err := u.get(ctx, assetURL)
 	if err != nil {
@@ -199,6 +207,14 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 		return fmt.Errorf("checksum mismatch for downloaded binary: got %s want %s", actualChecksum, expectedChecksum)
 	}
 
+	verifyAsset := u.verifyAsset
+	if verifyAsset == nil {
+		verifyAsset = verifyGitHubReleaseAsset
+	}
+	if err := verifyAsset(ctx, releaseTag, tempPath); err != nil {
+		return fmt.Errorf("verify release asset attestation: %w", err)
+	}
+
 	mode := info.Mode().Perm()
 	if mode == 0 {
 		mode = 0o755
@@ -220,7 +236,21 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	if err := os.Rename(tempPath, exePath); err != nil {
 		return fmt.Errorf("replace current executable %q: %w", exePath, err)
 	}
+	_ = os.RemoveAll(tempDir)
 	removeTemp = false
+	return nil
+}
+
+func verifyGitHubReleaseAsset(ctx context.Context, releaseTag, filePath string) error {
+	cmd := exec.CommandContext(ctx, "gh", "release", "verify-asset", releaseTag, filePath, "--repo", "naterator/qbitctl")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("%s. Install GitHub CLI and ensure the release publishes valid asset attestations", message)
+	}
 	return nil
 }
 

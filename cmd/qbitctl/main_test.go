@@ -5,270 +5,35 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/naterator/qbitctl/internal/qbtest"
 	qbt "github.com/naterator/qbitctl/pkg/client"
 )
 
 type qbTestServer struct {
-	t                 *testing.T
-	loginCalls        int
-	infoCalls         int
-	statusQueue       map[string][]int
-	infoRawBody       string
-	trackersRawBody   string
-	categoriesRawBody string
-	torrents          []TorrentInfo
-	trackers          []TrackerEntry
-	categories        map[string]map[string]any
-	forms             map[string][]url.Values
-	addFiles          []uploadedTorrent
-	callOrder         []string
-	skipSeqToggle     bool
-	appVersion        string
-	apiVersion        string
-	transferInfo      *qbt.TransferInfo
-}
-
-type uploadedTorrent struct {
-	Filename string
-	Content  []byte
+	*qbtest.Server
+	Torrents     []TorrentInfo
+	Trackers     []TrackerEntry
+	TransferInfo *qbt.TransferInfo
 }
 
 func newQBTestServer(t *testing.T) *qbTestServer {
 	t.Helper()
-	return &qbTestServer{
-		t:           t,
-		statusQueue: map[string][]int{},
-		categories:  map[string]map[string]any{},
-		forms:       map[string][]url.Values{},
-	}
+	return &qbTestServer{Server: qbtest.New(t)}
 }
 
 func (s *qbTestServer) creds() Credentials {
+	creds := s.Creds()
 	return Credentials{
-		URL:  "http://qbt.test",
-		User: "admin",
-		Pass: "secret",
+		URL:  creds.URL,
+		User: creds.User,
+		Pass: creds.Pass,
 	}
-}
-
-func (s *qbTestServer) nextStatus(path string) int {
-	queue := s.statusQueue[path]
-	if len(queue) == 0 {
-		return http.StatusOK
-	}
-	status := queue[0]
-	s.statusQueue[path] = queue[1:]
-	return status
-}
-
-func cloneValues(in url.Values) url.Values {
-	out := make(url.Values, len(in))
-	for key, values := range in {
-		out[key] = append([]string(nil), values...)
-	}
-	return out
-}
-
-func (s *qbTestServer) recordForm(path string, r *http.Request) {
-	s.callOrder = append(s.callOrder, path)
-	if err := r.ParseForm(); err != nil {
-		s.t.Fatalf("ParseForm failed for %s: %v", path, err)
-	}
-	s.forms[path] = append(s.forms[path], cloneValues(r.Form))
-}
-
-func (s *qbTestServer) recordMultipartForm(path string, r *http.Request) {
-	s.callOrder = append(s.callOrder, path)
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil {
-		s.t.Fatalf("ParseMediaType failed for %s: %v", path, err)
-	}
-	if mediaType != "multipart/form-data" {
-		s.t.Fatalf("Content-Type for %s = %q, want multipart/form-data", path, mediaType)
-	}
-	if err := r.ParseMultipartForm(8 << 20); err != nil {
-		s.t.Fatalf("ParseMultipartForm failed for %s: %v", path, err)
-	}
-	s.forms[path] = append(s.forms[path], cloneValues(r.MultipartForm.Value))
-	for _, header := range r.MultipartForm.File["torrents"] {
-		file, err := header.Open()
-		if err != nil {
-			s.t.Fatalf("open multipart file failed for %s: %v", path, err)
-		}
-		content, err := io.ReadAll(file)
-		_ = file.Close()
-		if err != nil {
-			s.t.Fatalf("read multipart file failed for %s: %v", path, err)
-		}
-		s.addFiles = append(s.addFiles, uploadedTorrent{
-			Filename: header.Filename,
-			Content:  content,
-		})
-	}
-}
-
-func (s *qbTestServer) handle(w http.ResponseWriter, r *http.Request) {
-	if status := s.nextStatus(r.URL.Path); status != http.StatusOK {
-		w.WriteHeader(status)
-		return
-	}
-
-	switch r.URL.Path {
-	case "/api/v2/auth/login":
-		s.loginCalls++
-		_, _ = io.WriteString(w, "Ok.")
-	case "/api/v2/torrents/info":
-		s.infoCalls++
-		if s.infoRawBody != "" {
-			_, _ = io.WriteString(w, s.infoRawBody)
-			return
-		}
-		hashes := r.URL.Query().Get("hashes")
-		if hashes == "" {
-			_ = json.NewEncoder(w).Encode(s.torrents)
-			return
-		}
-		filtered := make([]TorrentInfo, 0, 1)
-		for _, torrent := range s.torrents {
-			if strings.EqualFold(torrent.Hash, hashes) {
-				filtered = append(filtered, torrent)
-			}
-		}
-		_ = json.NewEncoder(w).Encode(filtered)
-	case "/api/v2/torrents/trackers":
-		if s.trackersRawBody != "" {
-			_, _ = io.WriteString(w, s.trackersRawBody)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(s.trackers)
-	case "/api/v2/torrents/categories":
-		if s.categoriesRawBody != "" {
-			_, _ = io.WriteString(w, s.categoriesRawBody)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(s.categories)
-	case "/api/v2/torrents/createCategory":
-		s.recordForm(r.URL.Path, r)
-		category := r.Form.Get("category")
-		s.categories[category] = map[string]any{}
-	case "/api/v2/torrents/add":
-		s.recordMultipartForm(r.URL.Path, r)
-	case "/api/v2/torrents/setCategory":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setTags":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setUploadLimit":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setDownloadLimit":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setShareLimits":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setSuperSeeding":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setAutoManagement":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/toggleSequentialDownload":
-		s.recordForm(r.URL.Path, r)
-		if s.skipSeqToggle {
-			return
-		}
-		hash := r.Form.Get("hashes")
-		for i := range s.torrents {
-			if strings.EqualFold(s.torrents[i].Hash, hash) {
-				s.torrents[i].SequentialDL = !s.torrents[i].SequentialDL
-			}
-		}
-	case "/api/v2/torrents/stop":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/delete":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/start":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setForceStart":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/torrents/setLocation":
-		s.recordForm(r.URL.Path, r)
-	case "/api/v2/app/version":
-		v := s.appVersion
-		if v == "" {
-			v = "v5.0.0"
-		}
-		_, _ = io.WriteString(w, v)
-	case "/api/v2/app/webapiVersion":
-		v := s.apiVersion
-		if v == "" {
-			v = "2.11.0"
-		}
-		_, _ = io.WriteString(w, v)
-	case "/api/v2/transfer/info":
-		info := s.transferInfo
-		if info == nil {
-			info = &qbt.TransferInfo{
-				DLInfoSpeed:      1024000,
-				UPInfoSpeed:      512000,
-				DLInfoData:       1073741824,
-				UPInfoData:       536870912,
-				ConnectionStatus: "connected",
-				DHTNodes:         42,
-			}
-		}
-		_ = json.NewEncoder(w).Encode(info)
-	default:
-		s.t.Fatalf("unexpected path: %s", r.URL.Path)
-	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
-}
-
-type responseRecorder struct {
-	header http.Header
-	body   strings.Builder
-	code   int
-}
-
-func newResponseRecorder() *responseRecorder {
-	return &responseRecorder{
-		header: make(http.Header),
-		code:   http.StatusOK,
-	}
-}
-
-func (r *responseRecorder) Header() http.Header {
-	return r.header
-}
-
-func (r *responseRecorder) Write(data []byte) (int, error) {
-	return r.body.Write(data)
-}
-
-func (r *responseRecorder) WriteHeader(statusCode int) {
-	r.code = statusCode
-}
-
-func (r *responseRecorder) Result() *http.Response {
-	return &http.Response{
-		StatusCode: r.code,
-		Header:     r.header.Clone(),
-		Body:       io.NopCloser(strings.NewReader(r.body.String())),
-	}
-}
-
-func (s *qbTestServer) roundTrip(req *http.Request) *http.Response {
-	rec := newResponseRecorder()
-	s.handle(rec, req)
-	return rec.Result()
 }
 
 func withQBServerClientFactory(t *testing.T, s *qbTestServer) {
@@ -276,10 +41,23 @@ func withQBServerClientFactory(t *testing.T, s *qbTestServer) {
 	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
 		return &http.Client{
 			Jar:       jar,
-			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) { return s.roundTrip(req), nil }),
+			Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) { return s.roundTrip(req), nil }),
 		}
 	})
 	t.Cleanup(restore)
+}
+
+func (s *qbTestServer) roundTrip(req *http.Request) *http.Response {
+	s.Server.Torrents = s.Torrents
+	s.Server.Trackers = s.Trackers
+	if s.TransferInfo != nil {
+		s.Server.TransferInfo = s.TransferInfo
+	}
+	resp := s.Server.RoundTrip(req)
+	if torrents, ok := s.Server.Torrents.([]TorrentInfo); ok {
+		s.Torrents = torrents
+	}
+	return resp
 }
 
 func captureOutput(t *testing.T, fn func()) (string, string) {
@@ -443,7 +221,7 @@ func TestConfigWriteCommandSavesConfig(t *testing.T) {
 func TestCLIListJSONAndGetName(t *testing.T) {
 	server := newQBTestServer(t)
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
-	server.torrents = []TorrentInfo{{
+	server.Torrents = []TorrentInfo{{
 		Name:  "Ubuntu ISO",
 		Hash:  fullHash,
 		State: "stalledUP",
@@ -551,7 +329,7 @@ func TestCLIAddMagnetAndTorrentFile(t *testing.T) {
 		}); strings.TrimSpace(stderr) != "" {
 			t.Fatalf("unexpected stderr: %q", stderr)
 		}
-		if got := server.forms["/api/v2/torrents/add"][0].Get("urls"); got != magnet {
+		if got := server.Forms["/api/v2/torrents/add"][0].Get("urls"); got != magnet {
 			t.Fatalf("magnet urls = %q, want %q", got, magnet)
 		}
 	})
@@ -578,14 +356,14 @@ func TestCLIAddMagnetAndTorrentFile(t *testing.T) {
 		}); strings.TrimSpace(stderr) != "" {
 			t.Fatalf("unexpected stderr: %q", stderr)
 		}
-		if len(server.addFiles) != 1 {
-			t.Fatalf("addFiles = %d, want 1", len(server.addFiles))
+		if len(server.AddFiles) != 1 {
+			t.Fatalf("addFiles = %d, want 1", len(server.AddFiles))
 		}
-		if server.addFiles[0].Filename != "ubuntu.torrent" {
-			t.Fatalf("uploaded filename = %q", server.addFiles[0].Filename)
+		if server.AddFiles[0].Filename != "ubuntu.torrent" {
+			t.Fatalf("uploaded filename = %q", server.AddFiles[0].Filename)
 		}
-		if string(server.addFiles[0].Content) != "dummy torrent payload" {
-			t.Fatalf("uploaded content = %q", string(server.addFiles[0].Content))
+		if string(server.AddFiles[0].Content) != "dummy torrent payload" {
+			t.Fatalf("uploaded content = %q", string(server.AddFiles[0].Content))
 		}
 	})
 }
@@ -593,7 +371,7 @@ func TestCLIAddMagnetAndTorrentFile(t *testing.T) {
 func TestCLIListAndShowStructuredOutput(t *testing.T) {
 	server := newQBTestServer(t)
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
-	server.torrents = []TorrentInfo{{
+	server.Torrents = []TorrentInfo{{
 		Name:     "Ubuntu ISO",
 		Hash:     fullHash,
 		State:    "stalledUP",
@@ -620,16 +398,63 @@ func TestCLIListAndShowStructuredOutput(t *testing.T) {
 			t.Fatalf("show --template output = %q", stdout)
 		}
 	})
+
+	t.Run("list selected fields", func(t *testing.T) {
+		withQBServerClientFactory(t, server)
+		cmd := newRootCmd()
+		cmd.SetArgs([]string{
+			"--url", server.creds().URL,
+			"--user", "admin",
+			"--pass", "secret",
+			"list", "--fields", "hash,name,progress",
+		})
+
+		stdout, _ := captureOutput(t, func() {
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute returned error: %v", err)
+			}
+		})
+		if !strings.Contains(stdout, "hash\tname\tprogress") || !strings.Contains(stdout, fullHash[:8]+"\tUbuntu ISO\t0.999900") {
+			t.Fatalf("list --fields output = %q", stdout)
+		}
+	})
+
+	t.Run("show selected fields without header", func(t *testing.T) {
+		withQBServerClientFactory(t, server)
+		cmd := newRootCmd()
+		cmd.SetArgs([]string{
+			"--url", server.creds().URL,
+			"--user", "admin",
+			"--pass", "secret",
+			"show", fullHash[:8],
+			"--fields", "name,state",
+			"--no-header",
+		})
+
+		stdout, _ := captureOutput(t, func() {
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute returned error: %v", err)
+			}
+		})
+		if strings.TrimSpace(stdout) != "Ubuntu ISO\tstalledUP" {
+			t.Fatalf("show --fields --no-header output = %q", stdout)
+		}
+	})
 }
 
-func TestCommandsRequiringHashReturnExitBadArgs(t *testing.T) {
+func TestCommandsRequiringHashFailBeforeAuth(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	for _, args := range [][]string{
-		{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "show"},
-		{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "get", "name"},
-		{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "set", "category", "linux"},
-		{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "start"},
+		{"show"},
+		{"get", "name"},
+		{"set", "category", "linux"},
+		{"start"},
+		{"pause"},
+		{"force-start"},
+		{"move", "/downloads/linux"},
+		{"remove"},
+		{"delete"},
 	} {
 		cmd := newRootCmd()
 		cmd.SetArgs(args)
@@ -640,9 +465,8 @@ func TestCommandsRequiringHashReturnExitBadArgs(t *testing.T) {
 		if err == nil {
 			t.Fatalf("args %v unexpectedly succeeded", args)
 		}
-		var exitErr exitError
-		if !errors.As(err, &exitErr) || exitErr.code != exitBadArgs {
-			t.Fatalf("args %v err = %v", args, err)
+		if server.LoginCalls != 0 || server.InfoCalls != 0 {
+			t.Fatalf("args %v authenticated before argument validation: logins=%d info=%d", args, server.LoginCalls, server.InfoCalls)
 		}
 	}
 }
@@ -650,7 +474,7 @@ func TestCommandsRequiringHashReturnExitBadArgs(t *testing.T) {
 func TestTargetedCommandsAcceptPositionalHash(t *testing.T) {
 	server := newQBTestServer(t)
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
-	server.torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: fullHash}}
+	server.Torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: fullHash}}
 
 	t.Run("start positional hash", func(t *testing.T) {
 		withQBServerClientFactory(t, server)
@@ -669,7 +493,7 @@ func TestTargetedCommandsAcceptPositionalHash(t *testing.T) {
 		}); strings.TrimSpace(stderr) != "" {
 			t.Fatalf("unexpected stderr: %q", stderr)
 		}
-		if got := server.forms["/api/v2/torrents/start"][0].Get("hashes"); got != fullHash {
+		if got := server.Forms["/api/v2/torrents/start"][0].Get("hashes"); got != fullHash {
 			t.Fatalf("start hashes = %q, want %q", got, fullHash)
 		}
 	})
@@ -691,10 +515,10 @@ func TestTargetedCommandsAcceptPositionalHash(t *testing.T) {
 		}); strings.TrimSpace(stderr) != "" {
 			t.Fatalf("unexpected stderr: %q", stderr)
 		}
-		if got := server.forms["/api/v2/torrents/setLocation"][0].Get("hashes"); got != fullHash {
+		if got := server.Forms["/api/v2/torrents/setLocation"][0].Get("hashes"); got != fullHash {
 			t.Fatalf("move hashes = %q, want %q", got, fullHash)
 		}
-		if got := server.forms["/api/v2/torrents/setLocation"][0].Get("location"); got != "/downloads/linux" {
+		if got := server.Forms["/api/v2/torrents/setLocation"][0].Get("location"); got != "/downloads/linux" {
 			t.Fatalf("move location = %q, want /downloads/linux", got)
 		}
 	})
@@ -704,7 +528,7 @@ func TestBatchStartMultipleHashes(t *testing.T) {
 	hash1 := "0123456789abcdef0123456789abcdef01234567"
 	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
+	server.Torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
 
 	withQBServerClientFactory(t, server)
 	cmd := newRootCmd()
@@ -722,7 +546,7 @@ func TestBatchStartMultipleHashes(t *testing.T) {
 	}); strings.TrimSpace(stderr) != "" {
 		t.Fatalf("unexpected stderr: %q", stderr)
 	}
-	got := server.forms["/api/v2/torrents/start"][0].Get("hashes")
+	got := server.Forms["/api/v2/torrents/start"][0].Get("hashes")
 	if got != hash1+"|"+hash2 {
 		t.Fatalf("start hashes = %q, want %q", got, hash1+"|"+hash2)
 	}
@@ -732,7 +556,7 @@ func TestBatchRemoveMultipleHashes(t *testing.T) {
 	hash1 := "0123456789abcdef0123456789abcdef01234567"
 	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
+	server.Torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
 
 	withQBServerClientFactory(t, server)
 	cmd := newRootCmd()
@@ -751,8 +575,8 @@ func TestBatchRemoveMultipleHashes(t *testing.T) {
 		t.Fatalf("unexpected stderr: %q", stderr)
 	}
 	// Should have paused and then deleted both
-	stopHashes := server.forms["/api/v2/torrents/stop"][0].Get("hashes")
-	deleteHashes := server.forms["/api/v2/torrents/delete"][0].Get("hashes")
+	stopHashes := server.Forms["/api/v2/torrents/stop"][0].Get("hashes")
+	deleteHashes := server.Forms["/api/v2/torrents/delete"][0].Get("hashes")
 	wantHashes := hash1 + "|" + hash2
 	if stopHashes != wantHashes {
 		t.Fatalf("stop hashes = %q, want %q", stopHashes, wantHashes)

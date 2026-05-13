@@ -10,7 +10,7 @@ import (
 
 func TestClientLoginFailureOnNon200(t *testing.T) {
 	server := newQBTestServer(t)
-	server.statusQueue["/api/v2/auth/login"] = []int{http.StatusUnauthorized}
+	server.StatusQueue["/api/v2/auth/login"] = []int{http.StatusUnauthorized}
 	withQBServerClientFactory(t, server)
 
 	err := newClient(server.creds(), os.Stderr).login()
@@ -21,8 +21,8 @@ func TestClientLoginFailureOnNon200(t *testing.T) {
 
 func TestClientRequestReloginOnForbidden(t *testing.T) {
 	server := newQBTestServer(t)
-	server.statusQueue["/api/v2/torrents/info"] = []int{http.StatusForbidden}
-	server.torrents = []TorrentInfo{{Name: "Ubuntu", Hash: "0123456789abcdef0123456789abcdef01234567"}}
+	server.StatusQueue["/api/v2/torrents/info"] = []int{http.StatusForbidden}
+	server.Torrents = []TorrentInfo{{Name: "Ubuntu", Hash: "0123456789abcdef0123456789abcdef01234567"}}
 	withQBServerClientFactory(t, server)
 
 	client := newClient(server.creds(), os.Stderr)
@@ -30,8 +30,8 @@ func TestClientRequestReloginOnForbidden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request returned error: %v", err)
 	}
-	if server.loginCalls != 1 {
-		t.Fatalf("loginCalls = %d, want 1", server.loginCalls)
+	if server.LoginCalls != 1 {
+		t.Fatalf("loginCalls = %d, want 1", server.LoginCalls)
 	}
 	if !strings.Contains(string(body), "Ubuntu") {
 		t.Fatalf("request body = %q, want torrent JSON", string(body))

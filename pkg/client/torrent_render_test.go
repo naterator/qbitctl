@@ -10,7 +10,7 @@ import (
 func TestGetTrackerList(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.trackers = []TrackerEntry{
+	server.Trackers = []TrackerEntry{
 		{URL: "http://Tracker.Example.com:8080/announce"},
 		{URL: "http://tracker.example.com/other"},
 		{URL: "udp://tracker.two.example.com:80/announce"},
@@ -33,7 +33,7 @@ func TestGetTrackerList(t *testing.T) {
 func TestShowSingleTorrentInfo(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{
+	server.Torrents = []TorrentInfo{{
 		Name:     "Ubuntu ISO",
 		Hash:     fullHash,
 		State:    "downloading",
@@ -64,7 +64,7 @@ func TestShowSingleTorrentInfo(t *testing.T) {
 func TestShowSingleTorrentInfoAsJSON(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{
+	server.Torrents = []TorrentInfo{{
 		Name:  "Ubuntu ISO",
 		Hash:  fullHash,
 		State: "stalledUP",
@@ -85,7 +85,7 @@ func TestShowSingleTorrentInfoAsJSON(t *testing.T) {
 
 func TestShowAllTorrentsInfo(t *testing.T) {
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{
+	server.Torrents = []TorrentInfo{
 		{Name: "Alpha", Hash: "0123456789abcdef0123456789abcdef01234567", Progress: 0.5},
 		{Name: "Beta", Hash: "fedcba9876543210fedcba9876543210fedcba98", Progress: 1.0},
 	}
@@ -111,7 +111,7 @@ func TestShowAllTorrentsInfo(t *testing.T) {
 
 func TestShowAllTorrentsInfoAsJSON(t *testing.T) {
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{
+	server.Torrents = []TorrentInfo{
 		{Name: "Alpha", Hash: "0123456789abcdef0123456789abcdef01234567", Progress: 0.5},
 		{Name: "Beta", Hash: "fedcba9876543210fedcba9876543210fedcba98", Progress: 1.0},
 	}
@@ -132,7 +132,7 @@ func TestShowAllTorrentsInfoAsJSON(t *testing.T) {
 func TestGetField(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{
+	server.Torrents = []TorrentInfo{{
 		Name:     "Ubuntu ISO",
 		Hash:     fullHash,
 		Category: "linux",
@@ -176,7 +176,7 @@ func TestGetFieldUnknown(t *testing.T) {
 func TestGetFieldJSON(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{
+	server.Torrents = []TorrentInfo{{
 		Name: "Ubuntu ISO",
 		Hash: fullHash,
 	}}
@@ -197,7 +197,7 @@ func TestGetFieldJSON(t *testing.T) {
 func TestGetFieldJSONTrackerList(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.trackers = []TrackerEntry{
+	server.Trackers = []TrackerEntry{
 		{URL: "http://tracker.example.com/announce"},
 	}
 
@@ -217,7 +217,7 @@ func TestGetFieldJSONTrackerList(t *testing.T) {
 func TestShowSingleTorrentInfoJSON(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: fullHash}}
+	server.Torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: fullHash}}
 
 	app := server.newApp()
 	var buf bytes.Buffer
@@ -233,7 +233,7 @@ func TestShowSingleTorrentInfoJSON(t *testing.T) {
 
 func TestShowAllTorrentsInfoJSON(t *testing.T) {
 	server := newQBTestServer(t)
-	server.torrents = []TorrentInfo{
+	server.Torrents = []TorrentInfo{
 		{Name: "Alpha", Hash: "0123456789abcdef0123456789abcdef01234567"},
 	}
 

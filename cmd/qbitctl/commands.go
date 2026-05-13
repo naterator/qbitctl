@@ -147,6 +147,8 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	serverJSON := false
 	asJSON := false
 	tmpl := ""
+	fieldsValue := ""
+	noHeader := false
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"l", "li", "ls"},
@@ -164,6 +166,12 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 				return result(app.ShowAllTorrentsInfoAsJSON())
 			case tmpl != "":
 				return result(app.ShowAllTorrentsTemplate(tmpl))
+			case fieldsValue != "":
+				fields, err := qbt.ParseSelectableTorrentFields(fieldsValue)
+				if err != nil {
+					return result(codedErr(exitBadArgs, err.Error()))
+				}
+				return result(app.ShowAllTorrentsFields(fields, !noHeader))
 			}
 			return result(app.ShowAllTorrentsInfo())
 		},
@@ -171,6 +179,8 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
+	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
+	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
 	return cmd
 }
 
@@ -178,16 +188,16 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 	serverJSON := false
 	asJSON := false
 	tmpl := ""
+	fieldsValue := ""
+	noHeader := false
 	cmd := &cobra.Command{
-		Use:     "show [hash]",
+		Use:     "show <hash>",
 		Aliases: []string{"s", "sh"},
 		Short:   "Show info for a single torrent",
 		GroupID: "view",
-		Args:    cobra.RangeArgs(0, 1),
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 {
-				applyPositionalHash(opts, args[0])
-			}
+			applyPositionalHash(opts, args[0])
 			app, err := newAuthenticatedApp(opts)
 			if err != nil {
 				return err
@@ -203,6 +213,12 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 				return result(app.ShowSingleTorrentInfoAsJSON(hash))
 			case tmpl != "":
 				return result(app.ShowSingleTorrentTemplate(hash, tmpl))
+			case fieldsValue != "":
+				fields, err := qbt.ParseSelectableTorrentFields(fieldsValue)
+				if err != nil {
+					return result(codedErr(exitBadArgs, err.Error()))
+				}
+				return result(app.ShowSingleTorrentFields(hash, fields, !noHeader))
 			}
 			return result(app.ShowSingleTorrentInfo(hash))
 		},
@@ -210,6 +226,8 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
+	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
+	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
 	return cmd
 }
 
@@ -217,18 +235,16 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 	serverJSON := false
 	asJSON := false
 	cmd := &cobra.Command{
-		Use:     "get <field> [hash]",
+		Use:     "get <field> <hash>",
 		Aliases: []string{"g"},
 		Short:   "Read one torrent property",
 		Long: "Read one torrent property.\n\nAvailable fields:\n" +
 			wrapFields(getFieldNames, "  ", 72),
 		GroupID:   "view",
-		Args:      cobra.RangeArgs(1, 2),
+		Args:      cobra.ExactArgs(2),
 		ValidArgs: getFieldNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 2 {
-				applyPositionalHash(opts, args[1])
-			}
+			applyPositionalHash(opts, args[1])
 			app, err := newAuthenticatedApp(opts)
 			if err != nil {
 				return err
@@ -253,16 +269,14 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 
 func newSetCmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:       "set <field> <value> [hash]",
+		Use:       "set <field> <value> <hash>",
 		Aliases:   []string{"se"},
 		Short:     "Update one torrent property",
 		GroupID:   "change",
-		Args:      cobra.RangeArgs(2, 3),
+		Args:      cobra.ExactArgs(3),
 		ValidArgs: setFieldNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 3 {
-				applyPositionalHash(opts, args[2])
-			}
+			applyPositionalHash(opts, args[2])
 			app, err := newAuthenticatedApp(opts)
 			if err != nil {
 				return err
@@ -282,7 +296,7 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 		Aliases: aliases,
 		Short:   short,
 		GroupID: "control",
-		Args:    cobra.MinimumNArgs(0),
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hashInputs := collectHashInputs(opts, args)
 			app, err := newAuthenticatedApp(opts)
@@ -300,15 +314,13 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 
 func newMoveCmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:     "move <path> [hash]",
+		Use:     "move <path> <hash>",
 		Aliases: []string{"m", "mo"},
 		Short:   "Move torrent data on the server",
 		GroupID: "change",
-		Args:    cobra.RangeArgs(1, 2),
+		Args:    cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 2 {
-				applyPositionalHash(opts, args[1])
-			}
+			applyPositionalHash(opts, args[1])
 			app, err := newAuthenticatedApp(opts)
 			if err != nil {
 				return err
@@ -323,11 +335,11 @@ func newMoveCmd(opts *CLIOptions) *cobra.Command {
 }
 
 func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
-	use := "remove [hash...]"
+	use := "remove <hash...>"
 	short := "Remove torrents but keep data"
 	aliases := []string{"r", "rm"}
 	if deleteFiles {
-		use = "delete [hash...]"
+		use = "delete <hash...>"
 		short = "Remove torrents and delete data"
 		aliases = []string{"d", "de"}
 	}
@@ -336,7 +348,7 @@ func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
 		Aliases: aliases,
 		Short:   short,
 		GroupID: "change",
-		Args:    cobra.MinimumNArgs(0),
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			hashInputs := collectHashInputs(opts, args)
 			app, err := newAuthenticatedApp(opts)

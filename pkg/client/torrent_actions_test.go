@@ -18,7 +18,7 @@ func TestAddTorrentVariants(t *testing.T) {
 		if err := app.AddTorrent(magnet); err != nil {
 			t.Fatalf("AddTorrent err = %v", err)
 		}
-		if got := server.forms["/api/v2/torrents/add"][0].Get("urls"); got != magnet {
+		if got := server.Forms["/api/v2/torrents/add"][0].Get("urls"); got != magnet {
 			t.Fatalf("multipart urls = %q, want %q", got, magnet)
 		}
 	})
@@ -34,14 +34,14 @@ func TestAddTorrentVariants(t *testing.T) {
 		if err := app.AddTorrent(path); err != nil {
 			t.Fatalf("AddTorrent err = %v", err)
 		}
-		if len(server.addFiles) != 1 {
-			t.Fatalf("addFiles = %d, want 1", len(server.addFiles))
+		if len(server.AddFiles) != 1 {
+			t.Fatalf("addFiles = %d, want 1", len(server.AddFiles))
 		}
-		if server.addFiles[0].Filename != "ubuntu.torrent" {
-			t.Fatalf("uploaded filename = %q", server.addFiles[0].Filename)
+		if server.AddFiles[0].Filename != "ubuntu.torrent" {
+			t.Fatalf("uploaded filename = %q", server.AddFiles[0].Filename)
 		}
-		if string(server.addFiles[0].Content) != "dummy torrent payload" {
-			t.Fatalf("uploaded content = %q", string(server.addFiles[0].Content))
+		if string(server.AddFiles[0].Content) != "dummy torrent payload" {
+			t.Fatalf("uploaded content = %q", string(server.AddFiles[0].Content))
 		}
 	})
 
@@ -92,7 +92,7 @@ func TestMoveTorrentEmptyPath(t *testing.T) {
 
 func TestPauseTorrentHTTPError(t *testing.T) {
 	server := newQBTestServer(t)
-	server.statusQueue["/api/v2/torrents/stop"] = []int{http.StatusInternalServerError}
+	server.StatusQueue["/api/v2/torrents/stop"] = []int{http.StatusInternalServerError}
 	app := server.newApp()
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 
@@ -117,13 +117,13 @@ func TestActionSequencingAndForms(t *testing.T) {
 	if err := app.ForceStartTorrent(fullHash); err != nil {
 		t.Fatalf("ForceStartTorrent err = %v", err)
 	}
-	if got := server.forms["/api/v2/torrents/setForceStart"][0].Get("value"); got != "true" {
+	if got := server.Forms["/api/v2/torrents/setForceStart"][0].Get("value"); got != "true" {
 		t.Fatalf("force-start value = %q, want true", got)
 	}
 	if err := app.MoveTorrent(fullHash, "/downloads/linux"); err != nil {
 		t.Fatalf("MoveTorrent err = %v", err)
 	}
-	if got := server.forms["/api/v2/torrents/setLocation"][0].Get("location"); got != "/downloads/linux" {
+	if got := server.Forms["/api/v2/torrents/setLocation"][0].Get("location"); got != "/downloads/linux" {
 		t.Fatalf("move location = %q, want %q", got, "/downloads/linux")
 	}
 	if err := app.StopAndRemoveTorrent(fullHash, true); err != nil {
@@ -136,10 +136,10 @@ func TestActionSequencingAndForms(t *testing.T) {
 		"/api/v2/torrents/stop",
 		"/api/v2/torrents/delete",
 	}
-	if strings.Join(server.callOrder, ",") != strings.Join(wantOrder, ",") {
-		t.Fatalf("callOrder = %v, want %v", server.callOrder, wantOrder)
+	if strings.Join(server.CallOrder, ",") != strings.Join(wantOrder, ",") {
+		t.Fatalf("callOrder = %v, want %v", server.CallOrder, wantOrder)
 	}
-	if got := server.forms["/api/v2/torrents/delete"][0].Get("deleteFiles"); got != "true" {
+	if got := server.Forms["/api/v2/torrents/delete"][0].Get("deleteFiles"); got != "true" {
 		t.Fatalf("deleteFiles = %q, want true", got)
 	}
 }

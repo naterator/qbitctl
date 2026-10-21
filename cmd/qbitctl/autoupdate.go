@@ -116,7 +116,9 @@ func (u *githubReleaseUpdater) Run(ctx context.Context, currentVersion string, d
 	}
 
 	fmt.Fprintf(stdout, "Updating qbitctl from %s to %s\n", currentVersionText, latestVersion)
-	if err := u.downloadAndReplace(ctx, exePath, latestVersion, binaryAsset.Name, binaryAsset.BrowserDownloadURL, expectedChecksum); err != nil {
+	// Normalize only for version comparisons and display. GitHub looks up the
+	// exact published tag, so "1.0.3" and "v1.0.3" are different release names.
+	if err := u.downloadAndReplace(ctx, exePath, release.TagName, binaryAsset.Name, binaryAsset.BrowserDownloadURL, expectedChecksum); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Updated qbitctl to %s\n", latestVersion)
@@ -249,7 +251,7 @@ func verifyGitHubReleaseAsset(ctx context.Context, releaseTag, filePath string) 
 		if message == "" {
 			message = err.Error()
 		}
-		return fmt.Errorf("%s. Install GitHub CLI and ensure the release publishes valid asset attestations", message)
+		return fmt.Errorf("release %q: %s. Verification requires GitHub CLI with release verify-asset support and an immutable release published with all assets attached", releaseTag, message)
 	}
 	return nil
 }

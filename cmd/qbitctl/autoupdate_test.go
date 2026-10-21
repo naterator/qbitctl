@@ -115,94 +115,98 @@ func TestUpdateCommandNamesAndDryRun(t *testing.T) {
 }
 
 func TestGitHubReleaseUpdaterReplacesExecutable(t *testing.T) {
-	exePath := filepath.Join(t.TempDir(), "qbitctl")
-	if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-
-	binaryCandidates, checksumCandidates := releaseAssetCandidates(runtime.GOOS, runtime.GOARCH)
-	binaryName := binaryCandidates[0]
-	checksumName := checksumCandidates[0]
-	binaryBody := []byte("new-binary-content")
-	sum := sha256.Sum256(binaryBody)
-	checksumBody := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), binaryName)
-
-	var metadataCalls int
-	var binaryCalls int
-	var checksumCalls int
-	var server *httptest.Server
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/naterator/qbitctl/releases/latest":
-			metadataCalls++
-			if got := r.Header.Get("User-Agent"); got != "qbitctl/"+qbitctlVersion {
-				t.Fatalf("User-Agent = %q", got)
+	for _, tag := range []string{"v9.9.9", "9.9.9"} {
+		t.Run(tag, func(t *testing.T) {
+			exePath := filepath.Join(t.TempDir(), "qbitctl")
+			if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
 			}
-			_ = json.NewEncoder(w).Encode(githubRelease{
-				TagName: "v9.9.9",
-				Assets: []githubReleaseAsset{
-					{Name: binaryName, BrowserDownloadURL: server.URL + "/download/" + binaryName},
-					{Name: checksumName, BrowserDownloadURL: server.URL + "/download/" + checksumName},
+
+			binaryCandidates, checksumCandidates := releaseAssetCandidates(runtime.GOOS, runtime.GOARCH)
+			binaryName := binaryCandidates[0]
+			checksumName := checksumCandidates[0]
+			binaryBody := []byte("new-binary-content")
+			sum := sha256.Sum256(binaryBody)
+			checksumBody := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), binaryName)
+
+			var metadataCalls int
+			var binaryCalls int
+			var checksumCalls int
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/naterator/qbitctl/releases/latest":
+					metadataCalls++
+					if got := r.Header.Get("User-Agent"); got != "qbitctl/"+qbitctlVersion {
+						t.Fatalf("User-Agent = %q", got)
+					}
+					_ = json.NewEncoder(w).Encode(githubRelease{
+						TagName: tag,
+						Assets: []githubReleaseAsset{
+							{Name: binaryName, BrowserDownloadURL: server.URL + "/download/" + binaryName},
+							{Name: checksumName, BrowserDownloadURL: server.URL + "/download/" + checksumName},
+						},
+					})
+				case "/download/" + binaryName:
+					binaryCalls++
+					_, _ = w.Write(binaryBody)
+				case "/download/" + checksumName:
+					checksumCalls++
+					_, _ = io.WriteString(w, checksumBody)
+				default:
+					t.Fatalf("unexpected path: %s", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			updater := &githubReleaseUpdater{
+				client:           server.Client(),
+				latestReleaseURL: server.URL + "/repos/naterator/qbitctl/releases/latest",
+				executablePath: func() (string, error) {
+					return exePath, nil
 				},
-			})
-		case "/download/" + binaryName:
-			binaryCalls++
-			_, _ = w.Write(binaryBody)
-		case "/download/" + checksumName:
-			checksumCalls++
-			_, _ = io.WriteString(w, checksumBody)
-		default:
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	updater := &githubReleaseUpdater{
-		client:           server.Client(),
-		latestReleaseURL: server.URL + "/repos/naterator/qbitctl/releases/latest",
-		executablePath: func() (string, error) {
-			return exePath, nil
-		},
-		verifyAsset: func(ctx context.Context, releaseTag, filePath string) error {
-			if releaseTag != "v9.9.9" {
-				t.Fatalf("verify releaseTag = %q, want v9.9.9", releaseTag)
+				verifyAsset: func(ctx context.Context, releaseTag, filePath string) error {
+					if releaseTag != tag {
+						t.Fatalf("verify releaseTag = %q, want exact published tag %q", releaseTag, tag)
+					}
+					if filepath.Base(filePath) != binaryName {
+						t.Fatalf("verify filePath = %q, want basename %q", filePath, binaryName)
+					}
+					return nil
+				},
+				goos:   runtime.GOOS,
+				goarch: runtime.GOARCH,
 			}
-			if filepath.Base(filePath) != binaryName {
-				t.Fatalf("verify filePath = %q, want basename %q", filePath, binaryName)
+
+			var stdout bytes.Buffer
+			if err := updater.Run(context.Background(), "1.0.0", false, &stdout); err != nil {
+				t.Fatalf("Run returned error: %v", err)
 			}
-			return nil
-		},
-		goos:   runtime.GOOS,
-		goarch: runtime.GOARCH,
-	}
 
-	var stdout bytes.Buffer
-	if err := updater.Run(context.Background(), "1.0.0", false, &stdout); err != nil {
-		t.Fatalf("Run returned error: %v", err)
-	}
-
-	got, err := os.ReadFile(exePath)
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	if string(got) != string(binaryBody) {
-		t.Fatalf("updated executable content = %q, want %q", string(got), string(binaryBody))
-	}
-	info, err := os.Stat(exePath)
-	if err != nil {
-		t.Fatalf("Stat returned error: %v", err)
-	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("updated executable mode = %#o, want 0755", info.Mode().Perm())
-	}
-	if metadataCalls != 1 || binaryCalls != 1 || checksumCalls != 1 {
-		t.Fatalf("calls = metadata:%d binary:%d checksum:%d", metadataCalls, binaryCalls, checksumCalls)
-	}
-	if !strings.Contains(stdout.String(), "Updating qbitctl from 1.0.0 to v9.9.9") {
-		t.Fatalf("stdout = %q", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), "Updated qbitctl to v9.9.9") {
-		t.Fatalf("stdout = %q", stdout.String())
+			got, err := os.ReadFile(exePath)
+			if err != nil {
+				t.Fatalf("ReadFile returned error: %v", err)
+			}
+			if string(got) != string(binaryBody) {
+				t.Fatalf("updated executable content = %q, want %q", string(got), string(binaryBody))
+			}
+			info, err := os.Stat(exePath)
+			if err != nil {
+				t.Fatalf("Stat returned error: %v", err)
+			}
+			if info.Mode().Perm() != 0o755 {
+				t.Fatalf("updated executable mode = %#o, want 0755", info.Mode().Perm())
+			}
+			if metadataCalls != 1 || binaryCalls != 1 || checksumCalls != 1 {
+				t.Fatalf("calls = metadata:%d binary:%d checksum:%d", metadataCalls, binaryCalls, checksumCalls)
+			}
+			if !strings.Contains(stdout.String(), "Updating qbitctl from 1.0.0 to v9.9.9") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "Updated qbitctl to v9.9.9") {
+				t.Fatalf("stdout = %q", stdout.String())
+			}
+		})
 	}
 }
 

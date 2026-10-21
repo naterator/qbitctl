@@ -34,11 +34,11 @@ Once installed, keep it up to date with:
 qbitctl update
 ```
 
-Self-update verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl update`.
+Self-update checks SHA-256 and verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl update`. The release must be immutable and published with all assets already attached. Mutable releases have no release attestation and cannot pass this verification.
 
 ## Build from source
 
-Requirements: Go 1.26+
+Requirements: Go 1.26.10+
 
 ```bash
 go build -o qbitctl ./cmd/qbitctl
@@ -68,7 +68,20 @@ VERSION=v1.2.3 bash scripts/build.sh
 
 Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The target list comes from `go tool dist list` for the installed Go toolchain. Android and iOS require separate SDK/CGO builds.
 
-CI and release workflows follow the [notes workflow templates](https://github.com/naterator/notes/tree/main/.github/workflows), with every job running on `ubuntu-24.04`. CI runs formatting, vet, race tests, a native CLI/API smoke check, a vulnerability check, and all release cross-builds. Publishing a user-created release with a `vMAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH` tag runs tests, builds and checksums every target, checks the native release binary, and uploads the assets.
+CI and release workflows follow the [notes workflow templates](https://github.com/naterator/notes/tree/main/.github/workflows), with every job running on `ubuntu-24.04`. CI runs formatting, vet, race tests, a native CLI/API smoke check, a vulnerability check, and all release cross-builds.
+
+To publish releases that support verified updates:
+
+1. Enable **Release immutability** in the repository's GitHub settings before publishing new releases.
+2. Create and push a version tag, or manually run **Draft release assets** with an existing tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
+3. The workflow runs tests, builds and checksums every target, checks the native release binary, and attaches the assets to a draft release. It can resume an existing draft but refuses to change an already published release.
+4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation. Check a downloaded asset with `gh release verify-asset <exact-tag> <asset-path> --repo naterator/qbitctl`.
+
+See GitHub's [immutable release publishing guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). Attaching binaries after publication is incompatible with immutable releases.
+
+### Upgrading from 1.0.2 or 1.0.3
+
+These versions incorrectly add `v` to unprefixed tags before verification, so a release tagged `1.0.3` is looked up as `v1.0.3`. This is fixed in source by preserving the exact published tag for verification. Existing installations can either install a release manually once, or update to a newer **`v`-prefixed immutable release** using their existing update command (`selfupdate` in 1.0.2, `update` in 1.0.3). Renaming a tag alone does not supply the missing release attestation.
 
 ## Project layout
 

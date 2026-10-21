@@ -168,8 +168,8 @@ func TestRootCommandHelpSucceeds(t *testing.T) {
 	if !strings.Contains(out.String(), "completion") {
 		t.Fatalf("help output missing completion command: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "selfupdate") {
-		t.Fatalf("help output missing autoupdate command: %q", out.String())
+	if !strings.Contains(out.String(), "update") {
+		t.Fatalf("help output missing update command: %q", out.String())
 	}
 	if !strings.Contains(out.String(), "add") {
 		t.Fatalf("help output missing add command: %q", out.String())

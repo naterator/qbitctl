@@ -79,17 +79,17 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-func newSelfupdateCmd() *cobra.Command {
+func newUpdateCmd() *cobra.Command {
 	dryRun := false
 	cmd := &cobra.Command{
-		Use:     "selfupdate",
-		Aliases: []string{"su", "up", "update", "upgrade"},
+		Use:     "update",
+		Aliases: []string{"upd", "up", "upgrade"},
 		Short:   "Download and install the latest qbitctl release",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := makeReleaseUpdater().Run(cmd.Context(), qbitctlVersion, dryRun, cmd.OutOrStdout()); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "[ERROR] %v\n", err)
-				return result(codedErr(exitActionFail, "self-update failed"))
+				return result(codedErr(exitActionFail, "update failed"))
 			}
 			return nil
 		},

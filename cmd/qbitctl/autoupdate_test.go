@@ -21,12 +21,14 @@ import (
 type stubReleaseUpdater struct {
 	runCalls       int
 	currentVersion string
+	dryRun         bool
 	err            error
 }
 
 func (s *stubReleaseUpdater) Run(ctx context.Context, currentVersion string, dryRun bool, stdout io.Writer) error {
 	s.runCalls++
 	s.currentVersion = currentVersion
+	s.dryRun = dryRun
 	if stdout != nil {
 		_, _ = io.WriteString(stdout, "stub updater invoked\n")
 	}
@@ -42,7 +44,7 @@ func withReleaseUpdaterStub(t *testing.T, updater releaseUpdater) {
 	})
 }
 
-func TestAutoupdateCommandRunsUpdater(t *testing.T) {
+func TestUpdateCommandRunsUpdater(t *testing.T) {
 	stub := &stubReleaseUpdater{}
 	withReleaseUpdaterStub(t, stub)
 
@@ -51,7 +53,7 @@ func TestAutoupdateCommandRunsUpdater(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"selfupdate"})
+	cmd.SetArgs([]string{"update"})
 
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("Execute returned error: %v", err)
@@ -70,7 +72,7 @@ func TestAutoupdateCommandRunsUpdater(t *testing.T) {
 	}
 }
 
-func TestAutoupdateCommandReturnsActionFailOnUpdaterError(t *testing.T) {
+func TestUpdateCommandReturnsActionFailOnUpdaterError(t *testing.T) {
 	stub := &stubReleaseUpdater{err: errors.New("update failed")}
 	withReleaseUpdaterStub(t, stub)
 
@@ -79,7 +81,7 @@ func TestAutoupdateCommandReturnsActionFailOnUpdaterError(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"selfupdate"})
+	cmd.SetArgs([]string{"update"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -91,6 +93,24 @@ func TestAutoupdateCommandReturnsActionFailOnUpdaterError(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "[ERROR] update failed") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestUpdateCommandNamesAndDryRun(t *testing.T) {
+	for _, name := range []string{"update", "upd", "up", "upgrade"} {
+		t.Run(name, func(t *testing.T) {
+			stub := &stubReleaseUpdater{}
+			withReleaseUpdaterStub(t, stub)
+			cmd := newRootCmd()
+			cmd.SetOut(io.Discard)
+			cmd.SetArgs([]string{name, "--dry-run"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if stub.runCalls != 1 || !stub.dryRun {
+				t.Fatalf("updater calls = %d, dry run = %t", stub.runCalls, stub.dryRun)
+			}
+		})
 	}
 }
 

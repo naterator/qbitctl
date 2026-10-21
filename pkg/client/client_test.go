@@ -2,11 +2,110 @@ package client
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/naterator/qbitctl/internal/qbtest"
 )
+
+func TestClientLoginResponses(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   string
+		wantOK bool
+	}{
+		{"legacy success", http.StatusOK, "Ok.", true},
+		{"modern success", http.StatusNoContent, "", true},
+		{"legacy invalid credentials", http.StatusOK, "Fails.", false},
+		{"legacy failure whitespace", http.StatusOK, " fails.\n", false},
+		{"modern invalid credentials", http.StatusUnauthorized, "", false},
+		{"banned", http.StatusForbidden, "", false},
+		{"server error", http.StatusInternalServerError, "", false},
+		{"unexpected success status", http.StatusAccepted, "", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newClient(Credentials{URL: "https://qbt.test", User: "nate", Pass: "a&b+c= d"}, io.Discard)
+			c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method != http.MethodPost || req.URL.Path != "/api/v2/auth/login" {
+					t.Fatalf("unexpected login request: %s %s", req.Method, req.URL)
+				}
+				if err := req.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				if req.Form.Get("username") != c.creds.User || req.Form.Get("password") != c.creds.Pass {
+					t.Fatal("login form did not preserve credentials")
+				}
+				return &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+			})
+			if err := c.login(); (err == nil) != tt.wantOK {
+				t.Fatalf("login error = %v, want success %t", err, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestClientSessionCookiesAndRenewal(t *testing.T) {
+	for _, tt := range []struct {
+		cookie string
+		status int
+		body   string
+	}{
+		{"SID", http.StatusOK, "Ok."},
+		{"QBT_SID_8080", http.StatusNoContent, ""},
+	} {
+		t.Run(tt.cookie, func(t *testing.T) {
+			c := newClient(Credentials{URL: "https://qbt.test:8443/qbt/", User: "nate", Pass: "secret"}, io.Discard)
+			logins := 0
+			attempts := map[string]int{}
+			c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Header.Get("Origin") != "https://qbt.test:8443" || req.Header.Get("Referer") != "https://qbt.test:8443/" {
+					t.Fatalf("request missing matching origin headers: %v", req.Header)
+				}
+				resp := &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}
+				if req.URL.Path == "/qbt/api/v2/auth/login" {
+					logins++
+					resp.StatusCode = tt.status
+					resp.Body = io.NopCloser(strings.NewReader(tt.body))
+					resp.Header.Add("Set-Cookie", fmt.Sprintf("%s=session-%d; Path=/; Secure; HttpOnly", tt.cookie, logins))
+					return resp, nil
+				}
+				cookie, err := req.Cookie(tt.cookie)
+				if err != nil || cookie.Value != fmt.Sprintf("session-%d", logins) {
+					t.Fatalf("request did not carry current %s cookie", tt.cookie)
+				}
+				attempts[req.URL.Path]++
+				// Each endpoint expires the session once. Both request paths must
+				// renew the cookie and replay the original form or upload body.
+				if attempts[req.URL.Path] == 1 {
+					resp.StatusCode = http.StatusForbidden
+				}
+				body, err := io.ReadAll(req.Body)
+				if err != nil || string(body) != "hashes=abc" {
+					t.Fatalf("request body = %q, error = %v", body, err)
+				}
+				return resp, nil
+			})
+			if err := c.login(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.requestContext(context.Background(), http.MethodPost, "/api/v2/torrents/setTags", url.Values{"hashes": {"abc"}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.requestBodyContext(context.Background(), http.MethodPost, "/api/v2/torrents/add", []byte("hashes=abc"), "application/x-www-form-urlencoded"); err != nil {
+				t.Fatal(err)
+			}
+			if logins != 3 {
+				t.Fatalf("login calls = %d, want initial login and two renewals", logins)
+			}
+		})
+	}
+}
 
 func TestClientLoginFailureOnNon200(t *testing.T) {
 	server := newQBTestServer(t)

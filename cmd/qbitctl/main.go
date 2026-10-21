@@ -156,7 +156,7 @@ func newRootCmd() *cobra.Command {
 		newConfigCmd(&opts),
 		newCompletionCmd(rootCmd),
 		newVersionCmd(),
-		newSelfupdateCmd(),
+		newUpdateCmd(),
 		newInfoCmd(&opts),
 		newAddCmd(&opts),
 		newListCmd(&opts),

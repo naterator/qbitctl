@@ -86,6 +86,8 @@ func TestCheckCompatibilityRejectsUnsupportedVersions(t *testing.T) {
 }
 
 func TestNewClientChecksCompatibility(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 	server := newQBTestServer(t)
 	server.APIVersion = "2.10.4"
 	withQBServerClientFactory(t, server)

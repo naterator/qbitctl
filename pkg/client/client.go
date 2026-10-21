@@ -60,6 +60,7 @@ func (c *Client) doRawRequestContext(ctx context.Context, method, endpoint strin
 	if method != http.MethodGet {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
+	setOriginHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -83,6 +84,7 @@ func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint stri
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	setOriginHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -98,6 +100,12 @@ func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint stri
 	return payload, resp.StatusCode, nil
 }
 
+func setOriginHeaders(req *http.Request) {
+	origin := req.URL.Scheme + "://" + req.URL.Host
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Referer", origin+"/")
+}
+
 func (c *Client) loginContext(ctx context.Context) error {
 	params := url.Values{
 		"username": {c.creds.User},
@@ -108,7 +116,9 @@ func (c *Client) loginContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if status != http.StatusOK {
+	// qBittorrent 5.2+ returns 204 with a session cookie; older releases
+	// return 200 with "Ok." (or "Fails." for invalid credentials).
+	if status != http.StatusOK && status != http.StatusNoContent {
 		return fmt.Errorf("login failed, http status: %d", status)
 	}
 	if strings.EqualFold(strings.TrimSpace(string(body)), "Fails.") {

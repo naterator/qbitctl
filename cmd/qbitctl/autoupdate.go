@@ -166,7 +166,7 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	}
 
 	dir := filepath.Dir(exePath)
-	tempDir, err := os.MkdirTemp(dir, ".qbitctl-selfupdate-*")
+	tempDir, err := os.MkdirTemp(dir, ".qbitctl-update-*")
 	if err != nil {
 		return fmt.Errorf("create temporary download directory: %w", err)
 	}

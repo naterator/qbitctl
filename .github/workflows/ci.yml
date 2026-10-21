@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Format, vet, and native tests
+        run: |
+          test -z "$(gofmt -l cmd internal pkg)"
+          go vet ./...
+          go test -race ./...
+      - name: Native binary and API smoke
+        run: |
+          go build -trimpath -o qbitctl-smoke ./cmd/qbitctl
+          python3 scripts/smoke_native.py ./qbitctl-smoke
+
+  cross-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Cross-build every release target
+        run: bash scripts/build.sh
+
+  govulncheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

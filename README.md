@@ -16,6 +16,8 @@ Use it as a **standalone command-line tool** to manage torrents from the termina
 
 Requires **qBittorrent 5.0.0** or later (WebAPI v2.11.0+). Earlier versions used different endpoint names (`/api/v2/torrents/pause` and `/api/v2/torrents/resume`) that are not supported.
 
+Supports both the older HTTP 200 login response and the HTTP 204 response used by qBittorrent 5.2 and later, including their session cookies and automatic session renewal.
+
 ## Install
 
 Download the latest release for your platform:
@@ -29,10 +31,10 @@ sudo mv qbitctl /usr/local/bin/
 Once installed, keep it up to date with:
 
 ```bash
-qbitctl selfupdate
+qbitctl update
 ```
 
-Self-update verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl selfupdate`.
+Self-update verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl update`.
 
 ## Build from source
 
@@ -57,6 +59,16 @@ make test       # go test ./...
 make check      # test + vet + fmt-check
 make fmt        # gofmt -w
 ```
+
+Build every Go-supported `amd64` and `arm64` target except Android and iOS:
+
+```bash
+VERSION=v1.2.3 bash scripts/build.sh
+```
+
+Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The target list comes from `go tool dist list` for the installed Go toolchain. Android and iOS require separate SDK/CGO builds.
+
+CI and release workflows follow the [notes workflow templates](https://github.com/naterator/notes/tree/main/.github/workflows), with every job running on `ubuntu-24.04`. CI runs formatting, vet, race tests, a native CLI/API smoke check, a vulnerability check, and all release cross-builds. Publishing a user-created release with a `vMAJOR.MINOR.PATCH` or `MAJOR.MINOR.PATCH` tag runs tests, builds and checksums every target, checks the native release binary, and uploads the assets.
 
 ## Project layout
 
@@ -243,8 +255,8 @@ qbitctl config write           # non-interactive (requires -p)
 ### Additional commands
 
 ```bash
-qbitctl selfupdate             # download and install latest release (aliases: su, up, update, upgrade)
-qbitctl selfupdate -d          # check for updates without installing
+qbitctl update                 # download and install latest release (aliases: upd, up, upgrade)
+qbitctl update -d              # check for updates without installing
 qbitctl version                # show version (aliases: v, ve, ver)
 qbitctl completion bash        # generate shell completions (alias: com)
 qbitctl help                   # help (aliases: h, he)

@@ -159,7 +159,7 @@ func (m *model) viewBody(width, height int) []string {
 func (m *model) viewQueue(width, height int) []string {
 	title := "QUEUE"
 	if m.queueSort != queueActiveFirst {
-		title += " · " + string(m.queueSort)
+		title += " · " + m.queueSort.label()
 	}
 	if viewHasDetail(width) {
 		rightWidth := viewDetailWidth(width)

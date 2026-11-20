@@ -11,33 +11,33 @@ import (
 	"testing"
 )
 
-func TestSearchPreferencesPathUsesXDGConfigHome(t *testing.T) {
+func TestTUIPreferencesDirUsesXDGConfigHome(t *testing.T) {
 	configHome := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 
-	got, err := searchPreferencesPath()
+	got, err := tuiPreferencesDir()
 	if err != nil {
-		t.Fatalf("searchPreferencesPath returned error: %v", err)
+		t.Fatalf("tuiPreferencesDir returned error: %v", err)
 	}
-	want := filepath.Join(configHome, "qbitctl", "tui-search.json")
+	want := filepath.Join(configHome, "qbitctl")
 	if got != want {
-		t.Fatalf("searchPreferencesPath = %q, want %q", got, want)
+		t.Fatalf("tuiPreferencesDir = %q, want %q", got, want)
 	}
 }
 
-func TestSearchPreferencesPathUsesHomeWhenXDGIsUnset(t *testing.T) {
+func TestTUIPreferencesDirUsesHomeWhenXDGIsUnset(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	got, err := searchPreferencesPath()
+	got, err := tuiPreferencesDir()
 	if err != nil {
-		t.Fatalf("searchPreferencesPath returned error: %v", err)
+		t.Fatalf("tuiPreferencesDir returned error: %v", err)
 	}
-	want := filepath.Join(home, ".config", "qbitctl", "tui-search.json")
+	want := filepath.Join(home, ".config", "qbitctl")
 	if got != want {
-		t.Fatalf("searchPreferencesPath = %q, want %q", got, want)
+		t.Fatalf("tuiPreferencesDir = %q, want %q", got, want)
 	}
 }
 

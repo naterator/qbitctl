@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -62,6 +63,7 @@ type model struct {
 	work                  workKind
 	quitting              bool
 	searchPreferencesFile string
+	queuePreferencesFile  string
 
 	page          page
 	width, height int
@@ -100,11 +102,12 @@ func newModel(ctx context.Context, backend service) *model {
 func Run(ctx context.Context, app *client.App, input io.Reader, output io.Writer) error {
 	sessionCtx, stop := context.WithCancel(ctx)
 	m := newModel(sessionCtx, &tuiClient{app: app})
-	path, err := searchPreferencesPath()
+	dir, err := tuiPreferencesDir()
 	if err != nil {
-		m.notice = "Search preferences are unavailable. " + err.Error()
+		m.notice = "TUI preferences are unavailable. " + err.Error()
 	} else {
-		m.loadSearchPreferences(path)
+		m.loadSearchPreferences(filepath.Join(dir, searchPreferencesFileName))
+		m.loadQueuePreferences(filepath.Join(dir, queuePreferencesFileName))
 	}
 	defer func() {
 		stop()

@@ -2,18 +2,9 @@
 
 package tui
 
-import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-)
+import "fmt"
 
-const (
-	searchPreferencesDirName  = "qbitctl"
-	searchPreferencesFileName = "tui-search.json"
-)
+const searchPreferencesFileName = "tui-search.json"
 
 // searchPreferences is deliberately separate from resultFilter.  The free-form
 // query describes the current search, while the numeric bounds and sort order
@@ -25,34 +16,11 @@ type searchPreferences struct {
 	MaxSize    string     `json:"max_size,omitempty"`
 }
 
-func searchPreferencesPath() (string, error) {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("find home directory: %w", err)
-		}
-		if home == "" {
-			return "", errors.New("home directory is empty")
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, searchPreferencesDirName, searchPreferencesFileName), nil
-}
-
 func loadSearchPreferences(path string) (resultSort, resultFilter, error) {
 	defaults := resultFilter{}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return resultOriginal, defaults, nil
-		}
-		return resultOriginal, defaults, fmt.Errorf("read preferences: %w", err)
-	}
-
 	var disk searchPreferences
-	if err := json.Unmarshal(data, &disk); err != nil {
-		return resultOriginal, defaults, fmt.Errorf("decode preferences: %w", err)
+	if err := readPreferences(path, &disk); err != nil {
+		return resultOriginal, defaults, err
 	}
 
 	order := disk.Sort
@@ -80,9 +48,6 @@ func knownResultSort(order resultSort) bool {
 }
 
 func saveSearchPreferences(path string, order resultSort, filter resultFilter) error {
-	if path == "" {
-		return errors.New("invalid preferences path")
-	}
 	if !knownResultSort(order) {
 		return fmt.Errorf("invalid result sort %q", order)
 	}
@@ -97,40 +62,5 @@ func saveSearchPreferences(path string, order resultSort, filter resultFilter) e
 		MinSize:    validated.minSize.text,
 		MaxSize:    validated.maxSize.text,
 	}
-	data, err := json.MarshalIndent(disk, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode preferences: %w", err)
-	}
-	data = append(data, '\n')
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create preferences directory: %w", err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".tui-search-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create preferences temporary file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("protect preferences temporary file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write preferences: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync preferences: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close preferences temporary file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace preferences: %w", err)
-	}
-	return nil
+	return writePreferences(path, disk)
 }

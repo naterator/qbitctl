@@ -12,26 +12,50 @@ import (
 type queueSort string
 
 const (
-	queueActiveFirst  queueSort = "Active first"
-	queueNameAsc      queueSort = "Name A-Z"
-	queueNameDesc     queueSort = "Name Z-A"
-	queueProgressAsc  queueSort = "Progress low to high"
-	queueProgressDesc queueSort = "Progress high to low"
-	queueStateAsc     queueSort = "State A-Z"
-	queueStateDesc    queueSort = "State Z-A"
+	queueActiveFirst  queueSort = "active-first"
+	queueNameAsc      queueSort = "name-asc"
+	queueNameDesc     queueSort = "name-desc"
+	queueProgressAsc  queueSort = "progress-asc"
+	queueProgressDesc queueSort = "progress-desc"
+	queueStateAsc     queueSort = "state-asc"
+	queueStateDesc    queueSort = "state-desc"
 )
 
-var queueSortChoices = []queueSort{
-	queueActiveFirst, queueNameAsc, queueNameDesc, queueProgressAsc, queueProgressDesc,
-	queueStateAsc, queueStateDesc,
+var queueSortChoices = []struct {
+	order queueSort
+	label string
+}{
+	{queueActiveFirst, "Active first"},
+	{queueNameAsc, "Name A-Z"},
+	{queueNameDesc, "Name Z-A"},
+	{queueProgressAsc, "Progress low to high"},
+	{queueProgressDesc, "Progress high to low"},
+	{queueStateAsc, "State A-Z"},
+	{queueStateDesc, "State Z-A"},
+}
+
+func (order queueSort) label() string {
+	for _, choice := range queueSortChoices {
+		if choice.order == order {
+			return choice.label
+		}
+	}
+	return ""
 }
 
 func (m *model) setQueueSort(order queueSort) {
-	if m.queueSort == order {
+	if m.queueSort != order {
+		m.queueSort = order
+		m.rebuildQueue()
+	}
+	if m.queuePreferencesFile == "" {
 		return
 	}
-	m.queueSort = order
-	m.rebuildQueue()
+	if err := saveQueuePreferences(m.queuePreferencesFile, order); err != nil {
+		m.notice, m.failed = "Could not save queue sort. "+err.Error(), true
+		return
+	}
+	m.notice, m.failed = "Queue sort saved", false
 }
 
 func (order queueSort) compare(left, right client.TorrentInfo) int {

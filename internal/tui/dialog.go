@@ -436,9 +436,8 @@ func (m *model) openSortDialog(kind dialogKind) {
 	var items []dialogItem
 	if kind == dialogQueueSort {
 		title, current = "Sort queue", string(m.queueSort)
-		for _, order := range queueSortChoices {
-			label := string(order)
-			items = append(items, dialogItem{label: label, action: label})
+		for _, choice := range queueSortChoices {
+			items = append(items, dialogItem{label: choice.label, action: string(choice.order)})
 		}
 	} else {
 		for _, choice := range resultSortChoices {

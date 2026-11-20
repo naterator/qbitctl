@@ -52,7 +52,7 @@ Self-update checks SHA-256 and verifies the downloaded release asset with GitHub
 
 ## Build from source
 
-Requirements: Go 1.26.10+
+Requires Go 1.26.11 or newer.
 
 ```bash
 go build -o qbitctl ./cmd/qbitctl

@@ -8,10 +8,23 @@ Use it as a **standalone command-line tool** to manage torrents from the termina
 - Update torrent settings such as tags, category, limits, and share rules
 - Start, pause, move, remove, and delete torrents
 - View qBittorrent server info and transfer statistics
-- Search torrents through qBittorrent's configured search plugins
+- Search through qBittorrent's configured plugins and add results by ID
+- Manage the queue, search results, and server stats in an interactive TUI
 - Store credentials locally or override them from the command line
 - Self-update from GitHub releases
 - Embed as a library with configurable I/O, context support, and no hardcoded stdout/stderr
+
+## TUI walkthrough
+
+The demo opens the queue, searches for Ubuntu, sorts and filters the results,
+and adds a selected torrent. It uses a local mock qBittorrent server with
+sample data.
+
+![qbitctl TUI walkthrough showing the queue and Ubuntu search](assets/demo.gif)
+
+[Replayable terminal recording](assets/demo.cast) · [Recording script](scripts/record_demo.py)
+
+Replay in your terminal with `asciinema play assets/demo.cast`.
 
 ## Compatibility
 
@@ -88,6 +101,7 @@ These versions incorrectly add `v` to unprefixed tags before verification, so a 
 
 ```text
 cmd/qbitctl/     Cobra CLI, command definitions, terminal helpers
+internal/tui/    Interactive queue, search, and server workspace
 pkg/client/      qBittorrent API client library (importable by external projects)
 Makefile         Build, test, and format targets
 ```
@@ -99,6 +113,7 @@ qbitctl config                    # set up credentials
 qbitctl list                      # list all torrents
 qbitctl info                      # show server info and transfer stats
 qbitctl tui                       # open the interactive workspace
+qbitctl search "Ubuntu 24.04"     # search with the Jackett plugin
 qbitctl show 9c328901             # show detailed info for one torrent
 qbitctl add ./ubuntu.torrent      # add a torrent
 qbitctl start 9c328901            # start a torrent
@@ -109,12 +124,28 @@ qbitctl start 9c328901            # start a torrent
 qbitctl needs qBittorrent Web API credentials. It loads the first matching config file in this order, then applies command-line overrides:
 
 1. `-c/--config <path>` (explicit config file)
-2. `$XDG_CONFIG_HOME/qbitctl/config.json`
+2. `$XDG_CONFIG_HOME/qbitctl/config.json` (defaults to `~/.config/qbitctl/config.json`)
 3. `./config.json`
 
 Command-line overrides use `-u/--url`, `-U/--user`, and `-p/--pass`.
 
 If `config.json` contains a cleartext password, qbitctl rewrites it in place with the encrypted `enc:v...` format.
+
+Each authenticated command uses its own Web UI session. qbitctl attempts to
+log out when the command finishes, including after errors or Ctrl-C. A failed
+logout leaves the command's output and exit status intact.
+
+### macOS Keychain
+
+qbitctl keeps the encrypted Web UI password in `config.json` and stores the
+encryption key in Keychain under service `qbitctl`, account `master-key`. On
+first save it uses your default user Keychain. If the save reports that
+Keychain is unavailable, check that your default Keychain exists and is
+unlocked in Keychain Access, then retry `qbitctl config`.
+
+For a fresh setup without Keychain access, set `QBITCTL_MASTER_KEY` to a stable
+secret before running `qbitctl config` and supply the same secret on later runs.
+An existing `enc:v2` config requires the key that encrypted it.
 
 ### Interactive config
 
@@ -133,7 +164,7 @@ qbitctl -u http://localhost:8080 -U admin -p secret config write -o ./config.jso
 
 ## Commands
 
-Every command supports short aliases for quick usage. Run `qbitctl help <command>` to see aliases and flags for any command.
+Run `qbitctl help <command>` to see its flags and any aliases.
 
 ### Global flags
 
@@ -150,8 +181,8 @@ Every command supports short aliases for quick usage. Run `qbitctl help <command
 
 #### tui
 
-`qbitctl tui` opens the interactive workspace using the same credentials as the
-other commands. Set up credentials with `qbitctl config` before the first launch.
+`qbitctl tui` opens the workspace in an interactive terminal using the same
+credentials as the other commands. Run `qbitctl config` before the first launch.
 
 - Press `Tab` or `1`, `2`, and `3` to switch between Queue, Search, and Server.
 - Press `Ctrl+P` or `:` to filter available actions, and `?` to see shortcuts.
@@ -160,16 +191,19 @@ other commands. Set up credentials with `qbitctl config` before the first launch
   batch actions. The palette includes start, pause, force-start, move, edit,
   trackers, remove, and delete. Removing torrents and deleting data require
   confirmation.
-- In Search, `/` opens the search form. Choose a plugin and a timeout, then
-  press `Enter` on a result to add it. Press `Esc` to cancel a running search.
-- Press `s` to sort the loaded results by seeders or size, ascending or
-  descending. Press `f` to filter the loaded results and `Tab` to switch
-  between text (title, source, or ID), minimum seeders, and the size bounds.
-  Sizes accept bytes or units such as `500 MB` and `2 GiB`. Leave either bound
-  blank for an open-ended range. `Enter` keeps the filters and `Esc` clears an
-  applied filter. Sorting and filtering use the results already loaded.
-  The sort order and saved numeric filters carry over to new searches and
-  future TUI sessions. Text filters apply to the current search.
+- In Search, `/` opens the search form. It defaults to Jackett and 30 seconds.
+  Press `Enter` on a result to open the add dialog, then `Enter` to submit it.
+  Press `Esc` to cancel a running search.
+- Press `s` to sort by seeders or size in either direction, or restore search
+  order. Press `f` to filter by text (title, source, or ID), minimum seeders,
+  or size. Use `Tab` to move between fields. Sizes accept bytes or units
+  such as `500 MB` and `2 GiB`. Leave either size bound blank for an open-ended
+  range. The results update as you type. `Enter` applies the filters and `Esc`
+  discards edits. Press `Esc` on the results list to clear the applied filters.
+  The TUI saves sort order and numeric bounds in
+  `${XDG_CONFIG_HOME:-$HOME/.config}/qbitctl/tui-search.json` and reuses them
+  for new searches and future TUI sessions. Text filters apply to the current
+  search.
 - Press `a` to add a torrent file or magnet link, `r` to refresh, and `q` to quit.
 
 #### info (aliases: i, in)
@@ -201,7 +235,7 @@ Search through qBittorrent's installed search plugins. The default plugin is
 `--timeout` with a Go duration such as `2m` to adjust the limit. At the limit,
 qbitctl returns the results found so far and prints a notice to stderr. With
 `--json`, stdout is still an array, including `[]` when there are no results.
-qbitctl deletes its search job before logging out, including after Ctrl-C.
+qbitctl attempts to delete its search job before logging out, including after Ctrl-C.
 Each result includes the name, size in bytes, seeder and leecher counts, and
 source hostname. Downloadable results also include an ID in the table and in
 the JSON `id` field. Use that ID with `qbitctl add --search-id`.
@@ -332,7 +366,8 @@ qbitctl help                   # help (aliases: h, he)
 
 ### Output format flags
 
-Commands in the View group support these output flags:
+These flags apply to `info`, `list`, `show`, and `get` as indicated.
+`search` also supports `--json` (`-j`).
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -369,47 +404,57 @@ qbitctl start 9c32
 The `pkg/client` package can be used as a standalone Go library. All I/O is configurable through `App.Stdout` and `App.Stderr`, and all requests respect `App.Ctx` for cancellation and timeouts.
 
 ```go
-import (
-    "bytes"
-    "context"
-    "io"
-    "log"
-    "time"
+package main
 
-    "github.com/naterator/qbitctl/pkg/client"
+import (
+	"bytes"
+	"context"
+	"io"
+	"log"
+	"time"
+
+	"github.com/naterator/qbitctl/pkg/client"
 )
 
-app, err := client.NewClient(&client.Options{
-    URL:  "http://localhost:8080",
-    User: "admin",
-    Pass: "secret",
-})
-if err != nil {
-    log.Fatal(err)
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
 }
 
-// Configure I/O (defaults to os.Stdout/os.Stderr)
-app.Stdout = &bytes.Buffer{}
-app.Stderr = io.Discard
+func run() error {
+	// Set a deadline for login and subsequent requests.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-// Set a context for timeouts
-ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-defer cancel()
-app.Ctx = ctx
+	app, err := client.NewClientContext(ctx, &client.Options{
+		URL:  "http://localhost:8080",
+		User: "admin",
+		Pass: "secret",
+	})
+	if err != nil {
+		return err
+	}
 
-// Use the API
-hash, err := app.ResolveHash("9c328901")
-if err != nil {
-    log.Fatal(err)
-}
-if err := app.ShowSingleTorrentInfo(hash); err != nil {
-    log.Fatal(err)
-}
-if err := app.SetField(hash, "category", "linux"); err != nil {
-    log.Fatal(err)
-}
-if err := app.StartTorrent(hash); err != nil {
-    log.Fatal(err)
+	// Release the Web UI session, even if the request context has expired.
+	defer app.Logout()
+
+	// Configure I/O (defaults to os.Stdout/os.Stderr)
+	app.Stdout = &bytes.Buffer{}
+	app.Stderr = io.Discard
+
+	// Use the API
+	hash, err := app.ResolveHash("9c328901")
+	if err != nil {
+		return err
+	}
+	if err := app.ShowSingleTorrentInfo(hash); err != nil {
+		return err
+	}
+	if err := app.SetField(hash, "category", "linux"); err != nil {
+		return err
+	}
+	return app.StartTorrent(hash)
 }
 ```
 

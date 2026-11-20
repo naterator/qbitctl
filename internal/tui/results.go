@@ -45,20 +45,12 @@ func (order resultSort) label() string {
 	return resultSortChoices[0].label
 }
 
-func (order resultSort) sortsSeeders() bool {
-	return order == resultSeedersDesc || order == resultSeedersAsc
-}
-
-func (order resultSort) descending() bool {
-	return order == resultSeedersDesc || order == resultSizeDesc
-}
-
 func (order resultSort) compare(left, right client.SearchResult) int {
 	switch order {
 	case resultSeedersDesc, resultSeedersAsc:
-		return compareResultMetric(int64(left.Seeders), int64(right.Seeders), order.descending())
+		return compareResultMetric(int64(left.Seeders), int64(right.Seeders), order == resultSeedersDesc)
 	case resultSizeDesc, resultSizeAsc:
-		return compareResultMetric(left.Size, right.Size, order.descending())
+		return compareResultMetric(left.Size, right.Size, order == resultSizeDesc)
 	default:
 		return 0
 	}

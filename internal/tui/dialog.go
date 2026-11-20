@@ -316,7 +316,7 @@ func (m *model) openPaletteDialog() {
 	if m.page == queuePage {
 		items = append(items,
 			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
-			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort the current queue by seeders or size", keys: "o"},
+			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by name, progress, or state", keys: "o"},
 			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent", keys: "enter"},
 			dialogItem{label: "Trackers", action: "trackers", description: "Inspect tracker status", keys: "t"},
 			dialogItem{label: "Edit torrent", action: "edit", description: "Set a qBittorrent torrent field", keys: "e"},
@@ -432,20 +432,24 @@ func (m *model) openEditDialog() {
 }
 
 func (m *model) openSortDialog(kind dialogKind) {
-	title, originalLabel, order := "Sort search results", resultOriginal.label(), m.resultSort
+	title, current := "Sort search results", string(m.resultSort)
+	var items []dialogItem
 	if kind == dialogQueueSort {
-		title, originalLabel, order = "Sort queue", "Active first", m.queueSort
-	}
-	items := make([]dialogItem, 0, len(resultSortChoices))
-	selected := 0
-	for i, choice := range resultSortChoices {
-		label := choice.label
-		if choice.order == resultOriginal {
-			label = originalLabel
+		title, current = "Sort queue", string(m.queueSort)
+		for _, order := range queueSortChoices {
+			label := string(order)
+			items = append(items, dialogItem{label: label, action: label})
 		}
-		items = append(items, dialogItem{label: label, action: string(choice.order)})
-		if choice.order == order {
+	} else {
+		for _, choice := range resultSortChoices {
+			items = append(items, dialogItem{label: choice.label, action: string(choice.order)})
+		}
+	}
+	selected := 0
+	for i, item := range items {
+		if item.action == current {
 			selected = i
+			break
 		}
 	}
 	m.dialog = &dialog{
@@ -544,7 +548,7 @@ func (m *model) openHelpDialog() {
 		{label: "Palette", value: "Ctrl+P or : opens commands; type to filter; Enter runs"},
 		{label: "Queue", value: "Space marks · Enter details · a add · e edit · p pause · s start"},
 		{label: "Queue", value: "f force-start · m move · x remove · D delete files · Esc marks"},
-		{label: "Queue sort", value: "o sorts by swarm seeders or total size · Active first restores the default"},
+		{label: "Queue sort", value: "o sorts by name, progress, or state · Active first restores the default"},
 		{label: "Filter", value: "/ queue filter · name/hash/category/tags · state all/active/etc."},
 		{label: "Search", value: "/ new search · f filter current results · s sort results · Enter add selected result"},
 		{label: "Result filters", value: "Tab between text, minimum seeders, and size bounds. Enter keeps filters, Esc cancels edits."},
@@ -645,12 +649,12 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 			if d.kind == dialogResultSort || d.kind == dialogQueueSort {
-				sort := resultSort(d.items[d.selected].action)
+				action := d.items[d.selected].action
 				m.dialog = nil
 				if d.kind == dialogQueueSort {
-					m.setQueueSort(sort)
+					m.setQueueSort(queueSort(action))
 				} else {
-					m.setResultSort(sort)
+					m.setResultSort(resultSort(action))
 				}
 				return nil
 			}

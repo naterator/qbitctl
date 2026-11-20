@@ -3,7 +3,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -12,68 +11,82 @@ import (
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
-func TestQueueSortOptions(t *testing.T) {
-	var torrents []client.TorrentInfo
-	if err := json.Unmarshal([]byte(`[
-		{"hash":"a","name":"Alpha","size":5,"total_size":300,"num_complete":5,"num_seeds":99},
-		{"hash":"b","name":"Bravo","size":80,"total_size":100,"num_complete":20},
-		{"hash":"c","name":"Charlie","total_size":200,"num_complete":20},
-		{"hash":"d","name":"Delta","total_size":-1,"num_complete":-1},
-		{"hash":"e","name":"Echo","total_size":0,"num_complete":0},
-		{"hash":"z","name":"Zulu","total_size":150,"dlspeed":10}
-	]`), &torrents); err != nil {
-		t.Fatal(err)
+func queueTestTorrents() []client.TorrentInfo {
+	return []client.TorrentInfo{
+		{Hash: "z", Name: "Zulu", State: "pausedUP", Progress: .90},
+		{Hash: "a", Name: "alpha", State: "Downloading", Progress: .25, DLSpeed: 10},
+		{Hash: "b", Name: "Bravo", State: "queuedDL", Progress: .25},
+		{Hash: "c", Name: "charlie", State: "downloading", Progress: .75, UpSpeed: 10},
+		{Hash: "d", Name: "Delta", State: "stalledDL", Progress: .25},
 	}
+}
+
+func queueTestHashes(m *model) []string {
+	got := make([]string, 0, len(m.queue))
+	for _, torrent := range m.queue {
+		got = append(got, torrent.Hash)
+	}
+	return got
+}
+
+func TestQueueSortsByVisibleColumns(t *testing.T) {
 	m := newModel(t.Context(), nil)
-	m.replaceQueue(torrents)
+	m.replaceQueue(queueTestTorrents())
 
 	for _, test := range []struct {
-		order resultSort
+		order queueSort
 		want  []string
 	}{
-		{resultSeedersDesc, []string{"b", "c", "a", "e", "z", "d"}},
-		{resultSeedersAsc, []string{"e", "a", "b", "c", "z", "d"}},
-		{resultSizeDesc, []string{"a", "c", "z", "b", "e", "d"}},
-		{resultSizeAsc, []string{"e", "b", "z", "c", "a", "d"}},
-		{resultOriginal, []string{"z", "a", "b", "c", "d", "e"}},
+		{queueActiveFirst, []string{"a", "c", "b", "d", "z"}},
+		{queueNameAsc, []string{"a", "b", "c", "d", "z"}},
+		{queueNameDesc, []string{"z", "d", "c", "b", "a"}},
+		{queueProgressAsc, []string{"a", "b", "d", "c", "z"}},
+		{queueProgressDesc, []string{"z", "c", "a", "b", "d"}},
+		{queueStateAsc, []string{"a", "c", "z", "b", "d"}},
+		{queueStateDesc, []string{"d", "b", "z", "a", "c"}},
 	} {
 		m.setQueueSort(test.order)
-		got := make([]string, 0, len(m.queue))
-		for _, torrent := range m.queue {
-			got = append(got, torrent.Hash)
-		}
-		if !slices.Equal(got, test.want) {
+		if got := queueTestHashes(m); !slices.Equal(got, test.want) {
 			t.Errorf("sort %q = %v, want %v", test.order, got, test.want)
 		}
 	}
 }
 
-func TestQueueSortPreservesSelectionAsQueueRefreshes(t *testing.T) {
+func TestQueueSortPreservesFocusAndMarksOnRefresh(t *testing.T) {
 	m := newModel(t.Context(), nil)
-	alpha := client.TorrentInfo{Hash: "a", Name: "Alpha", TotalSize: 300}
-	bravo := client.TorrentInfo{Hash: "b", Name: "Bravo", TotalSize: 100}
-	m.replaceQueue([]client.TorrentInfo{bravo, alpha})
+	m.replaceQueue([]client.TorrentInfo{
+		{Hash: "z", Name: "Zulu", Progress: .90},
+		{Hash: "a", Name: "alpha", Progress: .20},
+		{Hash: "b", Name: "Bravo", Progress: .50},
+	})
+	// Active-first falls back to the displayed name, so move from alpha to Bravo.
 	m.moveCursor(1)
 	m.toggleMark()
-
-	m.setQueueSort(resultSizeAsc)
-	if m.queue[0].Hash != "b" || m.queueIndex != 0 {
-		t.Fatalf("smallest first moved focus or did not reorder: queue %v, focus %d", m.queue, m.queueIndex)
+	m.setQueueSort(queueProgressDesc)
+	if torrent, ok := m.focusedTorrent(); !ok || torrent.Hash != "b" || m.queueIndex != 1 {
+		t.Fatalf("sort moved focus: queue=%v focus=%d", queueTestHashes(m), m.queueIndex)
 	}
 
-	bravo.TotalSize = 400
-	m.replaceQueue([]client.TorrentInfo{bravo, alpha})
-	if m.queue[0].Hash != "a" || m.queueIndex != 1 {
-		t.Fatalf("refresh moved focus or did not reapply sort: queue %v, focus %d", m.queue, m.queueIndex)
+	// A refresh changes the order, but focus and the mark follow the torrent hash.
+	m.replaceQueue([]client.TorrentInfo{
+		{Hash: "a", Name: "alpha", Progress: .40},
+		{Hash: "b", Name: "Bravo", Progress: .95},
+		{Hash: "z", Name: "Zulu", Progress: .10},
+	})
+	if torrent, ok := m.focusedTorrent(); !ok || torrent.Hash != "b" || m.queueIndex != 0 {
+		t.Fatalf("refresh moved focus: queue=%v focus=%d", queueTestHashes(m), m.queueIndex)
 	}
 	if got := m.targetHashes(); !slices.Equal(got, []string{"b"}) {
 		t.Fatalf("marked hashes = %v, want [b]", got)
 	}
 }
 
-func TestQueueSortPicker(t *testing.T) {
+func TestQueueSortPickerAndSearchSortAreIndependent(t *testing.T) {
 	m := newModel(t.Context(), nil)
 	m.handleKey("ctrl+p")
+	if m.dialog == nil || m.dialog.kind != dialogPalette {
+		t.Fatalf("palette shortcut opened %+v", m.dialog)
+	}
 	m.dialog.fields[0].input.SetValue("sort queue")
 	m.dialog.refreshPalette()
 	if len(m.dialog.items) != 1 || m.dialog.items[0].action != "sort-queue" {
@@ -85,24 +98,40 @@ func TestQueueSortPicker(t *testing.T) {
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
+	// The direct shortcut and picker labels expose the Queue columns, in order.
 	m.handleKey("o")
 	if m.dialog == nil || m.dialog.kind != dialogQueueSort {
 		t.Fatalf("sort queue shortcut opened %+v", m.dialog)
 	}
-	view := m.dialogView(80, 24)
-	for _, label := range []string{"› Active first", "Most seeders", "Fewest seeders", "Largest size", "Smallest size"} {
-		if !strings.Contains(view, label) {
-			t.Errorf("queue sort picker omitted %q", label)
-		}
+	wantLabels := []string{
+		"Active first", "Name A-Z", "Name Z-A", "Progress low to high",
+		"Progress high to low", "State A-Z", "State Z-A",
+	}
+	gotLabels := make([]string, 0, len(m.dialog.items))
+	for _, item := range m.dialog.items {
+		gotLabels = append(gotLabels, item.label)
+	}
+	if !slices.Equal(gotLabels, wantLabels) {
+		t.Fatalf("queue sort labels = %v, want %v", gotLabels, wantLabels)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.queueSort != resultSeedersDesc || m.resultSort != resultOriginal {
+	if m.queueSort != queueNameAsc || m.resultSort != resultOriginal {
 		t.Fatalf("applying queue sort set queue to %q and search to %q", m.queueSort, m.resultSort)
 	}
-	for _, text := range []string{"Most seeders", "SEEDS", "o sort"} {
-		if !strings.Contains(m.View().Content, text) {
-			t.Errorf("queue view omitted %q", text)
-		}
+
+	m.page = searchPage
+	m.handleKey("s")
+	if m.dialog == nil || m.dialog.kind != dialogResultSort {
+		t.Fatalf("search sort shortcut opened %+v", m.dialog)
+	}
+	view := m.dialogView(80, 24)
+	if !strings.Contains(view, "Search order") || !strings.Contains(view, "Most seeders") {
+		t.Fatalf("search picker did not show its sort choices")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.resultSort != resultSeedersDesc || m.queueSort != queueNameAsc {
+		t.Fatalf("search sort set search to %q and queue to %q", m.resultSort, m.queueSort)
 	}
 }

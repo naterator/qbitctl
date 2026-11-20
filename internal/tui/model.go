@@ -75,7 +75,7 @@ type model struct {
 	marked        map[string]bool
 	filter        string
 	stateFilter   string
-	queueSort     resultSort
+	queueSort     queueSort
 	resultFilter  resultFilter
 	resultSort    resultSort
 	resultEditor  *resultFilterEditor
@@ -91,7 +91,7 @@ func newModel(ctx context.Context, backend service) *model {
 	return &model{
 		ctx: ctx, backend: backend, width: 80, height: 24,
 		marked: make(map[string]bool), stateFilter: "all",
-		queueSort: resultOriginal, resultSort: resultOriginal,
+		queueSort: queueActiveFirst, resultSort: resultOriginal,
 		searchPlugin: "jackett", searchTimeout: 30 * time.Second,
 	}
 }
@@ -505,24 +505,6 @@ func (m *model) setFilter(query, state string) {
 	m.rebuildQueue()
 }
 
-func (m *model) setQueueSort(order resultSort) {
-	if m.queueSort == order {
-		return
-	}
-	m.queueSort = order
-	m.rebuildQueue()
-}
-
-func (order resultSort) torrentMetric(torrent client.TorrentInfo) int64 {
-	if !order.sortsSeeders() {
-		return torrent.TotalSize
-	}
-	if torrent.TotalSeeders == nil {
-		return -1
-	}
-	return *torrent.TotalSeeders
-}
-
 func (m *model) rebuildQueue() {
 	previous, _ := m.focusedTorrent()
 	query := strings.Fields(strings.ToLower(m.filter))
@@ -543,24 +525,7 @@ func (m *model) rebuildQueue() {
 			m.queue = append(m.queue, torrent)
 		}
 	}
-	order := m.queueSort
-	slices.SortStableFunc(m.queue, func(left, right client.TorrentInfo) int {
-		if order != resultOriginal {
-			metricOrder := compareResultMetric(order.torrentMetric(left), order.torrentMetric(right), order.descending())
-			if metricOrder != 0 {
-				return metricOrder
-			}
-		}
-		leftActive := left.DLSpeed > 0 || left.UpSpeed > 0
-		rightActive := right.DLSpeed > 0 || right.UpSpeed > 0
-		if leftActive != rightActive {
-			if leftActive {
-				return -1
-			}
-			return 1
-		}
-		return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
-	})
+	slices.SortStableFunc(m.queue, m.queueSort.compare)
 	m.queueIndex = max(0, min(m.queueIndex, len(m.queue)-1))
 	for i, torrent := range m.queue {
 		if previous.Hash == torrent.Hash {

@@ -158,8 +158,8 @@ func (m *model) viewBody(width, height int) []string {
 
 func (m *model) viewQueue(width, height int) []string {
 	title := "QUEUE"
-	if m.queueSort != resultOriginal {
-		title += " · " + m.queueSort.label()
+	if m.queueSort != queueActiveFirst {
+		title += " · " + string(m.queueSort)
 	}
 	if viewHasDetail(width) {
 		rightWidth := viewDetailWidth(width)
@@ -194,16 +194,12 @@ func (m *model) viewQueueList(width, height int) []string {
 
 func (m *model) viewQueueHeader(width int) string {
 	showSpeed := width >= 88
-	metric, metricWidth := m.queueMetricColumn(width)
-	nameWidth, _ := viewQueueColumns(width, showSpeed, metricWidth)
+	nameWidth, _, _, _ := viewQueueColumns(width, showSpeed)
 	parts := []string{
 		viewColumn("", 2),
 		viewColumn("NAME", nameWidth),
 		viewColumn("PROGRESS", 16),
 		viewColumn("STATE", 13),
-	}
-	if metricWidth > 0 {
-		parts = append(parts, viewColumn(metric, metricWidth))
 	}
 	if showSpeed {
 		parts = append(parts, viewColumn("DOWN / UP", 20))
@@ -213,8 +209,7 @@ func (m *model) viewQueueHeader(width int) string {
 
 func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) string {
 	showSpeed := width >= 88
-	_, metricWidth := m.queueMetricColumn(width)
-	nameWidth, speedWidth := viewQueueColumns(width, showSpeed, metricWidth)
+	nameWidth, _, _, speedWidth := viewQueueColumns(width, showSpeed)
 	marker := "  "
 	if m.marked != nil && m.marked[t.Hash] {
 		marker = "* "
@@ -231,18 +226,6 @@ func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) str
 		viewColumn(viewProgress(t.Progress, 16), 16),
 		viewColumn(viewSafe(t.State), 13),
 	}
-	if metricWidth > 0 {
-		metric := m.queueSort.torrentMetric(t)
-		value := "?"
-		if m.queueSort.sortsSeeders() {
-			if metric >= 0 {
-				value = fmt.Sprintf("%d", metric)
-			}
-		} else {
-			value = viewBytes(metric)
-		}
-		parts = append(parts, viewColumn(value, metricWidth))
-	}
 	if showSpeed {
 		parts = append(parts, viewColumn(viewSpeed(t.DLSpeed)+" / "+viewSpeed(t.UpSpeed), speedWidth))
 	}
@@ -251,16 +234,6 @@ func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) str
 		return viewSelectedSty.Width(width).Render(viewFit(line, width))
 	}
 	return line
-}
-
-func (m *model) queueMetricColumn(width int) (string, int) {
-	if m.queueSort == resultOriginal || width < 60 {
-		return "", 0
-	}
-	if m.queueSort.sortsSeeders() {
-		return "SEEDS", 10
-	}
-	return "SIZE", 10
 }
 
 func (m *model) viewTorrentDetail(width int) []string {
@@ -568,16 +541,17 @@ func viewDetailWidth(width int) int {
 	return max(30, width/3)
 }
 
-func viewQueueColumns(width int, showSpeed bool, metricWidth int) (name, speed int) {
-	fixed := 2 + 16 + 13 + 3 // marker, progress, state, and separators
+func viewQueueColumns(width int, showSpeed bool) (name, progress, state, speed int) {
+	progress, state, speed = 16, 13, 20
+	fixed := 2 + progress + state + 3 // marker and three separators
 	if showSpeed {
-		speed = 20
 		fixed += speed + 1 // the additional separator before speeds
 	}
-	if metricWidth > 0 {
-		fixed += metricWidth + 1
+	name = max(1, width-fixed)
+	if !showSpeed {
+		speed = 0
 	}
-	return max(1, width-fixed), speed
+	return
 }
 
 func viewSearchColumns(width int) (name, id, size, seed int) {

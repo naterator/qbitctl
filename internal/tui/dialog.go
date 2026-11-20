@@ -29,6 +29,7 @@ const (
 	dialogAddResult  dialogKind = "add-result"
 	dialogEditSelect dialogKind = "edit-select"
 	dialogResultSort dialogKind = "result-sort"
+	dialogQueueSort  dialogKind = "queue-sort"
 	dialogEditValue  dialogKind = "edit-value"
 	dialogMove       dialogKind = "move"
 	dialogConfirm    dialogKind = "confirm"
@@ -228,10 +229,14 @@ func (m *model) openAction(action string) tea.Cmd {
 		}
 		return m.startResultFilter()
 	case "sort-results":
-		if m.page != searchPage {
-			return nil
+		if m.page == searchPage {
+			m.openSortDialog(dialogResultSort)
 		}
-		m.openResultSortDialog()
+		return nil
+	case "sort-queue":
+		if m.page == queuePage {
+			m.openSortDialog(dialogQueueSort)
+		}
 		return nil
 	case "details":
 		m.dialog = nil
@@ -311,6 +316,7 @@ func (m *model) openPaletteDialog() {
 	if m.page == queuePage {
 		items = append(items,
 			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
+			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort the current queue by seeders or size", keys: "o"},
 			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent", keys: "enter"},
 			dialogItem{label: "Trackers", action: "trackers", description: "Inspect tracker status", keys: "t"},
 			dialogItem{label: "Edit torrent", action: "edit", description: "Set a qBittorrent torrent field", keys: "e"},
@@ -425,18 +431,26 @@ func (m *model) openEditDialog() {
 	m.dialog = d
 }
 
-func (m *model) openResultSortDialog() {
+func (m *model) openSortDialog(kind dialogKind) {
+	title, originalLabel, order := "Sort search results", resultOriginal.label(), m.resultSort
+	if kind == dialogQueueSort {
+		title, originalLabel, order = "Sort queue", "Active first", m.queueSort
+	}
 	items := make([]dialogItem, 0, len(resultSortChoices))
 	selected := 0
 	for i, choice := range resultSortChoices {
-		items = append(items, dialogItem{label: choice.label, action: string(choice.order)})
-		if choice.order == m.resultSort {
+		label := choice.label
+		if choice.order == resultOriginal {
+			label = originalLabel
+		}
+		items = append(items, dialogItem{label: label, action: string(choice.order)})
+		if choice.order == order {
 			selected = i
 		}
 	}
 	m.dialog = &dialog{
-		kind:     dialogResultSort,
-		title:    "Sort search results",
+		kind:     kind,
+		title:    title,
 		items:    items,
 		selected: selected,
 	}
@@ -530,6 +544,7 @@ func (m *model) openHelpDialog() {
 		{label: "Palette", value: "Ctrl+P or : opens commands; type to filter; Enter runs"},
 		{label: "Queue", value: "Space marks · Enter details · a add · e edit · p pause · s start"},
 		{label: "Queue", value: "f force-start · m move · x remove · D delete files · Esc marks"},
+		{label: "Queue sort", value: "o sorts by swarm seeders or total size · Active first restores the default"},
 		{label: "Filter", value: "/ queue filter · name/hash/category/tags · state all/active/etc."},
 		{label: "Search", value: "/ new search · f filter current results · s sort results · Enter add selected result"},
 		{label: "Result filters", value: "Tab between text, minimum seeders, and size bounds. Enter keeps filters, Esc cancels edits."},
@@ -611,7 +626,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		d.refreshPalette()
 		return cmd
 
-	case dialogEditSelect, dialogResultSort:
+	case dialogEditSelect, dialogResultSort, dialogQueueSort:
 		switch name {
 		case "up", "ctrl+k", "k":
 			d.stepSelection(-1)
@@ -629,10 +644,14 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			if len(d.items) == 0 {
 				return nil
 			}
-			if d.kind == dialogResultSort {
+			if d.kind == dialogResultSort || d.kind == dialogQueueSort {
 				sort := resultSort(d.items[d.selected].action)
 				m.dialog = nil
-				m.setResultSort(sort)
+				if d.kind == dialogQueueSort {
+					m.setQueueSort(sort)
+				} else {
+					m.setResultSort(sort)
+				}
 				return nil
 			}
 			field := client.CanonicalSetField(d.items[d.selected].action)
@@ -891,7 +910,7 @@ func (m *model) dialogView(width, height int) string {
 			lines = append(lines, lipgloss.NewStyle().Faint(true).Render("  No matching commands"))
 		}
 
-	case dialogEditSelect, dialogResultSort:
+	case dialogEditSelect, dialogResultSort, dialogQueueSort:
 		visible := max(3, height-8)
 		start := d.selected - visible/2
 		if start < 0 {
@@ -954,7 +973,7 @@ func (m *model) dialogView(width, height int) string {
 		footer = "↑/↓ choose · Enter select · type to filter · Esc close"
 	case dialogEditSelect:
 		footer = "↑/↓ choose · Enter edit · Esc close"
-	case dialogResultSort:
+	case dialogResultSort, dialogQueueSort:
 		footer = "↑/↓ choose · Enter apply · Esc close"
 	case dialogDetails, dialogHelp:
 		footer = "↑/↓ scroll · PgUp/PgDn page · Esc close"

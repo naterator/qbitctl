@@ -52,6 +52,7 @@ type TorrentInfo struct {
 	Downloaded        int64   `json:"downloaded"`
 	Size              int64   `json:"size"`
 	TotalSize         int64   `json:"total_size"`
+	TotalSeeders      *int64  `json:"num_complete,omitempty"` // Swarm count, nil when omitted.
 	ETA               int64   `json:"eta"`
 	Progress          float64 `json:"progress"`
 	InactiveSeedingTL int64   `json:"inactive_seeding_time_limit"`

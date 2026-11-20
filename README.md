@@ -191,6 +191,10 @@ credentials as the other commands. Run `qbitctl config` before the first launch.
   batch actions. The palette includes start, pause, force-start, move, edit,
   trackers, remove, and delete. Removing torrents and deleting data require
   confirmation.
+- In Queue, press `o` or choose **Sort queue** in the palette to sort by swarm
+  seeders or total torrent size in either direction. Choose **Active first**
+  to restore the default order. The sort stays applied as the queue refreshes
+  during the session. Press `s` to start selected torrents.
 - In Search, `/` opens the search form. It defaults to Jackett and 30 seconds.
   Press `Enter` on a result to open the add dialog, then `Enter` to submit it.
   Press `Esc` to cancel a running search.

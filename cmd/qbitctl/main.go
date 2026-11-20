@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	qbt "github.com/naterator/qbitctl/pkg/client"
 
@@ -81,12 +83,18 @@ func result(err error) error {
 	return exitError{code: exitBadArgs}
 }
 
-func newAuthenticatedApp(opts *CLIOptions) (*App, error) {
-	app, err := qbt.NewClient(opts)
-	if err != nil {
-		return nil, result(err)
+func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		app, err := qbt.NewClientContext(ctx, opts)
+		if err != nil {
+			return result(err)
+		}
+		defer app.Logout()
+		return run(app, args)
 	}
-	return app, nil
 }
 
 func applyPositionalHash(opts *CLIOptions, positionalHash string) {
@@ -158,6 +166,8 @@ func newRootCmd() *cobra.Command {
 		newVersionCmd(),
 		newUpdateCmd(),
 		newInfoCmd(&opts),
+		newTUICmd(&opts),
+		newSearchCmd(&opts),
 		newAddCmd(&opts),
 		newListCmd(&opts),
 		newShowCmd(&opts),

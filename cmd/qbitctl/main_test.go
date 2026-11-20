@@ -38,6 +38,9 @@ func (s *qbTestServer) creds() Credentials {
 
 func withQBServerClientFactory(t *testing.T, s *qbTestServer) {
 	t.Helper()
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	t.Chdir(configDir)
 	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
 		return &http.Client{
 			Jar:       jar,
@@ -177,6 +180,7 @@ func TestRootCommandHelpSucceeds(t *testing.T) {
 }
 
 func TestConfigWriteCommandSavesConfig(t *testing.T) {
+	t.Setenv("QBITCTL_MASTER_KEY", "mock-secret-for-testing")
 	tmp := t.TempDir()
 	configPath := filepath.Join(tmp, "config.json")
 
@@ -612,18 +616,19 @@ func TestCollectHashInputs(t *testing.T) {
 	})
 }
 
-func TestNewAuthenticatedAppRequiresHashInOptions(t *testing.T) {
+func TestResolveHashWithNoHashInOptions(t *testing.T) {
 	// Options doesn't require hash, but ResolveHash will fail if it's missing.
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
-	app, err := newAuthenticatedApp(&CLIOptions{
+	app, err := qbt.NewClient(&CLIOptions{
 		URL:  server.creds().URL,
 		User: "admin",
 		Pass: "secret",
 	})
 	if err != nil {
-		t.Fatalf("newAuthenticatedApp returned error: %v", err)
+		t.Fatalf("NewClient returned error: %v", err)
 	}
+	defer app.Logout()
 	_, err = app.ResolveHash("")
 	if err == nil {
 		t.Fatal("ResolveHash unexpectedly succeeded without hash")

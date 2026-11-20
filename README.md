@@ -8,6 +8,7 @@ Use it as a **standalone command-line tool** to manage torrents from the termina
 - Update torrent settings such as tags, category, limits, and share rules
 - Start, pause, move, remove, and delete torrents
 - View qBittorrent server info and transfer statistics
+- Search torrents through qBittorrent's configured search plugins
 - Store credentials locally or override them from the command line
 - Self-update from GitHub releases
 - Embed as a library with configurable I/O, context support, and no hardcoded stdout/stderr
@@ -97,6 +98,7 @@ Makefile         Build, test, and format targets
 qbitctl config                    # set up credentials
 qbitctl list                      # list all torrents
 qbitctl info                      # show server info and transfer stats
+qbitctl tui                       # open the interactive workspace
 qbitctl show 9c328901             # show detailed info for one torrent
 qbitctl add ./ubuntu.torrent      # add a torrent
 qbitctl start 9c328901            # start a torrent
@@ -146,6 +148,30 @@ Every command supports short aliases for quick usage. Run `qbitctl help <command
 
 ### View commands
 
+#### tui
+
+`qbitctl tui` opens the interactive workspace using the same credentials as the
+other commands. Set up credentials with `qbitctl config` before the first launch.
+
+- Press `Tab` or `1`, `2`, and `3` to switch between Queue, Search, and Server.
+- Press `Ctrl+P` or `:` to filter available actions, and `?` to see shortcuts.
+- In Queue, `/` filters by name, hash, category, tags, or state. Use the arrows
+  or `j` and `k` to move, `Enter` for details, and `Space` to mark torrents for
+  batch actions. The palette includes start, pause, force-start, move, edit,
+  trackers, remove, and delete. Removing torrents and deleting data require
+  confirmation.
+- In Search, `/` opens the search form. Choose a plugin and a timeout, then
+  press `Enter` on a result to add it. Press `Esc` to cancel a running search.
+- Press `s` to sort the loaded results by seeders or size, ascending or
+  descending. Press `f` to filter the loaded results and `Tab` to switch
+  between text (title, source, or ID), minimum seeders, and the size bounds.
+  Sizes accept bytes or units such as `500 MB` and `2 GiB`. Leave either bound
+  blank for an open-ended range. `Enter` keeps the filters and `Esc` clears an
+  applied filter. Sorting and filtering use the results already loaded.
+  The sort order and saved numeric filters carry over to new searches and
+  future TUI sessions. Text filters apply to the current search.
+- Press `a` to add a torrent file or magnet link, `r` to refresh, and `q` to quit.
+
 #### info (aliases: i, in)
 
 Show qBittorrent server version and transfer statistics:
@@ -166,6 +192,28 @@ qbitctl list -j             # output as JSON
 qbitctl list -J             # raw server JSON response
 qbitctl list -t '{{range .}}{{.Hash}} {{.Name}}{{"\n"}}{{end}}'
 qbitctl list --fields hash,name,progress
+```
+
+#### search
+
+Search through qBittorrent's installed search plugins. The default plugin is
+`jackett`, and qbitctl waits 30 seconds for the search to finish by default. Use
+`--timeout` with a Go duration such as `2m` to adjust the limit. At the limit,
+qbitctl returns the results found so far and prints a notice to stderr. With
+`--json`, stdout is still an array, including `[]` when there are no results.
+qbitctl deletes its search job before logging out, including after Ctrl-C.
+Each result includes the name, size in bytes, seeder and leecher counts, and
+source hostname. Downloadable results also include an ID in the table and in
+the JSON `id` field. Use that ID with `qbitctl add --search-id`.
+
+qbitctl keeps the download links in a private local cache. A successful search
+replaces the previous search's cache. IDs are valid for 24 hours and for the
+same qBittorrent URL and user used to search.
+
+```bash
+qbitctl search "Ubuntu 24.04"
+qbitctl search "Ubuntu 24.04" --plugin jackett --timeout 2m
+qbitctl search "Ubuntu 24.04" --json
 ```
 
 #### show (aliases: s, sh)
@@ -197,6 +245,13 @@ Available fields: `autotmm`, `category`, `dl-limit`, `dl-path`, `dl-speed`, `dow
 ### Change commands
 
 #### add (aliases: a, ad)
+
+Run a search, then pass the ID of the result you want to download.
+
+```bash
+qbitctl search "Ubuntu 24.04"
+qbitctl add --search-id 123456789012
+```
 
 ```bash
 qbitctl add ./ubuntu.torrent

@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+const (
+	loginEndpoint  = "/api/v2/auth/login"
+	logoutEndpoint = "/api/v2/auth/logout"
+	logoutTimeout  = 2 * time.Second
+)
+
+type httpStatusError int
+
+func (err httpStatusError) Error() string {
+	return fmt.Sprintf("http error: %d", int(err))
+}
+
 var httpClientFactory = func(jar http.CookieJar) *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
@@ -40,9 +52,8 @@ func (c *Client) endpointURL(endpoint string) string {
 	return strings.TrimRight(c.creds.URL, "/") + endpoint
 }
 
-func (c *Client) doRawRequestContext(ctx context.Context, method, endpoint string, params url.Values) ([]byte, int, error) {
+func (c *Client) doRawRequestContext(ctx context.Context, method, requestURL string, params url.Values) ([]byte, *http.Response, error) {
 	var body io.Reader
-	requestURL := c.endpointURL(endpoint)
 
 	if method == http.MethodGet {
 		if len(params) > 0 {
@@ -54,7 +65,7 @@ func (c *Client) doRawRequestContext(ctx context.Context, method, endpoint strin
 
 	req, err := http.NewRequestWithContext(ctx, method, requestURL, body)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	if method != http.MethodGet {
@@ -64,16 +75,12 @@ func (c *Client) doRawRequestContext(ctx context.Context, method, endpoint strin
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
 	payload, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-
-	return payload, resp.StatusCode, nil
+	return payload, resp, err
 }
 
 func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint string, body []byte, contentType string) ([]byte, int, error) {
@@ -112,10 +119,19 @@ func (c *Client) loginContext(ctx context.Context) error {
 		"password": {c.creds.Pass},
 	}
 
-	body, status, err := c.doRawRequestContext(ctx, http.MethodPost, "/api/v2/auth/login", params)
+	body, resp, err := c.doRawRequestContext(ctx, http.MethodPost, c.endpointURL(loginEndpoint), params)
+	// Use the server reached by login so redirects can still be cleaned up,
+	// even if reading the login response body was interrupted.
+	if resp != nil && resp.Request != nil && strings.HasSuffix(resp.Request.URL.Path, loginEndpoint) {
+		logoutURL := resp.Request.URL.ResolveReference(&url.URL{Path: "logout"})
+		if c.hasSessionCookie(logoutURL) {
+			c.logoutURL.Store(logoutURL)
+		}
+	}
 	if err != nil {
 		return err
 	}
+	status := resp.StatusCode
 	// qBittorrent 5.2+ returns 204 with a session cookie; older releases
 	// return 200 with "Ok." (or "Fails." for invalid credentials).
 	if status != http.StatusOK && status != http.StatusNoContent {
@@ -127,29 +143,54 @@ func (c *Client) loginContext(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) login() error {
-	return c.loginContext(context.Background())
+func (c *Client) hasSessionCookie(endpoint *url.URL) bool {
+	for _, cookie := range c.httpClient.Jar.Cookies(endpoint) {
+		if cookie.Value != "" && (cookie.Name == "SID" || strings.HasPrefix(cookie.Name, "QBT_SID_")) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) logout() {
+	endpoint := c.logoutURL.Load()
+	if endpoint == nil {
+		var err error
+		endpoint, err = url.Parse(c.endpointURL(logoutEndpoint))
+		if err != nil {
+			return
+		}
+	}
+	// The jar starts empty and belongs to this client. Without a session
+	// cookie there is nothing to release.
+	if !c.hasSessionCookie(endpoint) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), logoutTimeout)
+	defer cancel()
+	_, _, _ = c.doRawRequestContext(ctx, http.MethodPost, endpoint.String(), nil)
 }
 
 func (c *Client) requestContext(ctx context.Context, method, endpoint string, params url.Values) ([]byte, error) {
-	body, status, err := c.doRawRequestContext(ctx, method, endpoint, params)
+	requestURL := c.endpointURL(endpoint)
+	body, resp, err := c.doRawRequestContext(ctx, method, requestURL, params)
 	if err != nil {
 		return nil, err
 	}
 
-	if status == http.StatusForbidden {
+	if resp.StatusCode == http.StatusForbidden {
 		fmt.Fprintf(c.stderr, "[INFO] Session expired. Re-authenticating...\n")
 		if err := c.loginContext(ctx); err != nil {
 			return nil, fmt.Errorf("re-login failed: %w", err)
 		}
-		body, status, err = c.doRawRequestContext(ctx, method, endpoint, params)
+		body, resp, err = c.doRawRequestContext(ctx, method, requestURL, params)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("http error: %d", status)
+	if status := resp.StatusCode; status < 200 || status >= 300 {
+		return nil, httpStatusError(status)
 	}
 
 	return body, nil

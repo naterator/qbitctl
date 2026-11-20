@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -29,6 +31,7 @@ const (
 )
 
 var errUnsupportedPasswordFormat = errors.New("config file uses an unsupported password format")
+var errMacKeychainUnavailable = errors.New("macOS Keychain is unavailable")
 
 // CodedError is an error that carries an exit code for CLI use.
 type CodedError struct {
@@ -85,6 +88,9 @@ func getOrCreateMasterKey() ([]byte, string, error) {
 		sum := sha256.Sum256([]byte(secret))
 		return sum[:], "v2", nil
 	}
+	if runtime.GOOS == "darwin" && !errors.Is(err, keyring.ErrNotFound) {
+		return nil, "", fmt.Errorf("%w: read qbitctl master key: %v", errMacKeychainUnavailable, err)
+	}
 
 	// Try to create one if it's missing
 	newSecret := make([]byte, 32)
@@ -92,7 +98,12 @@ func getOrCreateMasterKey() ([]byte, string, error) {
 		return nil, "", err
 	}
 	secret = hex.EncodeToString(newSecret)
-	if err := keyring.Set(masterKeyService, masterKeyUser, secret); err != nil {
+	if runtime.GOOS == "darwin" {
+		secret, err = saveMacMasterSecret(secret, runMacSecurity, getMasterSecret)
+		if err != nil {
+			return nil, "", err
+		}
+	} else if err := keyring.Set(masterKeyService, masterKeyUser, secret); err != nil {
 		// If keyring is unavailable, fall back to v1 hardcoded key
 		return deriveAuthKeyV1(), "v1", nil
 	}
@@ -270,7 +281,7 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 		}
 		creds.Pass = password
 		// Migrate to latest version (keyring if possible)
-		if err := saveAuthFile(path, creds); err != nil {
+		if err := saveAuthFile(path, creds); err != nil && !errors.Is(err, errMacKeychainUnavailable) {
 			return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", err)
 		}
 		// if infoOut != nil {
@@ -374,8 +385,21 @@ func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
 	return creds, nil
 }
 
+// NewClient authenticates using a background context. Call Logout when finished.
 func NewClient(opts *Options) (*App, error) {
-	app := &App{}
+	return NewClientContext(context.Background(), opts)
+}
+
+// NewClientContext authenticates and uses ctx for the app's requests.
+// Call Logout when finished with the returned app.
+func NewClientContext(ctx context.Context, opts *Options) (*App, error) {
+	return NewClientWithOutput(ctx, opts, nil, nil)
+}
+
+// NewClientWithOutput authenticates with caller-provided output writers. A nil
+// writer uses the corresponding standard stream. Call Logout when finished.
+func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.Writer) (*App, error) {
+	app := &App{Ctx: ctx, Stdout: stdout, Stderr: stderr}
 	newAppDefaults(app)
 
 	creds, err := initAuth(*opts, app.Stderr)
@@ -386,14 +410,21 @@ func NewClient(opts *Options) (*App, error) {
 	app.creds = creds
 	app.client = newClient(creds, app.Stderr)
 
-	if err := app.client.login(); err != nil {
+	if err := app.client.loginContext(app.context()); err != nil {
+		app.Logout()
 		return nil, codedErrf(ExitLoginFail, "Login failed: %v", err)
 	}
 	if err := app.CheckCompatibility(); err != nil {
+		app.Logout()
 		return nil, err
 	}
 
 	return app, nil
+}
+
+// Logout attempts to release the app's session, even if its context is canceled.
+func (a *App) Logout() {
+	a.client.logout()
 }
 
 func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) error {

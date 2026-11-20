@@ -7,7 +7,7 @@ BINARY ?= $(BIN_DIR)/qbitctl
 PACKAGES ?= ./...
 CLI_PKG ?= ./cmd/qbitctl
 APP_PKG ?= ./pkg/client/...
-GOFILES := $(shell find cmd pkg -name '*.go' -type f | sort)
+GOFILES := $(shell find cmd internal pkg -name '*.go' -type f | sort)
 GOCACHE ?= /tmp/qbitctl-gocache
 CGO_ENABLED ?= 0
 VERSION ?= dev-$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo unknown)

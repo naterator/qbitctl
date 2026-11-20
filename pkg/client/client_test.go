@@ -43,7 +43,7 @@ func TestClientLoginResponses(t *testing.T) {
 				}
 				return &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
 			})
-			if err := c.login(); (err == nil) != tt.wantOK {
+			if err := c.loginContext(context.Background()); (err == nil) != tt.wantOK {
 				t.Fatalf("login error = %v, want success %t", err, tt.wantOK)
 			}
 		})
@@ -62,6 +62,7 @@ func TestClientSessionCookiesAndRenewal(t *testing.T) {
 		t.Run(tt.cookie, func(t *testing.T) {
 			c := newClient(Credentials{URL: "https://qbt.test:8443/qbt/", User: "nate", Pass: "secret"}, io.Discard)
 			logins := 0
+			loggedOut := false
 			attempts := map[string]int{}
 			c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.Header.Get("Origin") != "https://qbt.test:8443" || req.Header.Get("Referer") != "https://qbt.test:8443/" {
@@ -79,6 +80,13 @@ func TestClientSessionCookiesAndRenewal(t *testing.T) {
 				if err != nil || cookie.Value != fmt.Sprintf("session-%d", logins) {
 					t.Fatalf("request did not carry current %s cookie", tt.cookie)
 				}
+				if req.URL.Path == "/qbt/api/v2/auth/logout" {
+					if req.Method != http.MethodPost {
+						t.Fatalf("logout method = %s, want POST", req.Method)
+					}
+					loggedOut = true
+					return resp, nil
+				}
 				attempts[req.URL.Path]++
 				// Each endpoint expires the session once. Both request paths must
 				// renew the cookie and replay the original form or upload body.
@@ -91,7 +99,7 @@ func TestClientSessionCookiesAndRenewal(t *testing.T) {
 				}
 				return resp, nil
 			})
-			if err := c.login(); err != nil {
+			if err := c.loginContext(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := c.requestContext(context.Background(), http.MethodPost, "/api/v2/torrents/setTags", url.Values{"hashes": {"abc"}}); err != nil {
@@ -99,6 +107,10 @@ func TestClientSessionCookiesAndRenewal(t *testing.T) {
 			}
 			if _, err := c.requestBodyContext(context.Background(), http.MethodPost, "/api/v2/torrents/add", []byte("hashes=abc"), "application/x-www-form-urlencoded"); err != nil {
 				t.Fatal(err)
+			}
+			c.logout()
+			if !loggedOut {
+				t.Fatal("client skipped logout after renewal")
 			}
 			if logins != 3 {
 				t.Fatalf("login calls = %d, want initial login and two renewals", logins)
@@ -112,9 +124,40 @@ func TestClientLoginFailureOnNon200(t *testing.T) {
 	server.StatusQueue["/api/v2/auth/login"] = []int{http.StatusUnauthorized}
 	withQBServerClientFactory(t, server)
 
-	err := newClient(server.creds(), os.Stderr).login()
+	err := newClient(server.creds(), os.Stderr).loginContext(context.Background())
 	if err == nil {
 		t.Fatal("login unexpectedly succeeded")
+	}
+}
+
+func TestClientLogoutAfterLoginRedirect(t *testing.T) {
+	c := newClient(Credentials{URL: "http://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	var loggedOut bool
+	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp := &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody, Request: req}
+		switch req.URL.String() {
+		case "http://qbt.test" + loginEndpoint:
+			resp.StatusCode = http.StatusTemporaryRedirect
+			resp.Header.Set("Location", "https://qbt.test/qbt"+loginEndpoint)
+		case "https://qbt.test/qbt" + loginEndpoint:
+			resp.Header.Set("Set-Cookie", "QBT_SID_8080=redirected-session; Path=/qbt; Secure; HttpOnly")
+		case "https://qbt.test/qbt" + logoutEndpoint:
+			cookie, err := req.Cookie("QBT_SID_8080")
+			if err != nil || cookie.Value != "redirected-session" {
+				t.Fatal("logout did not carry the secure session cookie")
+			}
+			loggedOut = true
+		default:
+			t.Fatalf("unexpected request to %s", req.URL)
+		}
+		return resp, nil
+	})
+	if err := c.loginContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.logout()
+	if !loggedOut {
+		t.Fatal("client skipped logout after redirect")
 	}
 }
 

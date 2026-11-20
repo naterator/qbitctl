@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"sync/atomic"
 )
 
 var Version = "dev"
@@ -74,6 +76,7 @@ type Client struct {
 	creds      Credentials
 	httpClient *http.Client
 	stderr     io.Writer
+	logoutURL  atomic.Pointer[url.URL]
 }
 
 type App struct {

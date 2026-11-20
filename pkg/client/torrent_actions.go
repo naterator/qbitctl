@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 func (a *App) qbtAction(hash, endpoint string, params url.Values) error {
@@ -56,6 +57,25 @@ func (a *App) AddTorrent(source string) error {
 		return a.addTorrentURL(source)
 	}
 	return a.addTorrentFile(source)
+}
+
+// AddSearchResult submits a cached search result to qBittorrent.
+func (a *App) AddSearchResult(id int64) error {
+	target, err := a.cachedSearchResult(id)
+	if err != nil {
+		return err
+	}
+	if target.Plugin != "" && (strings.HasPrefix(target.URL, "http:") || strings.HasPrefix(target.URL, "https:")) {
+		_, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/search/downloadTorrent", url.Values{
+			"torrentUrl": {target.URL},
+			"pluginName": {target.Plugin},
+		})
+		if err != nil {
+			return codedErrf(ExitActionFail, "Failed to submit search result %d: %v", id, err)
+		}
+		return nil
+	}
+	return a.addTorrentURL(target.URL)
 }
 
 func (a *App) addTorrentURL(source string) error {

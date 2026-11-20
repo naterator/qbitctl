@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
+	"unicode"
 
 	qbt "github.com/naterator/qbitctl/pkg/client"
 
@@ -107,11 +111,7 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 		Short:   "Show qBittorrent server info and transfer stats",
 		GroupID: "view",
 		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
 				return result(app.ShowServerInfoJSON())
@@ -119,7 +119,7 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 				return result(app.ShowServerInfoAsJSON())
 			}
 			return result(app.ShowServerInfo())
-		},
+		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
@@ -127,20 +127,30 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 }
 
 func newAddCmd(opts *CLIOptions) *cobra.Command {
-	return &cobra.Command{
-		Use:     "add <torrent-file|magnet-link>",
+	var searchID int64
+	cmd := &cobra.Command{
+		Use:     "add <torrent-file|magnet-link> | --search-id <id>",
 		Aliases: []string{"a", "ad"},
-		Short:   "Add a torrent file or magnet link",
+		Short:   "Add a torrent file, magnet link, or cached search result",
 		GroupID: "change",
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
+		Args: func(cmd *cobra.Command, args []string) error {
+			if !cmd.Flags().Changed("search-id") {
+				return cobra.ExactArgs(1)(cmd, args)
+			}
+			if searchID <= 0 || len(args) != 0 {
+				return codedErr(exitBadArgs, "Provide a positive --search-id without a torrent file or link")
+			}
+			return nil
+		},
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
+			if searchID > 0 {
+				return result(app.AddSearchResult(searchID))
 			}
 			return result(app.AddTorrent(args[0]))
-		},
+		}),
 	}
+	cmd.Flags().Int64Var(&searchID, "search-id", 0, "Add this ID from the latest search")
+	return cmd
 }
 
 func newListCmd(opts *CLIOptions) *cobra.Command {
@@ -154,11 +164,7 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"l", "li", "ls"},
 		Short:   "List all torrents",
 		GroupID: "view",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
 				return result(app.ShowAllTorrentsInfoJSON())
@@ -174,7 +180,7 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 				return result(app.ShowAllTorrentsFields(fields, !noHeader))
 			}
 			return result(app.ShowAllTorrentsInfo())
-		},
+		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
@@ -182,6 +188,76 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
 	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
 	return cmd
+}
+
+func newSearchCmd(opts *CLIOptions) *cobra.Command {
+	plugin := "jackett"
+	searchTimeout := 30 * time.Second
+	jsonOutput := false
+	cmd := &cobra.Command{
+		Use:     "search <pattern>",
+		Short:   "Search torrents with a qBittorrent search plugin",
+		GroupID: "view",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return codedErr(exitBadArgs, "search pattern is required")
+			}
+			if strings.TrimSpace(strings.Join(args, " ")) == "" {
+				return codedErr(exitBadArgs, "search pattern cannot be empty")
+			}
+			if searchTimeout <= 0 {
+				return codedErr(exitBadArgs, "search timeout must be greater than zero")
+			}
+			if strings.TrimSpace(plugin) == "" {
+				return codedErr(exitBadArgs, "search plugin cannot be empty")
+			}
+			return nil
+		},
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
+			results, err := app.Search(strings.Join(args, " "), plugin, searchTimeout)
+			if err != nil {
+				return result(err)
+			}
+			if err := app.CacheSearchResults(results); err != nil {
+				fmt.Fprintf(app.Stderr, "[WARN] %v\n", err)
+			}
+			if jsonOutput {
+				if err := json.NewEncoder(app.Stdout).Encode(results); err != nil {
+					return result(codedErr(exitFetchFail, fmt.Sprintf("failed to render search results: %v", err)))
+				}
+				return nil
+			}
+			fmt.Fprintln(app.Stdout, "ID\tName\tSize (bytes)\tSeeders\tLeechers\tSource")
+			for _, item := range results {
+				id := "-"
+				if item.ID != 0 {
+					id = strconv.FormatInt(item.ID, 10)
+				}
+				fmt.Fprintf(app.Stdout, "%s\t%s\t%d\t%d\t%d\t%s\n",
+					id,
+					sanitizeSearchText(item.Name),
+					item.Size,
+					item.Seeders,
+					item.Leechers,
+					sanitizeSearchText(item.Source),
+				)
+			}
+			return nil
+		}),
+	}
+	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin to use")
+	cmd.Flags().DurationVar(&searchTimeout, "timeout", searchTimeout, "Time to wait before returning available results, for example 30s or 2m")
+	cmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output search results as JSON")
+	return cmd
+}
+
+func sanitizeSearchText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
 }
 
 func newShowCmd(opts *CLIOptions) *cobra.Command {
@@ -196,12 +272,8 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 		Short:   "Show info for a single torrent",
 		GroupID: "view",
 		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			applyPositionalHash(opts, args[0])
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
 			hash, err := app.ResolveHash(opts.Hash)
 			if err != nil {
 				return result(err)
@@ -221,7 +293,7 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 				return result(app.ShowSingleTorrentFields(hash, fields, !noHeader))
 			}
 			return result(app.ShowSingleTorrentInfo(hash))
-		},
+		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
@@ -243,12 +315,8 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 		GroupID:   "view",
 		Args:      cobra.ExactArgs(2),
 		ValidArgs: getFieldNames,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			applyPositionalHash(opts, args[1])
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
 			hash, err := app.ResolveHash(opts.Hash)
 			if err != nil {
 				return result(err)
@@ -260,7 +328,7 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 				return result(app.GetFieldJSON(hash, qbt.CanonicalGetField(args[0])))
 			}
 			return result(app.GetField(hash, qbt.CanonicalGetField(args[0])))
-		},
+		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
@@ -275,18 +343,14 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 		GroupID:   "change",
 		Args:      cobra.ExactArgs(3),
 		ValidArgs: setFieldNames,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			applyPositionalHash(opts, args[2])
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
 			hash, err := app.ResolveHash(opts.Hash)
 			if err != nil {
 				return result(err)
 			}
 			return result(app.SetField(hash, qbt.CanonicalSetField(args[0]), args[1]))
-		},
+		}),
 	}
 }
 
@@ -297,18 +361,14 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 		Short:   short,
 		GroupID: "control",
 		Args:    cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hashInputs := collectHashInputs(opts, args)
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
 			hashes, err := app.ResolveHashes(hashInputs)
 			if err != nil {
 				return result(err)
 			}
 			return result(fn(app, strings.Join(hashes, "|")))
-		},
+		}),
 	}
 }
 
@@ -319,18 +379,14 @@ func newMoveCmd(opts *CLIOptions) *cobra.Command {
 		Short:   "Move torrent data on the server",
 		GroupID: "change",
 		Args:    cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			applyPositionalHash(opts, args[1])
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
 			hash, err := app.ResolveHash(opts.Hash)
 			if err != nil {
 				return result(err)
 			}
 			return result(app.MoveTorrent(hash, args[0]))
-		},
+		}),
 	}
 }
 
@@ -349,17 +405,13 @@ func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
 		Short:   short,
 		GroupID: "change",
 		Args:    cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hashInputs := collectHashInputs(opts, args)
-			app, err := newAuthenticatedApp(opts)
-			if err != nil {
-				return err
-			}
 			hashes, err := app.ResolveHashes(hashInputs)
 			if err != nil {
 				return result(err)
 			}
 			return result(app.StopAndRemoveTorrent(strings.Join(hashes, "|"), deleteFiles))
-		},
+		}),
 	}
 }

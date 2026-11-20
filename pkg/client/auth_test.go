@@ -16,11 +16,7 @@ import (
 
 func withMockMasterKey(t *testing.T) {
 	t.Helper()
-	old := os.Getenv("QBITCTL_MASTER_KEY")
-	os.Setenv("QBITCTL_MASTER_KEY", "mock-secret-for-testing")
-	t.Cleanup(func() {
-		os.Setenv("QBITCTL_MASTER_KEY", old)
-	})
+	t.Setenv("QBITCTL_MASTER_KEY", "mock-secret-for-testing")
 }
 
 func withWorkingDirectory(t *testing.T, dir string) {
@@ -60,6 +56,7 @@ func withHomeDirectory(t *testing.T, home string) {
 }
 
 func TestInitAuthPrefersConfigPathAndAppliesOverrides(t *testing.T) {
+	withMockMasterKey(t)
 	tmp := t.TempDir()
 	cwd := filepath.Join(tmp, "cwd")
 	home := filepath.Join(tmp, "home")
@@ -97,6 +94,7 @@ func TestInitAuthPrefersConfigPathAndAppliesOverrides(t *testing.T) {
 }
 
 func TestInitAuthFallsBackToHomeBeforeCurrentDirectory(t *testing.T) {
+	withMockMasterKey(t)
 	tmp := t.TempDir()
 	cwd := filepath.Join(tmp, "cwd")
 	home := filepath.Join(tmp, "home")

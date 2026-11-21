@@ -143,7 +143,8 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(body=[{"url": "https://tracker.example/announce", "status": 2, "tier": 0}])
         elif parsed.path == "/api/v2/search/status":
             job_id = int(query["id"][0])
-            self.reply(body=[{"id": job_id, "status": "Stopped"}])
+            status = "Running" if self.fixture.search_running else "Stopped"
+            self.reply(body=[{"id": job_id, "status": status}])
         elif parsed.path == "/api/v2/search/results":
             self.reply(body={"results": self.fixture.search_results})
         else:
@@ -154,6 +155,9 @@ class Fixture(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         form = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
         if path == "/api/v2/auth/login":
+            if form.get("username", [""])[0] != self.fixture.username or form.get("password", [""])[0] != self.fixture.password:
+                self.reply(401, body=b"Fails.", content_type="text/plain")
+                return
             self.reply(204, headers={"Set-Cookie": "QBT_SID_8080=demo; Path=/"})
             return
         if not self.protected():
@@ -164,6 +168,9 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(body={"id": self.fixture.last_job})
         elif path == "/api/v2/search/delete":
             self.fixture.deleted_jobs.append(int(form.get("id", [0])[0]))
+            self.reply(204)
+        elif path == "/api/v2/torrents/delete":
+            self.fixture.deleted_torrents.append(form)
             self.reply(204)
         elif path == "/api/v2/search/downloadTorrent":
             # Keep the fixture queue stable so the recording stays focused on
@@ -345,6 +352,8 @@ def main():
     binary = Path(sys.argv[1]).resolve(strict=True)
     output = Path(sys.argv[2])
     fixture = SimpleNamespace()
+    fixture.username = "demo"
+    fixture.password = "demo"
     fixture.torrents = [
         torrent("Ubuntu 24.04 LTS", ALPHA, "downloading", 0.42, 4 * GIB, "ISO", "linux release"),
         torrent("Debian 12 Bookworm", BRAVO, "stoppedUP", 1.0, 2 * GIB, "ISO", "linux stable"),
@@ -382,8 +391,10 @@ def main():
         },
     ]
     fixture.searches = 0
+    fixture.search_running = False
     fixture.last_job = 0
     fixture.deleted_jobs = []
+    fixture.deleted_torrents = []
     fixture.downloads = []
     fixture.logouts = 0
     with tempfile.TemporaryDirectory(prefix="qbitctl-demo-") as temp:

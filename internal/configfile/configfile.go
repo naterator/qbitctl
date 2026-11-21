@@ -44,6 +44,10 @@ func Read(path string) (Object, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readObject(path, false)
+}
+
+func readObject(path string, recoverInvalid bool) (Object, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Object{}, nil
@@ -51,7 +55,11 @@ func Read(path string) (Object, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %q: %w", path, err)
 	}
-	return decode(path, data)
+	object, err := decode(path, data)
+	if err != nil && recoverInvalid {
+		return Object{}, nil
+	}
+	return object, err
 }
 
 // Update reads the latest object, gives it to change, and atomically writes it
@@ -59,6 +67,16 @@ func Read(path string) (Object, error) {
 // read/modify/write sequence so concurrent settings changes do not overwrite
 // one another.
 func Update(path string, change func(Object) (bool, error)) error {
+	return update(path, change, false)
+}
+
+// UpdateCache updates a disposable cache under the same lock used by Update.
+// An invalid cache is treated as empty. Filesystem errors still propagate.
+func UpdateCache(path string, change func(Object) (bool, error)) error {
+	return update(path, change, true)
+}
+
+func update(path string, change func(Object) (bool, error), recoverInvalid bool) error {
 	if change == nil {
 		return errors.New("config update callback is nil")
 	}
@@ -82,7 +100,7 @@ func Update(path string, change func(Object) (bool, error)) error {
 	}
 	defer unlock()
 
-	object, err := Read(path)
+	object, err := readObject(path, recoverInvalid)
 	if err != nil {
 		return err
 	}

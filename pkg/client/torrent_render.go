@@ -243,6 +243,14 @@ func (a *App) fetchTrackers(hash string) ([]TrackerEntry, error) {
 	return trackers, nil
 }
 
+// FetchTrackerEntries returns the structured tracker records for a torrent.
+// Callers that render a UI should use these records instead of parsing the
+// CLI's comma-separated tracker-list representation; tracker URLs may contain
+// commas in query values.
+func (a *App) FetchTrackerEntries(hash string) ([]TrackerEntry, error) {
+	return a.fetchTrackers(hash)
+}
+
 func (a *App) getTrackerList(hash string) error {
 	trackers, err := a.fetchTrackers(hash)
 	if err != nil {

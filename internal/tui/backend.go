@@ -29,11 +29,12 @@ type detailRow struct {
 // the client adapter. hashes may contain the pipe-separated hash list accepted
 // by qBittorrent's torrent endpoints.
 type actionRequest struct {
-	kind   string
-	hashes string
-	value  string
-	field  string
-	id     int64
+	kind       string
+	hashes     string
+	value      string
+	field      string
+	id         int64
+	addOptions client.AddTorrentOptions
 }
 
 // tuiClient adapts the existing client.App API to the TUI. The App is copied
@@ -62,16 +63,7 @@ func (c *tuiClient) queue(ctx context.Context) ([]client.TorrentInfo, error) {
 	}
 	app := c.withContext(ctx, io.Discard, io.Discard)
 	torrents, _, err := app.FetchAllTorrentsContext(app.Ctx)
-	if err != nil {
-		return nil, err
-	}
-	// FetchAllTorrentsContext historically returns a nil error for an
-	// interrupted request. Expose cancellation to the model instead of making
-	// a canceled refresh look like an empty queue.
-	if app.Ctx != nil && app.Ctx.Err() != nil {
-		return nil, app.Ctx.Err()
-	}
-	return torrents, nil
+	return torrents, err
 }
 
 // search runs one qBittorrent search job, captures client diagnostics, and
@@ -106,14 +98,11 @@ func (c *tuiClient) details(ctx context.Context, hash string, trackers bool) ([]
 	var output bytes.Buffer
 	app := c.withContext(ctx, &output, io.Discard)
 	if trackers {
-		if err := app.GetFieldJSON(hash, "tracker-list"); err != nil {
+		trackers, err := app.FetchTrackerEntries(hash)
+		if err != nil {
 			return nil, err
 		}
-		rows, err := decodeRows(output.Bytes())
-		if err != nil {
-			return nil, fmt.Errorf("decode tracker details: %w", err)
-		}
-		return expandTrackerRows(rows), nil
+		return expandTrackerEntries(trackers), nil
 	}
 
 	if err := app.ShowSingleTorrentInfoAsJSON(hash); err != nil {
@@ -163,7 +152,7 @@ func (c *tuiClient) action(ctx context.Context, req actionRequest) error {
 			}
 			source = filepath.Join(home, source[2:])
 		}
-		return app.AddTorrent(source)
+		return app.AddTorrentWithOptions(source, req.addOptions)
 	case "add-result":
 		return app.AddSearchResult(req.id)
 	case "start":
@@ -261,6 +250,19 @@ func expandTrackerRows(rows []detailRow) []detailRow {
 	result := make([]detailRow, 0, len(trackers))
 	for i, tracker := range trackers {
 		result = append(result, detailRow{label: fmt.Sprintf("Tracker %d", i+1), value: tracker})
+	}
+	return result
+}
+
+func expandTrackerEntries(trackers []client.TrackerEntry) []detailRow {
+	result := make([]detailRow, 0, len(trackers))
+	for _, tracker := range trackers {
+		url := strings.TrimSpace(tracker.URL)
+		switch url {
+		case "", "** [DHT] **", "** [PeX] **", "** [LSD] **":
+			continue
+		}
+		result = append(result, detailRow{label: fmt.Sprintf("Tracker %d", len(result)+1), value: url})
 	}
 	return result
 }

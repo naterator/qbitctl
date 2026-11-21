@@ -28,6 +28,8 @@ type Credentials struct {
 	Pass string
 }
 
+// TorrentInfo uses minutes for qBittorrent's share time limits. The wire
+// sentinels are -1 for no limit and -2 for the global limit.
 type TorrentInfo struct {
 	Name              string  `json:"name"`
 	Hash              string  `json:"hash"`
@@ -56,6 +58,8 @@ type TorrentInfo struct {
 	ETA               int64   `json:"eta"`
 	Progress          float64 `json:"progress"`
 	InactiveSeedingTL int64   `json:"inactive_seeding_time_limit"`
+	ShareLimitsMode   string  `json:"share_limits_mode,omitempty"`
+	ShareLimitAction  string  `json:"share_limit_action,omitempty"`
 }
 
 type TrackerEntry struct {
@@ -77,7 +81,21 @@ type Client struct {
 	creds      Credentials
 	httpClient *http.Client
 	stderr     io.Writer
-	logoutURL  atomic.Pointer[url.URL]
+
+	// session is replaced atomically after login. The snapshot is immutable so
+	// cleanup can still use the last known session while a re-login is in
+	// flight or when a response body read fails.
+	session atomic.Pointer[clientSession]
+}
+
+type sessionCookie struct {
+	name  string
+	value string
+}
+
+type clientSession struct {
+	logoutURL *url.URL
+	cookies   []sessionCookie
 }
 
 type App struct {

@@ -73,12 +73,61 @@ func parseToggleValue(value string) (bool, error) {
 }
 
 func parseSeedtimeLimit(value string) (int64, error) {
+	if value == "-1" || value == "-2" {
+		// qBittorrent reserves -1 for no limit and -2 for the global limit.
+		return strconv.ParseInt(value, 10, 64)
+	}
+
+	if value == "" {
+		return 0, fmt.Errorf("invalid numeric seedtime")
+	}
 	for _, r := range value {
 		if !unicode.IsDigit(r) {
 			return 0, fmt.Errorf("invalid numeric seedtime")
 		}
 	}
 	return strconv.ParseInt(value, 10, 64)
+}
+
+// seedtimeLimitSecondsToMinutes converts the CLI's documented seconds to the
+// qBittorrent Web API's minute-based wire value. The API sentinels are already
+// wire values and must pass through unchanged. Positive values must describe a
+// whole number of minutes; rejecting a remainder avoids silently changing the
+// requested limit.
+func seedtimeLimitSecondsToMinutes(seconds int64) (int64, error) {
+	switch seconds {
+	case -1, -2:
+		return seconds, nil
+	case 0:
+		return 0, nil
+	}
+	if seconds < 0 {
+		return 0, fmt.Errorf("seedtime must be non-negative seconds, -1 (unlimited), or -2 (global limit)")
+	}
+	if seconds%60 != 0 {
+		return 0, fmt.Errorf("seedtime must be a whole number of minutes (seconds must be divisible by 60)")
+	}
+	return seconds / 60, nil
+}
+
+// SeedtimeLimitInputValue formats an API seed-time limit for an editable CLI
+// or TUI field. qBittorrent reports ordinary limits in minutes, while qbitctl's
+// user-facing setter accepts seconds; the API sentinels remain unchanged.
+func SeedtimeLimitInputValue(minutes int64) string {
+	if minutes == -1 || minutes == -2 {
+		return strconv.FormatInt(minutes, 10)
+	}
+	if minutes < 0 {
+		return ""
+	}
+	// There is no representable seconds value for a minute count this large.
+	// Leave the field blank rather than displaying minutes as seconds and then
+	// silently changing the limit if the user submits it.
+	const maxInt64 = int64(^uint64(0) >> 1)
+	if minutes > maxInt64/60 {
+		return ""
+	}
+	return strconv.FormatInt(minutes*60, 10)
 }
 
 func validateHash(hash string) bool {

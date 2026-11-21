@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/url"
 	"os"
 	"strings"
 
@@ -74,14 +73,8 @@ func (m *model) loadSetup(opts client.Options) {
 }
 
 func validateConfigURL(value string) error {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
-		return errors.New("server address must include a scheme and host, for example http://localhost:8080")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return errors.New("server address must use http or https")
-	}
-	return nil
+	_, err := client.ValidateConfigURL(value)
+	return err
 }
 
 func (m *model) toggleTUIDefault() tea.Cmd {

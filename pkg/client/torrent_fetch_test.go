@@ -1,9 +1,14 @@
 package client
 
 import (
+	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/naterator/qbitctl/internal/qbtest"
 )
 
 func TestFetchAllTorrentsSupportsLargeResponses(t *testing.T) {
@@ -66,6 +71,23 @@ func TestResolveHashScenarios(t *testing.T) {
 	}
 }
 
+func TestFetchAllTorrentsPropagatesContextErrors(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, stop := context.WithDeadline(t.Context(), time.Now().Add(-time.Hour))
+	defer stop()
+	app := newQBTestServer(t).newApp()
+	app.client.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, req.Context().Err()
+	})
+
+	for _, ctx := range []context.Context{canceled, expired} {
+		if torrents, body, err := app.FetchAllTorrentsContext(ctx); !errors.Is(err, ctx.Err()) || torrents != nil || body != nil {
+			t.Fatalf("FetchAllTorrentsContext = %v, %q, %v, want %v with no data", torrents, body, err, ctx.Err())
+		}
+	}
+}
+
 func TestResolveHashes(t *testing.T) {
 	hash1 := "0123456789abcdef0123456789abcdef01234567"
 	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
@@ -119,6 +141,23 @@ func TestResolveHashes(t *testing.T) {
 		_, err := app.ResolveHashes([]string{hash1[:8], "deadbeef"})
 		if err == nil {
 			t.Fatal("ResolveHashes unexpectedly succeeded with bad hash")
+		}
+	})
+
+	t.Run("blank selectors never match the only torrent", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.Torrents = []TorrentInfo{{Hash: hash1}}
+		app := server.newApp()
+
+		for _, inputs := range [][]string{{""}, {" \t"}, {hash1[:8], ""}, {hash1, " \n"}} {
+			got, err := app.ResolveHashes(inputs)
+			var coded *CodedError
+			if !errors.As(err, &coded) || coded.Code != ExitBadArgs || got != nil {
+				t.Fatalf("ResolveHashes(%q) = %v, %v, want ExitBadArgs with no hashes", inputs, got, err)
+			}
+		}
+		if server.InfoCalls != 0 {
+			t.Fatalf("queried torrent list %d times for invalid selectors", server.InfoCalls)
 		}
 	})
 

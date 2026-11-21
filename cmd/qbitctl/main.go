@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,10 +34,6 @@ type (
 	TorrentInfo  = qbt.TorrentInfo
 	TrackerEntry = qbt.TrackerEntry
 )
-
-func errf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
-}
 
 type exitError struct {
 	code int
@@ -71,16 +68,18 @@ func wrapFields(fields []string, indent string, maxWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
-func result(err error) error {
+func result(cmd *cobra.Command, err error) error {
 	if err == nil {
 		return nil
 	}
+	cmd.PrintErrf("[ERROR] %v\n", err)
 	var coded *qbt.CodedError
 	if errors.As(err, &coded) {
-		errf("%s", coded.Message)
 		return exitError{code: coded.Code}
 	}
-	errf("%v", err)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return exitError{code: exitFetchFail}
+	}
 	return exitError{code: exitBadArgs}
 }
 
@@ -98,40 +97,22 @@ func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*co
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		app, err := qbt.NewClientContext(ctx, &authOpts)
+		app, err := qbt.NewClientWithOutput(ctx, &authOpts, cmd.OutOrStdout(), cmd.ErrOrStderr())
 		if err != nil {
-			return result(err)
+			return result(cmd, err)
 		}
 		defer app.Logout()
-		return run(app, args)
+		return result(cmd, run(app, args))
 	}
 }
 
-func applyPositionalHash(opts *CLIOptions, positionalHash string) {
-	if positionalHash != "" {
-		opts.Hash = positionalHash
-	}
-}
-
-// collectHashInputs gathers hash inputs from positional args and the --hash flag.
-// Positional args take precedence; if none are provided, the --hash flag value is used.
-func collectHashInputs(opts *CLIOptions, args []string) []string {
-	if len(args) > 0 {
-		return args
-	}
-	if opts.Hash != "" {
-		return []string{opts.Hash}
-	}
-	return nil
-}
-
-func executeConfigWrite(opts CLIOptions, outputPath string) error {
-	return result(qbt.ExecuteConfigWrite(opts, outputPath, os.Stderr))
-}
-
-func makeHiddenInput(in *os.File, out io.Writer) qbt.HiddenInputFunc {
+func makeHiddenInput(in io.Reader, out io.Writer) qbt.HiddenInputFunc {
 	return func(fn func() (string, error)) (string, error) {
-		restore, err := disableTerminalEcho(in)
+		file, ok := in.(*os.File)
+		if !ok {
+			return fn()
+		}
+		restore, err := disableTerminalEcho(file)
 		if err == nil {
 			defer func() {
 				_ = restore()
@@ -206,7 +187,8 @@ func newRootCmd() *cobra.Command {
 }
 
 func execute() int {
-	err := newRootCmd().Execute()
+	cmd := newRootCmd()
+	err := cmd.Execute()
 	if err == nil {
 		return exitOK
 	}
@@ -216,7 +198,7 @@ func execute() int {
 		return codeErr.code
 	}
 
-	errf("%v", err)
+	cmd.PrintErrf("[ERROR] %v\n", err)
 	return exitBadArgs
 }
 

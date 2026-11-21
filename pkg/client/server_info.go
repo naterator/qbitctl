@@ -98,6 +98,23 @@ func numericVersionParts(version string) []int {
 	return parts
 }
 
+func isDottedVersion(version string) bool {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || part[0] < '0' || part[0] > '9' {
+			return false
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) fetchTransferInfoRaw() ([]byte, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/transfer/info", nil)
 	if err != nil {

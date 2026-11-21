@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,28 +19,29 @@ func newConfigCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"c", "co"},
 		Short:   "Manage qBittorrent credentials",
 		GroupID: "setup",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return result(resultOK(qbt.InteractiveConfig(os.Stdin, os.Stdout, makeHiddenInput(os.Stdin, os.Stdout))))
+			in, out := cmd.InOrStdin(), cmd.OutOrStdout()
+			path, err := qbt.InteractiveConfigContext(cmd.Context(), in, out, makeHiddenInput(in, out), opts.ConfigPath)
+			if err != nil {
+				return result(cmd, err)
+			}
+			_, err = fmt.Fprintf(out, "Saved config to %s\n", path)
+			return err
 		},
 	}
 	writeOutput := ""
 	writeCmd := &cobra.Command{
 		Use:   "write",
 		Short: "Write a config file non-interactively",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return executeConfigWrite(*opts, writeOutput)
+			return result(cmd, qbt.ExecuteConfigWrite(*opts, writeOutput, cmd.ErrOrStderr()))
 		},
 	}
 	writeCmd.Flags().StringVarP(&writeOutput, "output", "o", "", "Path to write config.json")
 	cmd.AddCommand(writeCmd)
 	return cmd
-}
-
-func resultOK(rc int) error {
-	if rc == exitOK {
-		return nil
-	}
-	return &qbt.CodedError{Code: rc, Message: "operation failed"}
 }
 
 func newCompletionCmd(rootCmd *cobra.Command) *cobra.Command {
@@ -54,15 +54,15 @@ func newCompletionCmd(rootCmd *cobra.Command) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch args[0] {
 			case "bash":
-				return rootCmd.GenBashCompletion(os.Stdout)
+				return rootCmd.GenBashCompletion(cmd.OutOrStdout())
 			case "zsh":
-				return rootCmd.GenZshCompletion(os.Stdout)
+				return rootCmd.GenZshCompletion(cmd.OutOrStdout())
 			case "fish":
-				return rootCmd.GenFishCompletion(os.Stdout, true)
+				return rootCmd.GenFishCompletion(cmd.OutOrStdout(), true)
 			case "powershell":
-				return rootCmd.GenPowerShellCompletionWithDesc(os.Stdout)
+				return rootCmd.GenPowerShellCompletionWithDesc(cmd.OutOrStdout())
 			default:
-				return result(codedErr(exitBadArgs, "invalid completion shell"))
+				return result(cmd, codedErr(exitBadArgs, "invalid completion shell"))
 			}
 		},
 	}
@@ -77,8 +77,10 @@ func newVersionCmd() *cobra.Command {
 		Use:     "version",
 		Aliases: []string{"v", "ve", "ver"},
 		Short:   "Show the qbitctl version",
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("qbitctl %s\n", qbitctlVersion)
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "qbitctl %s\n", qbitctlVersion)
+			return err
 		},
 	}
 }
@@ -92,8 +94,7 @@ func newUpdateCmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := makeReleaseUpdater().Run(cmd.Context(), qbitctlVersion, dryRun, cmd.OutOrStdout()); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "[ERROR] %v\n", err)
-				return result(codedErr(exitActionFail, "update failed"))
+				return result(cmd, codedErr(exitActionFail, err.Error()))
 			}
 			return nil
 		},
@@ -114,11 +115,11 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
-				return result(app.ShowServerInfoJSON())
+				return app.ShowServerInfoJSON()
 			case asJSON:
-				return result(app.ShowServerInfoAsJSON())
+				return app.ShowServerInfoAsJSON()
 			}
-			return result(app.ShowServerInfo())
+			return app.ShowServerInfo()
 		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
@@ -128,10 +129,11 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 
 func newAddCmd(opts *CLIOptions) *cobra.Command {
 	var searchID int64
+	var addOptions qbt.AddTorrentOptions
 	cmd := &cobra.Command{
-		Use:     "add <torrent-file|magnet-link> | --search-id <id>",
+		Use:     "add <torrent-file|magnet-link|URL> | --search-id <id>",
 		Aliases: []string{"a", "ad"},
-		Short:   "Add a torrent file, magnet link, or cached search result",
+		Short:   "Add a torrent file, magnet link, URL, or cached search result",
 		GroupID: "change",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if !cmd.Flags().Changed("search-id") {
@@ -140,16 +142,22 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 			if searchID <= 0 || len(args) != 0 {
 				return codedErr(exitBadArgs, "Provide a positive --search-id without a torrent file or link")
 			}
+			if flags := cmd.Flags(); flags.Changed("category") || flags.Changed("save-path") || flags.Changed("stopped") {
+				return codedErr(exitBadArgs, "Add options require a torrent file, magnet link, or URL")
+			}
 			return nil
 		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			if searchID > 0 {
-				return result(app.AddSearchResult(searchID))
+				return app.AddSearchResult(searchID)
 			}
-			return result(app.AddTorrent(args[0]))
+			return app.AddTorrentWithOptions(args[0], addOptions)
 		}),
 	}
-	cmd.Flags().Int64Var(&searchID, "search-id", 0, "Add this ID from the latest search")
+	cmd.Flags().Int64Var(&searchID, "search-id", 0, "Add this ID from the local search history")
+	cmd.Flags().StringVar(&addOptions.Category, "category", "", "Assign the torrent to this category")
+	cmd.Flags().StringVar(&addOptions.SavePath, "save-path", "", "Destination directory on the qBittorrent host")
+	cmd.Flags().BoolVar(&addOptions.Stopped, "stopped", false, "Add the torrent in the stopped state")
 	return cmd
 }
 
@@ -164,22 +172,23 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"l", "li", "ls"},
 		Short:   "List all torrents",
 		GroupID: "view",
+		Args:    cobra.NoArgs,
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
-				return result(app.ShowAllTorrentsInfoJSON())
+				return app.ShowAllTorrentsInfoJSON()
 			case asJSON:
-				return result(app.ShowAllTorrentsInfoAsJSON())
+				return app.ShowAllTorrentsInfoAsJSON()
 			case tmpl != "":
-				return result(app.ShowAllTorrentsTemplate(tmpl))
+				return app.ShowAllTorrentsTemplate(tmpl)
 			case fieldsValue != "":
 				fields, err := qbt.ParseSelectableTorrentFields(fieldsValue)
 				if err != nil {
-					return result(codedErr(exitBadArgs, err.Error()))
+					return codedErr(exitBadArgs, err.Error())
 				}
-				return result(app.ShowAllTorrentsFields(fields, !noHeader))
+				return app.ShowAllTorrentsFields(fields, !noHeader)
 			}
-			return result(app.ShowAllTorrentsInfo())
+			return app.ShowAllTorrentsInfo()
 		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
@@ -216,14 +225,14 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			results, err := app.Search(strings.Join(args, " "), plugin, searchTimeout)
 			if err != nil {
-				return result(err)
+				return err
 			}
 			if err := app.CacheSearchResults(results); err != nil {
 				fmt.Fprintf(app.Stderr, "[WARN] %v\n", err)
 			}
 			if jsonOutput {
 				if err := json.NewEncoder(app.Stdout).Encode(results); err != nil {
-					return result(codedErr(exitFetchFail, fmt.Sprintf("failed to render search results: %v", err)))
+					return codedErr(exitFetchFail, fmt.Sprintf("failed to render search results: %v", err))
 				}
 				return nil
 			}
@@ -273,26 +282,25 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 		GroupID: "view",
 		Args:    cobra.ExactArgs(1),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			applyPositionalHash(opts, args[0])
-			hash, err := app.ResolveHash(opts.Hash)
+			hash, err := app.ResolveHash(args[0])
 			if err != nil {
-				return result(err)
+				return err
 			}
 			switch {
 			case serverJSON:
-				return result(app.ShowSingleTorrentInfoJSON(hash))
+				return app.ShowSingleTorrentInfoJSON(hash)
 			case asJSON:
-				return result(app.ShowSingleTorrentInfoAsJSON(hash))
+				return app.ShowSingleTorrentInfoAsJSON(hash)
 			case tmpl != "":
-				return result(app.ShowSingleTorrentTemplate(hash, tmpl))
+				return app.ShowSingleTorrentTemplate(hash, tmpl)
 			case fieldsValue != "":
 				fields, err := qbt.ParseSelectableTorrentFields(fieldsValue)
 				if err != nil {
-					return result(codedErr(exitBadArgs, err.Error()))
+					return codedErr(exitBadArgs, err.Error())
 				}
-				return result(app.ShowSingleTorrentFields(hash, fields, !noHeader))
+				return app.ShowSingleTorrentFields(hash, fields, !noHeader)
 			}
-			return result(app.ShowSingleTorrentInfo(hash))
+			return app.ShowSingleTorrentInfo(hash)
 		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
@@ -316,18 +324,17 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 		Args:      cobra.ExactArgs(2),
 		ValidArgs: getFieldNames,
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			applyPositionalHash(opts, args[1])
-			hash, err := app.ResolveHash(opts.Hash)
+			hash, err := app.ResolveHash(args[1])
 			if err != nil {
-				return result(err)
+				return err
 			}
 			switch {
 			case serverJSON:
-				return result(app.ShowSingleTorrentInfoJSON(hash))
+				return app.ShowSingleTorrentInfoJSON(hash)
 			case asJSON:
-				return result(app.GetFieldJSON(hash, qbt.CanonicalGetField(args[0])))
+				return app.GetFieldJSON(hash, qbt.CanonicalGetField(args[0]))
 			}
-			return result(app.GetField(hash, qbt.CanonicalGetField(args[0])))
+			return app.GetField(hash, qbt.CanonicalGetField(args[0]))
 		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
@@ -344,12 +351,11 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 		Args:      cobra.ExactArgs(3),
 		ValidArgs: setFieldNames,
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			applyPositionalHash(opts, args[2])
-			hash, err := app.ResolveHash(opts.Hash)
+			hash, err := app.ResolveHash(args[2])
 			if err != nil {
-				return result(err)
+				return err
 			}
-			return result(app.SetField(hash, qbt.CanonicalSetField(args[0]), args[1]))
+			return app.SetField(hash, qbt.CanonicalSetField(args[0]), args[1])
 		}),
 	}
 }
@@ -362,12 +368,11 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 		GroupID: "control",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			hashInputs := collectHashInputs(opts, args)
-			hashes, err := app.ResolveHashes(hashInputs)
+			hashes, err := app.ResolveHashes(args)
 			if err != nil {
-				return result(err)
+				return err
 			}
-			return result(fn(app, strings.Join(hashes, "|")))
+			return fn(app, strings.Join(hashes, "|"))
 		}),
 	}
 }
@@ -380,12 +385,11 @@ func newMoveCmd(opts *CLIOptions) *cobra.Command {
 		GroupID: "change",
 		Args:    cobra.ExactArgs(2),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			applyPositionalHash(opts, args[1])
-			hash, err := app.ResolveHash(opts.Hash)
+			hash, err := app.ResolveHash(args[1])
 			if err != nil {
-				return result(err)
+				return err
 			}
-			return result(app.MoveTorrent(hash, args[0]))
+			return app.MoveTorrent(hash, args[0])
 		}),
 	}
 }
@@ -406,12 +410,11 @@ func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
 		GroupID: "change",
 		Args:    cobra.MinimumNArgs(1),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			hashInputs := collectHashInputs(opts, args)
-			hashes, err := app.ResolveHashes(hashInputs)
+			hashes, err := app.ResolveHashes(args)
 			if err != nil {
-				return result(err)
+				return err
 			}
-			return result(app.StopAndRemoveTorrent(strings.Join(hashes, "|"), deleteFiles))
+			return app.StopAndRemoveTorrent(strings.Join(hashes, "|"), deleteFiles)
 		}),
 	}
 }

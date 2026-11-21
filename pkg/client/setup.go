@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/naterator/qbitctl/internal/configfile"
@@ -182,10 +183,14 @@ func SetTUIDefault(path string, enabled bool) error {
 // credentials and startup preference. All connection diagnostics are
 // discarded because this is used by the interactive setup UI.
 func ConnectAndSaveSetup(ctx context.Context, path string, creds Credentials, tuiDefault bool) (*App, error) {
+	return connectAndSaveSetup(ctx, path, creds, &tuiDefault)
+}
+
+func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tuiDefault *bool) (*App, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("config path is empty")
 	}
-	normalizedURL, err := normalizeSetupURL(creds.URL)
+	normalizedURL, err := ValidateConfigURL(creds.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +205,7 @@ func ConnectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 		if savedPassword == "" {
 			return nil, ErrSetupPasswordRequired
 		}
-		if !sameServerOrigin(savedURL, normalizedURL) {
+		if !sameCredentialOrigin(savedURL, normalizedURL) {
 			return nil, fmt.Errorf("%w: server address changed", ErrSetupPasswordRequired)
 		}
 		creds.Pass = savedPassword
@@ -238,18 +243,6 @@ func ConnectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 		return nil, codedErrf(ExitFile, "Failed to save config file: %v", err)
 	}
 	return app, nil
-}
-
-func normalizeSetupURL(value string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.User != nil {
-		return "", errors.New("server address must be a valid URL without embedded credentials")
-	}
-	normalized, err := normalizeConfigURL(value)
-	if err != nil {
-		return "", errors.New("server address must be a valid http or https URL")
-	}
-	return normalized, nil
 }
 
 // readSavedPassword reads an existing password for reuse without invoking
@@ -301,16 +294,7 @@ func readSavedPassword(path string) (string, string, *setupAuthSnapshot, error) 
 	return savedURL, password, snapshot, nil
 }
 
-func sameServerOrigin(left, right string) bool {
-	leftURL, leftErr := url.Parse(strings.TrimSpace(left))
-	rightURL, rightErr := url.Parse(strings.TrimSpace(right))
-	if leftErr != nil || rightErr != nil || leftURL.Scheme == "" || leftURL.Host == "" || rightURL.Scheme == "" || rightURL.Host == "" {
-		return false
-	}
-	return strings.EqualFold(leftURL.Scheme, rightURL.Scheme) && strings.EqualFold(leftURL.Host, rightURL.Host)
-}
-
-func saveSetupConfig(path string, creds Credentials, tuiDefault bool, snapshot *setupAuthSnapshot) error {
+func saveSetupConfig(path string, creds Credentials, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
 	encodedPassword, err := encryptPassword(creds.Pass)
 	if err != nil {
 		return err
@@ -327,11 +311,6 @@ func saveSetupConfig(path string, creds Credentials, tuiDefault bool, snapshot *
 	if err != nil {
 		return err
 	}
-	defaultValue, err := json.Marshal(tuiDefault)
-	if err != nil {
-		return err
-	}
-
 	return configfile.Update(path, func(object configfile.Object) (bool, error) {
 		if snapshot != nil {
 			currentURL, urlOK := configValue(object, "url")
@@ -343,6 +322,9 @@ func saveSetupConfig(path string, creds Credentials, tuiDefault bool, snapshot *
 		setConfigValue(object, "url", urlValue)
 		setConfigValue(object, "user", userValue)
 		setConfigValue(object, "password", passwordValue)
+		if tuiDefault == nil {
+			return true, nil
+		}
 
 		ui := configfile.Object{}
 		if raw, ok := configValue(object, "ui"); ok {
@@ -353,7 +335,7 @@ func saveSetupConfig(path string, creds Credentials, tuiDefault bool, snapshot *
 				return false, fmt.Errorf("decode config field %q: %w", "ui", err)
 			}
 		}
-		setConfigValue(ui, "tui_default", defaultValue)
+		setConfigValue(ui, "tui_default", json.RawMessage(strconv.FormatBool(*tuiDefault)))
 		encodedUI, err := json.Marshal(ui)
 		if err != nil {
 			return false, fmt.Errorf("encode config field %q: %w", "ui", err)
@@ -363,21 +345,47 @@ func saveSetupConfig(path string, creds Credentials, tuiDefault bool, snapshot *
 	})
 }
 
-// InteractiveConfigAt runs the existing interactive credential prompts and
-// saves to the caller-selected path without prompting for a second path.
+// InteractiveConfigAt validates credentials and saves them to the given path.
+// An empty path uses the default profile without prompting for a path.
 func InteractiveConfigAt(in io.Reader, out io.Writer, hiddenInput HiddenInputFunc, path string) (string, error) {
-	if hiddenInput == nil {
-		hiddenInput = func(fn func() (string, error)) (string, error) { return fn() }
-	}
 	if path == "" {
 		path = defaultAuthPath()
 	}
-	reader := bufio.NewReader(in)
-	urlValue, err := promptValidatedLine(out, reader, fmt.Sprintf("URL [%s]: ", defaultConfigURL), defaultConfigURL, normalizeSetupURL)
+	return InteractiveConfigContext(context.Background(), in, out, hiddenInput, path)
+}
+
+// InteractiveConfigContext runs the text setup flow, validates the credentials
+// against the server, and only then persists them. A non-empty path is used
+// exactly and skips the legacy save-path prompt; an empty path retains that
+// prompt with the default config path as its value.
+func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, hiddenInput HiddenInputFunc, path string) (string, error) {
+	if hiddenInput == nil {
+		hiddenInput = func(fn func() (string, error)) (string, error) { return fn() }
+	}
+
+	profilePath := path
+	if profilePath == "" {
+		profilePath = defaultAuthPath()
+	}
+	profile, err := ReadSetup(Options{ConfigPath: profilePath})
 	if err != nil {
 		return "", err
 	}
-	userValue, err := promptLineTo(out, reader, "Username [admin]: ", "admin")
+	urlDefault := profile.URL
+	if urlDefault == "" {
+		urlDefault = defaultConfigURL
+	}
+	userDefault := profile.User
+	if userDefault == "" {
+		userDefault = "admin"
+	}
+
+	reader := bufio.NewReader(in)
+	urlValue, err := promptValidatedLine(out, reader, fmt.Sprintf("URL [%s]: ", urlDefault), urlDefault, ValidateConfigURL)
+	if err != nil {
+		return "", err
+	}
+	userValue, err := promptLineTo(out, reader, fmt.Sprintf("Username [%s]: ", userDefault), userDefault)
 	if err != nil {
 		return "", err
 	}
@@ -390,8 +398,26 @@ func InteractiveConfigAt(in io.Reader, out io.Writer, hiddenInput HiddenInputFun
 	if passwordValue == "" {
 		return "", ErrSetupPasswordRequired
 	}
-	if err := saveAuthFile(path, Credentials{URL: urlValue, User: userValue, Pass: passwordValue}); err != nil {
+
+	selectedPath := path
+	if selectedPath == "" {
+		selectedPath, err = promptLineTo(out, reader, fmt.Sprintf("Save path [%s]: ", profilePath), profilePath)
+		if err != nil {
+			return "", err
+		}
+	}
+	if strings.TrimSpace(selectedPath) == "" {
+		return "", errors.New("config path is empty")
+	}
+
+	app, err := connectAndSaveSetup(ctx, selectedPath, Credentials{
+		URL:  urlValue,
+		User: userValue,
+		Pass: passwordValue,
+	}, nil)
+	if err != nil {
 		return "", err
 	}
-	return path, nil
+	app.Logout()
+	return selectedPath, nil
 }

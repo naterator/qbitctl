@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 )
 
@@ -91,6 +92,8 @@ func TestSetLimitAndShareRequests(t *testing.T) {
 		RatioLimit:        1.25,
 		SeedingTimeLimit:  7200,
 		InactiveSeedingTL: 14400,
+		ShareLimitsMode:   "MatchAll",
+		ShareLimitAction:  "Stop",
 	}}
 	app := server.newApp()
 
@@ -111,8 +114,8 @@ func TestSetLimitAndShareRequests(t *testing.T) {
 	if err := app.SetSeedtimeLimit(fullHash, "3600"); err != nil {
 		t.Fatalf("setSeedtimeLimit err = %v", err)
 	}
-	if got := server.Forms["/api/v2/torrents/setShareLimits"][0].Get("seedingTimeLimit"); got != "3600" {
-		t.Fatalf("seedingTimeLimit = %q, want 3600", got)
+	if got := server.Forms["/api/v2/torrents/setShareLimits"][0].Get("seedingTimeLimit"); got != "60" {
+		t.Fatalf("seedingTimeLimit = %q, want 60 API minutes", got)
 	}
 	if got := server.Forms["/api/v2/torrents/setShareLimits"][0].Get("ratioLimit"); got != "1.250000" {
 		t.Fatalf("ratioLimit preserved = %q, want 1.250000", got)
@@ -132,6 +135,52 @@ func TestSetLimitAndShareRequests(t *testing.T) {
 	}
 	if got := server.Forms["/api/v2/torrents/setShareLimits"][1].Get("inactiveSeedingTimeLimit"); got != "14400" {
 		t.Fatalf("inactiveSeedingTimeLimit preserved = %q, want 14400", got)
+	}
+	for _, form := range server.Forms["/api/v2/torrents/setShareLimits"] {
+		if form.Get("shareLimitsMode") != "MatchAll" || form.Get("shareLimitAction") != "Stop" {
+			t.Fatalf("share limits request lost current policy: %v", form)
+		}
+	}
+}
+
+func TestSetSeedtimeLimitSentinelsAndPartialMinutes(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: fullHash, RatioLimit: 1.25}}
+	app := server.newApp()
+
+	for _, tt := range []struct {
+		input string
+		want  string
+	}{
+		{input: "-1", want: "-1"},
+		{input: "-2", want: "-2"},
+	} {
+		if err := app.SetSeedtimeLimit(fullHash, tt.input); err != nil {
+			t.Fatalf("SetSeedtimeLimit(%q) err = %v", tt.input, err)
+		}
+		forms := server.Forms["/api/v2/torrents/setShareLimits"]
+		form := forms[len(forms)-1]
+		got := form.Get("seedingTimeLimit")
+		if got != tt.want {
+			t.Fatalf("SetSeedtimeLimit(%q) sent %q, want %q", tt.input, got, tt.want)
+		}
+		if form.Get("shareLimitsMode") != "Default" || form.Get("shareLimitAction") != "Default" {
+			t.Fatalf("share limits request did not supply defaults for missing policy: %v", form)
+		}
+	}
+
+	before := len(server.Forms["/api/v2/torrents/setShareLimits"])
+	err := app.SetSeedtimeLimit(fullHash, "61")
+	if err == nil {
+		t.Fatal("SetSeedtimeLimit accepted seconds that are not a whole minute")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("SetSeedtimeLimit partial-minute err = %v, want ExitBadArgs", err)
+	}
+	if got := len(server.Forms["/api/v2/torrents/setShareLimits"]); got != before {
+		t.Fatalf("partial-minute input sent request; count = %d, want %d", got, before)
 	}
 }
 
@@ -167,6 +216,44 @@ func TestSetTagsAndSuperseed(t *testing.T) {
 	}
 	if got := server.Forms["/api/v2/torrents/setSuperSeeding"][0].Get("value"); got != "true" {
 		t.Fatalf("superseed value = %q, want true", got)
+	}
+}
+
+func TestSetTagsFallsBackToAddAndRemoveOnLegacyServer(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: fullHash, Tags: "linux,old"}}
+	server.StatusQueue["/api/v2/torrents/setTags"] = []int{404}
+	app := server.newApp()
+
+	if err := app.SetTags(fullHash, "linux,new"); err != nil {
+		t.Fatalf("SetTags legacy fallback err = %v", err)
+	}
+	if got := server.Forms["/api/v2/torrents/removeTags"][0].Get("tags"); got != "old" {
+		t.Fatalf("removeTags tags = %q, want old", got)
+	}
+	if got := server.Forms["/api/v2/torrents/addTags"][0].Get("tags"); got != "new" {
+		t.Fatalf("addTags tags = %q, want new", got)
+	}
+}
+
+func TestSetTagsDoesNotFallbackForOtherErrors(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: fullHash, Tags: "linux"}}
+	server.StatusQueue["/api/v2/torrents/setTags"] = []int{http.StatusInternalServerError}
+	app := server.newApp()
+
+	err := app.SetTags(fullHash, "new")
+	if err == nil {
+		t.Fatal("SetTags unexpectedly succeeded after server error")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitSetFail {
+		t.Fatalf("SetTags error = %v, want ExitSetFail", err)
+	}
+	if server.InfoCalls != 0 {
+		t.Fatalf("SetTags fetched torrent info after non-compatibility error: %d calls", server.InfoCalls)
 	}
 }
 

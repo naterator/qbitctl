@@ -2,7 +2,11 @@
 
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/naterator/qbitctl/pkg/client"
+)
 
 func TestExpandTrackerRows(t *testing.T) {
 	rows := expandTrackerRows([]detailRow{{label: "tracker-list", value: "https://one.example/announce,\nhttps://two.example/announce\n"}})
@@ -14,6 +18,23 @@ func TestExpandTrackerRows(t *testing.T) {
 	}
 	if rows[1].label != "Tracker 2" || rows[1].value != "https://two.example/announce" {
 		t.Fatalf("second tracker row = %#v", rows[1])
+	}
+}
+
+func TestExpandTrackerEntriesPreservesCommasInURLs(t *testing.T) {
+	rows := expandTrackerEntries([]client.TrackerEntry{
+		{URL: "https://tracker.example/announce?token=a,b"},
+		{URL: "** [DHT] **"},
+		{URL: "udp://tracker.example:6969"},
+	})
+	if len(rows) != 2 {
+		t.Fatalf("expandTrackerEntries returned %d rows, want 2", len(rows))
+	}
+	if rows[0].value != "https://tracker.example/announce?token=a,b" {
+		t.Fatalf("first tracker URL = %q, want comma-preserving URL", rows[0].value)
+	}
+	if rows[1].value != "udp://tracker.example:6969" {
+		t.Fatalf("second tracker URL = %q", rows[1].value)
 	}
 }
 

@@ -138,17 +138,18 @@ func TestCanonicalFieldMappings(t *testing.T) {
 func TestRootCommandVersion(t *testing.T) {
 	cmd := newRootCmd()
 	cmd.SetArgs([]string{"version"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
 
-	stdout, stderr := captureOutput(t, func() {
-		if err := cmd.Execute(); err != nil {
-			t.Fatalf("Execute returned error: %v", err)
-		}
-	})
-	if strings.TrimSpace(stderr) != "" {
-		t.Fatalf("unexpected stderr: %q", stderr)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
 	}
-	if strings.TrimSpace(stdout) != "qbitctl "+qbitctlVersion {
-		t.Fatalf("stdout = %q", stdout)
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "qbitctl "+qbitctlVersion {
+		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
 
@@ -446,7 +447,7 @@ func TestCLIListAndShowStructuredOutput(t *testing.T) {
 	})
 }
 
-func TestCommandsRequiringHashFailBeforeAuth(t *testing.T) {
+func TestInvalidArgumentCountsFailBeforeAuth(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	for _, args := range [][]string{
@@ -459,6 +460,10 @@ func TestCommandsRequiringHashFailBeforeAuth(t *testing.T) {
 		{"move", "/downloads/linux"},
 		{"remove"},
 		{"delete"},
+		{"list", "unexpected"},
+		{"version", "unexpected"},
+		{"config", "unexpected"},
+		{"config", "write", "unexpected"},
 	} {
 		cmd := newRootCmd()
 		cmd.SetArgs(args)
@@ -578,42 +583,93 @@ func TestBatchRemoveMultipleHashes(t *testing.T) {
 	}); strings.TrimSpace(stderr) != "" {
 		t.Fatalf("unexpected stderr: %q", stderr)
 	}
-	// Should have paused and then deleted both
-	stopHashes := server.Forms["/api/v2/torrents/stop"][0].Get("hashes")
+	// Deleting should be one request; qBittorrent stops the torrent as part of
+	// the delete operation when needed.
 	deleteHashes := server.Forms["/api/v2/torrents/delete"][0].Get("hashes")
 	wantHashes := hash1 + "|" + hash2
-	if stopHashes != wantHashes {
-		t.Fatalf("stop hashes = %q, want %q", stopHashes, wantHashes)
-	}
 	if deleteHashes != wantHashes {
 		t.Fatalf("delete hashes = %q, want %q", deleteHashes, wantHashes)
 	}
+	if len(server.Forms["/api/v2/torrents/stop"]) != 0 {
+		t.Fatal("remove unexpectedly stopped torrents before deleting")
+	}
 }
 
-func TestCollectHashInputs(t *testing.T) {
-	t.Run("positional args take precedence", func(t *testing.T) {
-		opts := &CLIOptions{Hash: "from-flag"}
-		got := collectHashInputs(opts, []string{"arg1", "arg2"})
-		if len(got) != 2 || got[0] != "arg1" || got[1] != "arg2" {
-			t.Fatalf("collectHashInputs = %v, want [arg1 arg2]", got)
-		}
-	})
+func TestDeleteRejectsBlankSelectorsWithOneTorrent(t *testing.T) {
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Only torrent", Hash: hash}}
+	withQBServerClientFactory(t, server)
 
-	t.Run("falls back to flag", func(t *testing.T) {
-		opts := &CLIOptions{Hash: "from-flag"}
-		got := collectHashInputs(opts, nil)
-		if len(got) != 1 || got[0] != "from-flag" {
-			t.Fatalf("collectHashInputs = %v, want [from-flag]", got)
-		}
-	})
+	for _, args := range [][]string{{""}, {hash[:8], " \t"}} {
+		cmd := newRootCmd()
+		cmd.SetArgs(append([]string{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "delete"}, args...))
+		captureOutput(t, func() {
+			var exit exitError
+			if err := cmd.Execute(); !errors.As(err, &exit) || exit.code != exitBadArgs {
+				t.Fatalf("delete %q = %v, want exit %d", args, err, exitBadArgs)
+			}
+		})
+	}
+	if server.InfoCalls != 0 || len(server.Forms["/api/v2/torrents/stop"]) != 0 || len(server.Forms["/api/v2/torrents/delete"]) != 0 {
+		t.Fatal("delete with a blank selector looked up or modified torrents")
+	}
+}
 
-	t.Run("returns nil when empty", func(t *testing.T) {
-		opts := &CLIOptions{}
-		got := collectHashInputs(opts, nil)
-		if got != nil {
-			t.Fatalf("collectHashInputs = %v, want nil", got)
-		}
-	})
+func TestConfigPromptsUseCobraStreamsAndSelectedPath(t *testing.T) {
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	t.Setenv("QBITCTL_MASTER_KEY", "config-prompt-test-key")
+	path := filepath.Join(t.TempDir(), "alternate.json")
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--config", path, "config"})
+	cmd.SetIn(strings.NewReader(server.creds().URL + "\nadmin\nsecret\n"))
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("config failed: %v: %s", err, stderr.String())
+	}
+	if server.LoginCalls != 1 || !strings.Contains(stdout.String(), "Saved config to "+path) || strings.Contains(stdout.String(), "Save path") {
+		t.Fatalf("unexpected setup: login calls %d, stdout %q", server.LoginCalls, stdout.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuthenticatedOutputUsesCobraStreams(t *testing.T) {
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Mock ISO", Hash: strings.Repeat("a", 40)}}
+	withQBServerClientFactory(t, server)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "list", "--json"})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	if err := cmd.Execute(); err != nil || stderr.Len() != 0 || !strings.Contains(stdout.String(), "Mock ISO") {
+		t.Fatalf("list: error = %v, stdout = %q, stderr = %q", err, stdout.String(), stderr.String())
+	}
+}
+
+func TestAddOptionsAreSentOnlyForDirectAdds(t *testing.T) {
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{"add", "--search-id", "123456789012", "--stopped"})
+	if err := cmd.Execute(); err == nil || server.LoginCalls != 0 {
+		t.Fatalf("cached add with direct options: error = %v, login calls = %d", err, server.LoginCalls)
+	}
+
+	cmd = newRootCmd()
+	cmd.SetArgs([]string{"--url", server.creds().URL, "--user", "admin", "--pass", "secret", "add", "magnet:?xt=urn:btih:abc", "--category", "Linux", "--save-path", "/downloads/iso", "--stopped"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	forms := server.Forms["/api/v2/torrents/add"]
+	if len(forms) != 1 || forms[0].Get("category") != "Linux" || forms[0].Get("savepath") != "/downloads/iso" || forms[0].Get("stopped") != "true" {
+		t.Fatalf("add requests = %v", forms)
+	}
 }
 
 func TestResolveHashWithNoHashInOptions(t *testing.T) {

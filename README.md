@@ -35,21 +35,71 @@ Supports both the older HTTP 200 login response and the HTTP 204 response used b
 
 ## Install
 
-Download the latest release for your platform:
+Install the [GitHub CLI](https://cli.github.com/) and sign in with `gh auth login`. Download the binary and checksum from the same immutable release. Verify both the SHA-256 checksum and GitHub's release attestation before installing.
+
+### macOS and Linux
 
 ```bash
-curl -Lo qbitctl "https://github.com/naterator/qbitctl/releases/latest/download/qbitctl-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-chmod +x qbitctl
-sudo mv qbitctl /usr/local/bin/
+(
+  set -eu
+  repo=naterator/qbitctl
+  tag=$(gh release view --repo "$repo" --json tagName --jq .tagName)
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+  asset="qbitctl-$os-$arch"
+  temp=$(mktemp -d)
+  trap 'rm -rf "$temp"' EXIT
+  cd "$temp"
+  gh release download "$tag" --repo "$repo" --pattern "$asset" --pattern "$asset.sha256"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c "$asset.sha256"
+  else
+    shasum -a 256 -c "$asset.sha256"
+  fi
+  gh release verify-asset "$tag" "$asset" --repo "$repo"
+  install -d "$HOME/.local/bin"
+  install -m 755 "$asset" "$HOME/.local/bin/qbitctl"
+)
 ```
 
-Once installed, keep it up to date with:
+Add `$HOME/.local/bin` to your `PATH` if needed. A user-writable directory lets `qbitctl update` replace the executable using your regular account.
+
+### Windows
+
+Use PowerShell. Set `$asset` to `qbitctl-windows-arm64.exe` on ARM64.
+
+```powershell
+$repo = 'naterator/qbitctl'
+$tag = gh release view --repo $repo --json tagName --jq .tagName
+if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the release tag' }
+$asset = 'qbitctl-windows-amd64.exe'
+$temp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+$null = New-Item -ItemType Directory $temp -ErrorAction Stop
+try {
+    gh release download $tag --repo $repo --pattern $asset --pattern "$asset.sha256" --dir $temp
+    if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+    $binary = Join-Path $temp $asset
+    $expected = ((Get-Content (Join-Path $temp "$asset.sha256") -Raw -ErrorAction Stop).Trim() -split '\s+')[0]
+    if ((Get-FileHash $binary -Algorithm SHA256 -ErrorAction Stop).Hash -ne $expected) { throw 'Checksum mismatch' }
+    gh release verify-asset $tag $binary --repo $repo
+    if ($LASTEXITCODE -ne 0) { throw 'Release attestation verification failed' }
+    $bin = Join-Path $env:LOCALAPPDATA 'Programs\qbitctl'
+    $null = New-Item -ItemType Directory $bin -Force -ErrorAction Stop
+    Copy-Item $binary (Join-Path $bin 'qbitctl.exe') -ErrorAction Stop
+} finally {
+    Remove-Item $temp -Recurse -Force
+}
+```
+
+Add `%LOCALAPPDATA%\Programs\qbitctl` to your user `Path`.
+
+### Updates
 
 ```bash
 qbitctl update
 ```
 
-Self-update checks SHA-256 and verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl update`. The release must be immutable and published with all assets already attached. Mutable releases have no release attestation and cannot pass this verification.
+Self-update checks SHA-256 and verifies the GitHub release attestation using `gh`. The release must be immutable and published with all assets already attached.
 
 ## Build from source
 
@@ -75,21 +125,21 @@ make check      # test + vet + fmt-check
 make fmt        # gofmt -w
 ```
 
-Build every Go-supported `amd64` and `arm64` target except Android and iOS:
+Build the release targets declared in [scripts/build.sh](scripts/build.sh):
 
 ```bash
 VERSION=v1.2.3 bash scripts/build.sh
 ```
 
-Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The target list comes from `go tool dist list` for the installed Go toolchain. Android and iOS require separate SDK/CGO builds.
+Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The release target list is checked against the installed Go toolchain before building.
 
-CI and release workflows follow the [notes workflow templates](https://github.com/naterator/notes/tree/main/.github/workflows), with every job running on `ubuntu-26.04`. CI runs formatting, vet, race tests, a native CLI/API smoke check, a vulnerability check, and all release cross-builds.
+CI and release packaging run on `ubuntu-26.04`, with a focused `windows-2025` job for self-update recovery. CI runs formatting, vet, race tests, CLI and terminal smoke tests, a qBittorrent API compatibility matrix, a vulnerability scan, and all release cross-builds.
 
 To publish releases that support verified updates:
 
 1. Enable **Release immutability** in the repository's GitHub settings before publishing new releases.
 2. Create and push a version tag, or manually run **Draft release assets** with an existing tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
-3. The workflow runs tests, builds and checksums every target, and checks the native release binary. It waits for the latest push-triggered CI run for the exact release commit to pass before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
+3. The workflow waits for the latest push-triggered CI run for the exact release commit to pass before cross-building assets. It checks the native release binary and verifies the tag again before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
 4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation. Check a downloaded asset with `gh release verify-asset <exact-tag> <asset-path> --repo naterator/qbitctl`.
 
 See GitHub's [immutable release publishing guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). Attaching binaries after publication is incompatible with immutable releases.
@@ -128,9 +178,9 @@ qbitctl needs qBittorrent Web API credentials. It loads the first matching confi
 2. `$XDG_CONFIG_HOME/qbitctl/config.json` (defaults to `~/.config/qbitctl/config.json`)
 3. `./config.json`
 
-Command-line overrides use `-u/--url`, `-U/--user`, and `-p/--pass`.
+Command-line overrides use `-u/--url`, `-U/--user`, and `-p/--pass`. Supply an explicit password when overriding the URL to point at a different server origin. Server URLs can include a reverse-proxy path prefix. Use an HTTP or HTTPS URL without embedded credentials, a query, or a fragment.
 
-If `config.json` contains a cleartext password, qbitctl rewrites it in place with the encrypted `enc:v...` format.
+New credential saves use a private master key from the OS keyring or `QBITCTL_MASTER_KEY`. On a headless host, supply a stable secret through the environment before saving credentials and on later runs. Existing plaintext and legacy `enc:v1` passwords remain readable. Once a keyring or master key is available, qbitctl migrates them to `enc:v2` on the next load.
 
 Each authenticated command uses its own Web UI session. qbitctl attempts to
 log out when the command finishes, including after errors or Ctrl-C. A failed
@@ -154,7 +204,7 @@ An existing `enc:v2` config requires the key that encrypted it.
 qbitctl config
 ```
 
-Prompts for URL (default `http://localhost:8080`), username (default `admin`), password, and save path.
+Prompts for URL (default `http://localhost:8080`), username (default `admin`), password, and save path. Use `qbitctl --config /path/to/config.json config` to choose the save path in advance. The text setup checks authentication and API compatibility before saving.
 
 ### Non-interactive config write
 
@@ -221,7 +271,7 @@ is saved and masks new passwords as you type.
 - Footer confirmations, hints, and errors clear after about five seconds. A
   newer message replaces the current one and receives its own timeout, while
   active progress indicators continue until the operation finishes.
-- Press `a` to add a torrent file or magnet link, `r` to refresh, and `q` to quit.
+- Press `a` to add a torrent file, magnet link, or URL. The add form offers a category, a destination on the qBittorrent host, and an option to add it stopped. Press `r` to refresh and `q` to quit.
 
 The TUI saves preferences in the active config file, including when you use
 `--config` to select a different file.
@@ -291,9 +341,7 @@ Each result includes the name, size in bytes, seeder and leecher counts, and
 source hostname. Downloadable results also include an ID in the table and in
 the JSON `id` field. Use that ID with `qbitctl add --search-id`.
 
-qbitctl keeps the download links in a private local cache. A successful search
-replaces the previous search's cache. IDs are valid for 24 hours and for the
-same qBittorrent URL and user used to search.
+qbitctl keeps download links in a private local cache. IDs remain available for up to 24 hours for the same qBittorrent URL and user. The cache keeps the most recent eight searches per profile, with a limit of 64 searches across profiles.
 
 ```bash
 qbitctl search "Ubuntu 24.04"
@@ -341,7 +389,10 @@ qbitctl add --search-id 123456789012
 ```bash
 qbitctl add ./ubuntu.torrent
 qbitctl add 'magnet:?xt=urn:btih:...'
+qbitctl add ./ubuntu.torrent --category Linux --save-path /downloads/linux --stopped
 ```
+
+The category, save path, and stopped options apply to direct file, URL, or magnet adds. Use a save path on the qBittorrent server. Local uploads accept regular files up to 63 MiB. Search result IDs use the server's plugin or default add behavior.
 
 #### set (alias: se)
 
@@ -366,7 +417,7 @@ Input formats:
 ```text
 up-limit / dl-limit                Bytes/sec, or "k" suffix for KiB (e.g. 512k)
 ratio-limit                        Floating point (e.g. 2.0)
-seedtime-limit                     Seconds (e.g. 86400)
+seedtime-limit                     Whole minutes expressed in seconds (e.g. 3600), -1 for unlimited, -2 for the global limit
 seqdl / autotmm / superseed        true or false
 ```
 

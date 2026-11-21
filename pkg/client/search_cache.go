@@ -7,13 +7,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/naterator/qbitctl/internal/configfile"
 )
 
 const (
 	searchCacheTTL       = 24 * time.Hour
-	searchCacheVersion   = 1
+	searchCacheVersion   = 2
+	searchCachePerScope  = 8
+	searchCacheTotal     = 64
 	searchCacheDirName   = "qbitctl"
 	searchCacheFileName  = "search-results.json"
 	searchCacheResultMin = int64(100_000_000_000)
@@ -31,68 +36,82 @@ type cachedSearchTarget struct {
 }
 
 type searchCacheFile struct {
-	Version int                 `json:"version"`
-	URL     string              `json:"url"`
-	User    string              `json:"user"`
+	Version int `json:"version"`
+	searchSnapshot
+	Searches []searchSnapshot `json:"searches"`
+}
+
+type searchScope struct {
+	URL  string `json:"url"`
+	User string `json:"user"`
+}
+
+type searchSnapshot struct {
+	searchScope
 	SavedAt int64               `json:"saved_at"`
 	Results []searchCacheResult `json:"results"`
 }
 
 type searchCacheResult struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name,omitempty"`
-	Size     int64  `json:"size,omitempty"`
-	Seeders  int    `json:"seeders,omitempty"`
-	Leechers int    `json:"leechers,omitempty"`
-	Source   string `json:"source,omitempty"`
-	URL      string `json:"url"`
-	Plugin   string `json:"plugin"`
+	ID     int64  `json:"id"`
+	URL    string `json:"url"`
+	Plugin string `json:"plugin"`
 }
 
-// CacheSearchResults records the latest search results for the current server
-// and user. Only rows with a usable download URL receive an ID. The cache is
-// deliberately replaced as one snapshot so IDs from an older search cannot
-// select a row from a newer search.
+// CacheSearchResults records a bounded history for the current server and user.
+// Only rows with a usable download URL receive an ID.
 func (a *App) CacheSearchResults(results []SearchResult) error {
 	path, err := a.searchCachePath()
 	if err != nil {
 		return errSearchCacheWrite
 	}
-
-	previousIDs := readSearchCacheIDs(path)
-	usedIDs := make(map[int64]struct{}, len(previousIDs)+len(results))
-	for id := range previousIDs {
-		usedIDs[id] = struct{}{}
-	}
-
-	disk := searchCacheFile{
-		Version: searchCacheVersion,
-		URL:     searchCacheScopeURL(a.creds.URL),
-		User:    a.creds.User,
-		SavedAt: time.Now().Unix(),
-		Results: make([]searchCacheResult, 0, len(results)),
+	if err := prepareSearchCache(path); err != nil {
+		return errSearchCacheWrite
 	}
 	ids := make([]int64, len(results))
 	for i := range results {
 		results[i].ID = 0
-		if !isSearchDownloadURL(results[i].downloadURL) {
-			continue
-		}
-		id, err := newSearchCacheID(usedIDs)
-		if err != nil {
-			return errSearchCacheWrite
-		}
-		usedIDs[id] = struct{}{}
-		ids[i] = id
-		disk.Results = append(disk.Results, searchCacheResult{
-			ID: id, Name: results[i].Name, Size: results[i].Size,
-			Seeders: results[i].Seeders, Leechers: results[i].Leechers,
-			Source: results[i].Source, URL: results[i].downloadURL,
-			Plugin: results[i].pluginName,
-		})
 	}
-
-	if err := writeSearchCache(path, disk); err != nil {
+	err = configfile.UpdateCache(path, func(object configfile.Object) (bool, error) {
+		data, err := json.Marshal(object)
+		if err != nil {
+			return false, err
+		}
+		now := time.Now()
+		previous := retainSearches(decodeSearches(data), now)
+		usedIDs := make(map[int64]struct{})
+		for _, snapshot := range previous {
+			for _, result := range snapshot.Results {
+				usedIDs[result.ID] = struct{}{}
+			}
+		}
+		latest := searchSnapshot{searchScope: a.searchScope(), SavedAt: now.Unix()}
+		for i, result := range results {
+			if !isSearchDownloadURL(result.downloadURL) {
+				continue
+			}
+			id, err := newSearchCacheID(usedIDs)
+			if err != nil {
+				return false, err
+			}
+			usedIDs[id] = struct{}{}
+			ids[i] = id
+			latest.Results = append(latest.Results, searchCacheResult{ID: id, URL: result.downloadURL, Plugin: result.pluginName})
+		}
+		if len(latest.Results) == 0 {
+			return false, nil
+		}
+		searches := retainSearches(append([]searchSnapshot{latest}, previous...), now)
+		data, err = json.Marshal(searches)
+		if err != nil {
+			return false, err
+		}
+		clear(object)
+		object["version"] = json.RawMessage(strconv.Itoa(searchCacheVersion))
+		object["searches"] = data
+		return true, nil
+	})
+	if err != nil {
 		return errSearchCacheWrite
 	}
 	for i, id := range ids {
@@ -113,18 +132,56 @@ func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {
 	if err != nil {
 		return cachedSearchTarget{}, errSearchCacheUnavailable
 	}
-	var cache searchCacheFile
-	if json.Unmarshal(data, &cache) != nil || cache.Version != searchCacheVersion ||
-		cache.URL != searchCacheScopeURL(a.creds.URL) || cache.User != a.creds.User ||
-		cache.SavedAt <= 0 || time.Since(time.Unix(cache.SavedAt, 0)) > searchCacheTTL {
-		return cachedSearchTarget{}, errSearchCacheUnavailable
-	}
-	for _, result := range cache.Results {
-		if result.ID == id && isSearchDownloadURL(result.URL) {
-			return cachedSearchTarget{URL: result.URL, Plugin: result.Plugin}, nil
+	scope := a.searchScope()
+	for _, snapshot := range retainSearches(decodeSearches(data), time.Now()) {
+		if snapshot.searchScope != scope {
+			continue
+		}
+		for _, result := range snapshot.Results {
+			if result.ID == id && isSearchDownloadURL(result.URL) {
+				return cachedSearchTarget{URL: result.URL, Plugin: result.Plugin}, nil
+			}
 		}
 	}
 	return cachedSearchTarget{}, errSearchCacheUnavailable
+}
+
+func (a *App) searchScope() searchScope {
+	return searchScope{URL: searchCacheScopeURL(a.creds.URL), User: a.creds.User}
+}
+
+func decodeSearches(data []byte) []searchSnapshot {
+	var cache searchCacheFile
+	if json.Unmarshal(data, &cache) != nil {
+		return nil
+	}
+	switch cache.Version {
+	case 1:
+		return []searchSnapshot{cache.searchSnapshot}
+	case searchCacheVersion:
+		return cache.Searches
+	default:
+		return nil
+	}
+}
+
+// Search snapshots are stored newest first. Retain each profile independently
+// up to the per-profile cap, with a global cap for abandoned profiles.
+func retainSearches(searches []searchSnapshot, now time.Time) []searchSnapshot {
+	counts := make(map[searchScope]int)
+	retained := make([]searchSnapshot, 0, min(len(searches), searchCacheTotal))
+	for _, snapshot := range searches {
+		age := now.Sub(time.Unix(snapshot.SavedAt, 0))
+		if snapshot.SavedAt <= 0 || age < 0 || age >= searchCacheTTL || counts[snapshot.searchScope] >= searchCachePerScope {
+			continue
+		}
+		counts[snapshot.searchScope]++
+		retained = append(retained, snapshot)
+		if len(retained) == searchCacheTotal {
+			break
+		}
+	}
+	return retained
 }
 
 func (a *App) searchCachePath() (string, error) {
@@ -160,25 +217,7 @@ func newSearchCacheID(used map[int64]struct{}) (int64, error) {
 	return 0, errors.New("could not allocate a search result ID")
 }
 
-func readSearchCacheIDs(path string) map[int64]struct{} {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var cache searchCacheFile
-	if json.Unmarshal(data, &cache) != nil {
-		return nil
-	}
-	ids := make(map[int64]struct{}, len(cache.Results))
-	for _, result := range cache.Results {
-		if result.ID >= searchCacheResultMin && result.ID <= searchCacheResultMax {
-			ids[result.ID] = struct{}{}
-		}
-	}
-	return ids
-}
-
-func writeSearchCache(path string, cache searchCacheFile) error {
+func prepareSearchCache(path string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -189,30 +228,10 @@ func writeSearchCache(path string, cache searchCacheFile) error {
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cache, "", "  ")
-	if err != nil {
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return errors.New("invalid search cache file")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".search-results-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return nil
 }

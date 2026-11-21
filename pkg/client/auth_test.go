@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
@@ -18,6 +19,22 @@ import (
 func withMockMasterKey(t *testing.T) {
 	t.Helper()
 	t.Setenv("QBITCTL_MASTER_KEY", "mock-secret-for-testing")
+}
+
+func withUnavailableMasterKey(t *testing.T) {
+	t.Helper()
+	t.Setenv("QBITCTL_MASTER_KEY", "")
+	oldGet, oldSet := masterSecretGet, masterSecretSet
+	masterSecretGet = func(string, string) (string, error) {
+		return "", errors.New("test keyring unavailable")
+	}
+	masterSecretSet = func(string, string, string) error {
+		t.Error("attempted to replace the master key after a keyring read error")
+		return errors.New("test keyring unavailable")
+	}
+	t.Cleanup(func() {
+		masterSecretGet, masterSecretSet = oldGet, oldSet
+	})
 }
 
 func withWorkingDirectory(t *testing.T, dir string) {
@@ -344,6 +361,121 @@ func TestInitAuthWithPathReportsSelectedOrDefaultConfigPath(t *testing.T) {
 	}
 }
 
+func TestInitAuthWithPathRequiresPasswordForChangedOrigin(t *testing.T) {
+	withMockMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := saveAuthFile(path, Credentials{URL: "http://old.example:8080/qbt", User: "admin", Pass: "secret"}); err != nil {
+		t.Fatalf("saveAuthFile returned error: %v", err)
+	}
+
+	got, selected, err := initAuthWithPath(Options{ConfigPath: path, URL: "https://new.example:8080/qbt", User: "admin"}, io.Discard)
+	if err == nil {
+		t.Fatalf("initAuthWithPath unexpectedly succeeded with credentials %#v", got)
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+		t.Fatalf("changed-origin error = %v, want CodedError with ExitBadArgs", err)
+	}
+	if !strings.Contains(err.Error(), "Password required") {
+		t.Fatalf("changed-origin error = %v, want password guidance", err)
+	}
+	if selected != path {
+		t.Fatalf("selected path = %q, want %q", selected, path)
+	}
+}
+
+func TestInitAuthWithPathReusesPasswordOnlyForSameOrigin(t *testing.T) {
+	withMockMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	saved := Credentials{URL: "http://old.example/qbt", User: "admin", Pass: "secret"}
+	if err := saveAuthFile(path, saved); err != nil {
+		t.Fatalf("saveAuthFile returned error: %v", err)
+	}
+
+	got, _, err := initAuthWithPath(Options{ConfigPath: path, URL: "http://old.example:80/other", User: "override"}, io.Discard)
+	if err != nil {
+		t.Fatalf("same-origin override returned error: %v", err)
+	}
+	if got.URL != "http://old.example:80/other" || got.User != "override" || got.Pass != saved.Pass {
+		t.Fatalf("same-origin override credentials = %#v", got)
+	}
+
+	got, _, err = initAuthWithPath(Options{ConfigPath: path, URL: "https://new.example:8443/qbt", User: "override", Pass: "new-secret"}, io.Discard)
+	if err != nil {
+		t.Fatalf("explicit-password changed-origin override returned error: %v", err)
+	}
+	if got.URL != "https://new.example:8443/qbt" || got.User != "override" || got.Pass != "new-secret" {
+		t.Fatalf("explicit-password override credentials = %#v", got)
+	}
+}
+
+func TestInitAuthValidatesDirectURLOverrides(t *testing.T) {
+	tmp := t.TempDir()
+	withWorkingDirectory(t, tmp)
+	withHomeDirectory(t, filepath.Join(tmp, "home"))
+	for _, value := range []string{
+		"http://:8080",
+		"http://qbt.test/?foo=bar",
+		"http://qbt.test/?",
+		"http://qbt.test/#fragment",
+		"http://qbt.test/#",
+		"http://admin:secret@qbt.test",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, err := initAuth(Options{URL: value, User: "admin", Pass: "secret"}, io.Discard)
+			if err == nil {
+				t.Fatal("initAuth unexpectedly accepted invalid URL")
+			}
+			var coded *CodedError
+			if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+				t.Fatalf("initAuth error = %v, want ExitBadArgs", err)
+			}
+		})
+	}
+}
+
+func TestValidateConfigURLPreservesProxyPath(t *testing.T) {
+	got, err := ValidateConfigURL("https://qbt.example.test/qbt/base///")
+	if err != nil {
+		t.Fatalf("ValidateConfigURL returned error: %v", err)
+	}
+	if got != "https://qbt.example.test/qbt/base" {
+		t.Fatalf("ValidateConfigURL = %q, want proxy path preserved", got)
+	}
+}
+
+func TestClientConstructorsRejectNilOptions(t *testing.T) {
+	constructors := []struct {
+		name string
+		call func() error
+	}{
+		{name: "background", call: func() error {
+			_, err := NewClient(nil)
+			return err
+		}},
+		{name: "context", call: func() error {
+			_, err := NewClientContext(context.Background(), nil)
+			return err
+		}},
+		{name: "output", call: func() error {
+			_, err := NewClientWithOutput(context.Background(), nil, io.Discard, io.Discard)
+			return err
+		}},
+	}
+	for _, constructor := range constructors {
+		t.Run(constructor.name, func(t *testing.T) {
+			err := constructor.call()
+			if err == nil {
+				t.Fatal("constructor unexpectedly succeeded")
+			}
+			var coded *CodedError
+			if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
+				t.Fatalf("constructor error = %v, want ExitBadArgs", err)
+			}
+		})
+	}
+}
+
 func TestLoadAuthFileMigratesV1ToV2(t *testing.T) {
 	withMockMasterKey(t)
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -395,6 +527,104 @@ func TestLoadAuthFileMissingAndInvalidEncryptedFormats(t *testing.T) {
 	}
 }
 
+func TestDecryptPasswordRejectsMalformedNonceWithoutPanicking(t *testing.T) {
+	withMockMasterKey(t)
+	for _, value := range []string{
+		"enc:v2::00000000000000000000000000000000",
+		"enc:v2:00:00000000000000000000000000000000",
+		"enc:v2:00000000000000000000000000000000:00000000000000000000000000000000",
+	} {
+		t.Run(value, func(t *testing.T) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					t.Fatalf("decryptPassword panicked for malformed nonce: %v", recovered)
+				}
+			}()
+			if _, err := decryptPassword(value); err == nil || !strings.Contains(err.Error(), "nonce") {
+				t.Fatalf("decryptPassword(%q) error = %v, want nonce error", value, err)
+			}
+		})
+	}
+}
+
+func TestLoadAuthFileReadsLegacyCredentialsWithoutKeyringAndDoesNotRewrite(t *testing.T) {
+	withUnavailableMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	block, err := aes.NewCipher(deriveAuthKeyV1())
+	if err != nil {
+		t.Fatalf("aes.NewCipher returned error: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("cipher.NewGCM returned error: %v", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	ciphertext := gcm.Seal(nil, nonce, []byte("secret"), nil)
+	v1Value := "enc:v1:" + hex.EncodeToString(nonce) + ":" + hex.EncodeToString(ciphertext)
+	original := `{"url":"http://localhost:8080","user":"admin","password":"` + v1Value + `"}`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("write config file failed: %v", err)
+	}
+
+	var info strings.Builder
+	got, ok, err := loadAuthFile(path, &info)
+	if err != nil {
+		t.Fatalf("loadAuthFile returned error: %v", err)
+	}
+	if !ok || got != (Credentials{URL: "http://localhost:8080", User: "admin", Pass: "secret"}) {
+		t.Fatalf("loadAuthFile = %#v, %v", got, ok)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config file failed: %v", err)
+	}
+	if string(after) != original {
+		t.Fatalf("legacy config was rewritten without a keyring: %s", after)
+	}
+	if !strings.Contains(info.String(), "QBITCTL_MASTER_KEY") {
+		t.Fatalf("migration hint = %q, want QBITCTL_MASTER_KEY guidance", info.String())
+	}
+}
+
+func TestLoadAuthFileReadsPlaintextCredentialsWithoutKeyringAndDoesNotRewrite(t *testing.T) {
+	withUnavailableMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	original := `{"url":"http://localhost:8080","user":"admin","password":"secret"}`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("write config file failed: %v", err)
+	}
+
+	var info strings.Builder
+	got, ok, err := loadAuthFile(path, &info)
+	if err != nil {
+		t.Fatalf("loadAuthFile returned error: %v", err)
+	}
+	if !ok || got != (Credentials{URL: "http://localhost:8080", User: "admin", Pass: "secret"}) {
+		t.Fatalf("loadAuthFile = %#v, %v", got, ok)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config file failed: %v", err)
+	}
+	if string(after) != original {
+		t.Fatalf("plaintext config was rewritten without a keyring: %s", after)
+	}
+	if !strings.Contains(info.String(), "QBITCTL_MASTER_KEY") {
+		t.Fatalf("migration hint = %q, want QBITCTL_MASTER_KEY guidance", info.String())
+	}
+}
+
+func TestEncryptPasswordRequiresPrivateMasterKeyWhenKeyringUnavailable(t *testing.T) {
+	withUnavailableMasterKey(t)
+	encoded, err := encryptPassword("secret")
+	if err == nil {
+		t.Fatalf("encryptPassword unexpectedly succeeded with value %q", encoded)
+	}
+	if !errors.Is(err, errMasterKeyUnavailable) && !errors.Is(err, errMacKeychainUnavailable) {
+		t.Fatalf("encryptPassword error = %v, want unavailable-key error", err)
+	}
+}
+
 func TestPromptLineDefaultAndQuit(t *testing.T) {
 	got, err := promptLineTo(io.Discard, bufio.NewReader(strings.NewReader("\n")), "Prompt: ", "default")
 	if err != nil {
@@ -410,44 +640,33 @@ func TestPromptLineDefaultAndQuit(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveConfigValidatesURLAndSaves(t *testing.T) {
+func TestInteractiveConfigValidatesURLAndSaves(t *testing.T) {
 	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	creds := server.creds()
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "config.json")
 	input := strings.Join([]string{
 		"localhost:8080\n",
-		"https://qb.example.com/base/\n",
-		"alice\n",
-		"secret\n",
-		"\n",
+		creds.URL + "/\n",
+		creds.User + "\n",
+		creds.Pass + "\n",
+		path + "\n",
 	}, "")
 
 	var output strings.Builder
-	var savedPath string
-	var savedCreds Credentials
-	rc := runInteractiveConfig(
-		bufio.NewReader(strings.NewReader(input)),
-		&output,
-		func(fn func() (string, error)) (string, error) { return fn() },
-		filepath.Join(t.TempDir(), "config.json"),
-		func(path string, creds Credentials) error {
-			savedPath = path
-			savedCreds = creds
-			return nil
-		},
-	)
+	rc := InteractiveConfig(strings.NewReader(input), &output, nil)
 	if rc != ExitOK {
-		t.Fatalf("runInteractiveConfig rc = %d, want %d", rc, ExitOK)
+		t.Fatalf("InteractiveConfig rc = %d, want %d. Output: %s", rc, ExitOK, output.String())
 	}
 	if !strings.Contains(output.String(), "[ERROR] URL must include a scheme and host") {
 		t.Fatalf("interactive output = %q", output.String())
 	}
-	if !strings.HasSuffix(savedPath, "config.json") {
-		t.Fatalf("savedPath = %q", savedPath)
-	}
-	if savedCreds.URL != "https://qb.example.com/base" {
-		t.Fatalf("saved URL = %q, want https://qb.example.com/base", savedCreds.URL)
-	}
-	if savedCreds.User != "alice" || savedCreds.Pass != "secret" {
-		t.Fatalf("saved creds = %#v", savedCreds)
+	saved, ok, err := loadAuthFile(path, io.Discard)
+	if err != nil || !ok || saved != creds || server.LoginCalls != 1 {
+		t.Fatalf("saved valid credentials = %t, lookup success = %t, login calls = %d, error = %v", saved == creds, ok, server.LoginCalls, err)
 	}
 }
 

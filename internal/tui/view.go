@@ -336,7 +336,7 @@ func (m *model) viewSearchList(width, height int) []string {
 	}
 	rows = append(rows, m.viewSearchHeader(width))
 	if len(m.results) == 0 {
-		message := "Press / to search Jackett."
+		message := "Press / to search " + searchPluginLabel(m.searchPlugin) + "."
 		if m.busy != "" && m.work == searchWork {
 			message = "Waiting for results…"
 		} else if len(m.allResults) > 0 {

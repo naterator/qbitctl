@@ -9,7 +9,7 @@ import (
 )
 
 func (m *model) openPaletteDialog() {
-	search := dialogItem{label: "New search", action: "search", description: "Find torrents with Jackett"}
+	search := dialogItem{label: "New search", action: "search", description: "Find torrents with " + searchPluginLabel(m.searchPlugin)}
 	if m.page != queuePage {
 		search.keys = "/"
 	}

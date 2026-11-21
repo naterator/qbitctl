@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	qbt "github.com/naterator/qbitctl/pkg/client"
@@ -18,7 +17,7 @@ func runDefault(cmd *cobra.Command, opts CLIOptions) error {
 	}
 	setup, err := qbt.ReadSetup(opts)
 	if err != nil {
-		return result(err)
+		return result(cmd, err)
 	}
 	if setup.TUIDefault {
 		return runTUI(cmd, opts)
@@ -46,20 +45,16 @@ func firstRunSetup(cmd *cobra.Command, opts *CLIOptions, path string) (bool, err
 				return true, nil
 			}
 			if !errors.Is(err, io.EOF) {
-				return true, result(err)
+				return true, result(cmd, err)
 			}
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "", "1", "tui":
 			return true, runTUI(cmd, *opts)
 		case "2", "text":
-			file, ok := in.(*os.File)
-			if !ok {
-				return true, result(codedErr(exitBadArgs, "Text setup requires a terminal input file"))
-			}
-			savedPath, err := qbt.InteractiveConfigAt(reader, out, makeHiddenInput(file, out), path)
+			savedPath, err := qbt.InteractiveConfigContext(cmd.Context(), reader, out, makeHiddenInput(in, out), path)
 			if err != nil {
-				return true, result(err)
+				return true, result(cmd, err)
 			}
 			opts.ConfigPath = savedPath
 			opts.URL, opts.User, opts.Pass = "", "", ""
@@ -88,18 +83,18 @@ func newTUIDefaultCmd(opts *CLIOptions) *cobra.Command {
 				action = args[0]
 			}
 			if action != "on" && action != "off" && action != "status" {
-				return result(codedErr(exitBadArgs, "Use tui-default on, off, or status"))
+				return result(cmd, codedErr(exitBadArgs, "Use tui-default on, off, or status"))
 			}
 
 			setup, err := qbt.ReadSetup(*opts)
 			if err != nil {
-				return result(err)
+				return result(cmd, err)
 			}
 			enabled := setup.TUIDefault
 			if action != "status" {
 				enabled = action == "on"
 				if err := qbt.SetTUIDefault(setup.Path, enabled); err != nil {
-					return result(err)
+					return result(cmd, err)
 				}
 			}
 			state := "off"

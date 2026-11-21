@@ -1,7 +1,9 @@
 package client
 
 import (
+	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -34,12 +36,16 @@ func (a *App) SetDownloadLimit(hash, limitStr string) error {
 	return a.setTransferLimit(hash, limitStr, "/api/v2/torrents/setDownloadLimit", "download limit")
 }
 
-func (a *App) setShareLimits(hash string, ratioLimit float64, seedingTimeLimit, inactiveSeedingTL int64) error {
+func (a *App) setShareLimits(hash string, torrent TorrentInfo) error {
+	// qBittorrent 5.3 requires mode and action. Older releases ignore these
+	// fields. Preserve the current policy when editing only one numeric limit.
 	params := url.Values{
 		"hashes":                   {hash},
-		"ratioLimit":               {fmt.Sprintf("%.6f", ratioLimit)},
-		"seedingTimeLimit":         {strconv.FormatInt(seedingTimeLimit, 10)},
-		"inactiveSeedingTimeLimit": {strconv.FormatInt(inactiveSeedingTL, 10)},
+		"ratioLimit":               {fmt.Sprintf("%.6f", torrent.RatioLimit)},
+		"seedingTimeLimit":         {strconv.FormatInt(torrent.SeedingTimeLimit, 10)},
+		"inactiveSeedingTimeLimit": {strconv.FormatInt(torrent.InactiveSeedingTL, 10)},
+		"shareLimitsMode":          {cmp.Or(torrent.ShareLimitsMode, "Default")},
+		"shareLimitAction":         {cmp.Or(torrent.ShareLimitAction, "Default")},
 	}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setShareLimits", params); err != nil {
 		return codedErrf(ExitSetFail, "Failed to set share limits: %v", err)
@@ -58,8 +64,13 @@ func (a *App) SetSeedtimeLimit(hash, seedtimeStr string) error {
 	if err != nil {
 		return codedErrf(ExitBadArgs, "%v '%s'", err, seedtimeStr)
 	}
+	minutes, err := seedtimeLimitSecondsToMinutes(seconds)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "%v '%s'", err, seedtimeStr)
+	}
 
-	return a.setShareLimits(hash, torrent.RatioLimit, seconds, torrent.InactiveSeedingTL)
+	torrent.SeedingTimeLimit = minutes
+	return a.setShareLimits(hash, torrent)
 }
 
 func (a *App) SetRatioLimit(hash, ratioStr string) error {
@@ -73,7 +84,8 @@ func (a *App) SetRatioLimit(hash, ratioStr string) error {
 		return codedErrf(ExitBadArgs, "Invalid ratio value: %s", ratioStr)
 	}
 
-	return a.setShareLimits(hash, ratio, torrent.SeedingTimeLimit, torrent.InactiveSeedingTL)
+	torrent.RatioLimit = ratio
+	return a.setShareLimits(hash, torrent)
 }
 
 func (a *App) SetCategory(hash, category string) error {
@@ -129,11 +141,98 @@ func (a *App) SetTags(hash, tags string) error {
 		"hashes": {hash},
 		"tags":   {tags},
 	}
-	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setTags", params); err != nil {
+	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setTags", params); err == nil {
+		return nil
+	} else if !isUnsupportedSetTagsError(err) {
+		return codedErrf(ExitSetFail, "Failed to set tags to '%s': %v", tags, err)
+	}
+
+	// qBittorrent 5.0.0 does not expose setTags. Reconstruct the replacement
+	// operation with the add/remove endpoints available in that release. Newer
+	// servers take the native path above and avoid the extra info request.
+	if err := a.replaceTagsLegacy(hash, tags); err != nil {
 		return codedErrf(ExitSetFail, "Failed to set tags to '%s': %v", tags, err)
 	}
 
 	return nil
+}
+
+func isUnsupportedSetTagsError(err error) bool {
+	return errors.Is(err, httpStatusError(http.StatusNotFound)) ||
+		errors.Is(err, httpStatusError(http.StatusMethodNotAllowed))
+}
+
+func (a *App) replaceTagsLegacy(hash, tags string) error {
+	torrent, err := a.GetTorrentInfo(hash)
+	if err != nil {
+		return fmt.Errorf("fetch current tags: %w", err)
+	}
+
+	current := splitTags(torrent.Tags)
+	desired := splitTags(tags)
+	currentSet := make(map[string]struct{}, len(current))
+	desiredSet := make(map[string]struct{}, len(desired))
+	for _, tag := range current {
+		currentSet[tag] = struct{}{}
+	}
+	for _, tag := range desired {
+		desiredSet[tag] = struct{}{}
+	}
+
+	toRemove := make([]string, 0, len(current))
+	for _, tag := range current {
+		if _, keep := desiredSet[tag]; !keep {
+			toRemove = append(toRemove, tag)
+		}
+	}
+	toAdd := make([]string, 0, len(desired))
+	for _, tag := range desired {
+		if _, alreadyPresent := currentSet[tag]; !alreadyPresent {
+			toAdd = append(toAdd, tag)
+		}
+	}
+
+	if len(toAdd) > 0 {
+		if err := a.updateTagsLegacy(hash, toAdd, "/api/v2/torrents/addTags"); err != nil {
+			return fmt.Errorf("add tags: %w", err)
+		}
+	}
+	if len(toRemove) > 0 {
+		if err := a.updateTagsLegacy(hash, toRemove, "/api/v2/torrents/removeTags"); err != nil {
+			return fmt.Errorf("remove tags: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (a *App) updateTagsLegacy(hash string, tags []string, endpoint string) error {
+	params := url.Values{
+		"hashes": {hash},
+		"tags":   {strings.Join(tags, ",")},
+	}
+	if _, err := a.client.requestContext(a.context(), http.MethodPost, endpoint, params); err != nil {
+		return err
+	}
+	return nil
+}
+
+func splitTags(tags string) []string {
+	parts := strings.Split(tags, ",")
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, tag := range parts {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		result = append(result, tag)
+	}
+	return result
 }
 
 func (a *App) setToggle(hash, value, endpoint, label string, params url.Values) error {

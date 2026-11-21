@@ -293,15 +293,24 @@ func (m *model) openSearchDialog() {
 	}
 	d := &dialog{
 		kind:  dialogSearch,
-		title: "Search Jackett",
+		title: "Search " + searchPluginLabel(plugin),
 		fields: []dialogField{
 			newDialogField("Query", m.query, "Ubuntu 24.04", "The torrent search phrase"),
-			newDialogField("Plugin", plugin, "jackett", "qBittorrent search plugin"),
+			newDialogField("Plugin", plugin, plugin, "qBittorrent search plugin"),
 			newDialogField("Timeout", timeout.String(), "30s", "Go duration, for example 45s or 2m"),
 		},
 	}
 	m.dialog = d
 	d.focusField(0)
+}
+
+func searchPluginLabel(plugin string) string {
+	plugin = strings.TrimSpace(plugin)
+	if plugin == "" {
+		return "search plugin"
+	}
+	runes := []rune(plugin)
+	return strings.ToUpper(string(runes[0])) + string(runes[1:])
 }
 
 func (m *model) openFilterDialog() {
@@ -323,6 +332,9 @@ func (m *model) openAddDialog() {
 		title: "Add torrent",
 		fields: []dialogField{
 			newDialogField("Source", "", "magnet, URL, or .torrent path", "Local torrent files are uploaded to qBittorrent"),
+			newDialogField("Category", "", "optional category", "Category assigned by qBittorrent"),
+			newDialogField("Destination", "", "optional qBittorrent path", "Save path on the qBittorrent host"),
+			newDialogField("Stopped", "no", "yes or no", "Add the torrent stopped instead of starting it"),
 		},
 	}
 	m.dialog = d
@@ -338,7 +350,7 @@ func (m *model) openAddResultDialog() {
 		kind:  dialogAddResult,
 		title: "Add search result",
 		fields: []dialogField{
-			newDialogField("Result ID", value, "numeric ID from the search page", "Only IDs from the local latest-search cache are accepted"),
+			newDialogField("Result ID", value, "numeric ID from the search page", "Use a recent result ID from this server and user"),
 		},
 	}
 	m.dialog = d
@@ -761,8 +773,21 @@ func (m *model) submitDialog() tea.Cmd {
 			d.status = "A magnet, URL, or torrent file path is required"
 			return nil
 		}
+		stopped, err := parseTUIChoice(d.value(3))
+		if err != nil {
+			d.status = "Stopped must be yes or no"
+			return nil
+		}
 		m.dialog = nil
-		return m.launchAction("add", actionRequest{kind: "add", value: source})
+		return m.launchAction("add", actionRequest{
+			kind:  "add",
+			value: source,
+			addOptions: client.AddTorrentOptions{
+				Category: strings.TrimSpace(d.value(1)),
+				SavePath: strings.TrimSpace(d.value(2)),
+				Stopped:  stopped,
+			},
+		})
 
 	case dialogAddResult:
 		if m.busy != "" {
@@ -1068,7 +1093,7 @@ func setFieldValue(torrent client.TorrentInfo, field string) string {
 	case "ratio-limit":
 		return strconv.FormatFloat(torrent.RatioLimit, 'f', -1, 64)
 	case "seedtime-limit":
-		return strconv.FormatInt(torrent.SeedingTimeLimit, 10)
+		return client.SeedtimeLimitInputValue(torrent.SeedingTimeLimit)
 	case "seqdl":
 		return strconv.FormatBool(torrent.SequentialDL)
 	case "autotmm":

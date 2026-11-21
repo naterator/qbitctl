@@ -1,14 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+release_targets=(
+  darwin/amd64
+  darwin/arm64
+  dragonfly/amd64
+  freebsd/amd64
+  freebsd/arm64
+  illumos/amd64
+  linux/amd64
+  linux/arm64
+  netbsd/amd64
+  netbsd/arm64
+  openbsd/amd64
+  openbsd/arm64
+  plan9/amd64
+  solaris/amd64
+  windows/amd64
+  windows/arm64
+)
+
+if [[ "${1:-}" == "--list-targets" ]]; then
+  printf '%s\n' "${release_targets[@]}"
+  exit 0
+fi
+
 output_dir="${1:-dist}"
 version="${VERSION:-dev}"
 mkdir -p "$output_dir"
 
-# Follow the installed Go toolchain's supported desktop/server targets.
-# Android and iOS require platform SDKs and CGO rather than pure Go builds.
-targets=$(go tool dist list | awk -F/ '$1 != "android" && $1 != "ios" && ($2 == "amd64" || $2 == "arm64")')
-test -n "$targets"
+# Keep the published release matrix stable, but fail loudly if the selected
+# Go toolchain can no longer build one of its explicitly supported targets.
+supported_targets=$(go tool dist list)
+for target in "${release_targets[@]}"; do
+  if ! grep -Fqx "$target" <<< "$supported_targets"; then
+    printf 'release target is not supported by this Go toolchain: %s\n' "$target" >&2
+    exit 1
+  fi
+done
+
+targets=$(printf '%s\n' "${release_targets[@]}")
 while IFS=/ read -r goos goarch; do
   asset="qbitctl-$goos-$goarch"
   if [[ "$goos" == windows ]]; then

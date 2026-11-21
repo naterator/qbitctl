@@ -251,19 +251,125 @@ func TestConnectAndSaveSetupDoesNotPersistSavedCredentialsAfterConcurrentChange(
 
 func TestInteractiveConfigAtUsesSelectedPathAndRejectsEmbeddedCredentials(t *testing.T) {
 	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	creds := server.creds()
 	path := filepath.Join(t.TempDir(), "config.json")
-	input := strings.NewReader("https://qb.example.test\nalice\nsecret\n")
+	input := strings.NewReader(creds.URL + "\n" + creds.User + "\n" + creds.Pass + "\n")
 	saved, err := InteractiveConfigAt(input, io.Discard, nil, path)
 	if err != nil || saved != path {
 		t.Fatalf("InteractiveConfigAt = %q, %v", saved, err)
 	}
 	loaded, ok, err := loadAuthFile(path, io.Discard)
-	if err != nil || !ok || loaded.URL != "https://qb.example.test" || loaded.User != "alice" || loaded.Pass != "secret" {
-		t.Fatalf("saved interactive credentials = %#v, %v, %v", loaded, ok, err)
+	if err != nil || !ok || loaded != creds || server.LoginCalls != 1 {
+		t.Fatalf("saved valid credentials = %t, lookup success = %t, login calls = %d, error = %v", loaded == creds, ok, server.LoginCalls, err)
 	}
 
 	_, err = InteractiveConfigAt(strings.NewReader("https://alice:secret@qb.example.test\nalice\nsecret\n"), io.Discard, nil, filepath.Join(t.TempDir(), "bad.json"))
 	if err == nil {
 		t.Fatal("InteractiveConfigAt accepted embedded URL credentials")
+	}
+}
+
+func TestInteractiveConfigContextVerifiesAndPreservesProfile(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	path := filepath.Join(t.TempDir(), "selected", "config.json")
+	original := `{"url":"http://old.example","user":"old-user","password":"enc:v1:legacy","ui":{"tui_default":true,"queue":{"sort":"progress-desc"}},"future":{"keep":true}}`
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	server.StatusQueue["/api/v2/auth/login"] = []int{http.StatusUnauthorized}
+	rejected := strings.NewReader(server.creds().URL + "\nadmin\nwrong-password\n")
+	if _, err := InteractiveConfigContext(context.Background(), rejected, io.Discard, nil, path); err == nil {
+		t.Fatal("setup accepted invalid credentials")
+	}
+	afterFailure, err := os.ReadFile(path)
+	if err != nil || string(afterFailure) != original {
+		t.Fatalf("setup changed the profile after rejected login, read error = %v", err)
+	}
+
+	input := strings.NewReader(server.creds().URL + "\nadmin\nsecret\n")
+	saved, err := InteractiveConfigContext(context.Background(), input, io.Discard, nil, path)
+	if err != nil {
+		t.Fatalf("InteractiveConfigContext returned error: %v", err)
+	}
+	if saved != path {
+		t.Fatalf("saved path = %q, want %q", saved, path)
+	}
+	if server.LoginCalls != 1 {
+		t.Fatalf("login calls = %d, want 1", server.LoginCalls)
+	}
+
+	loaded, ok, err := loadAuthFile(path, io.Discard)
+	if err != nil || !ok {
+		t.Fatalf("loadAuthFile = %#v, %v, %v", loaded, ok, err)
+	}
+	if loaded.URL != server.creds().URL || loaded.User != "admin" || loaded.Pass != "secret" {
+		t.Fatalf("saved credentials = %#v", loaded)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	var ui map[string]json.RawMessage
+	if err := json.Unmarshal(object["ui"], &ui); err != nil {
+		t.Fatal(err)
+	}
+	var tuiDefault bool
+	if err := json.Unmarshal(ui["tui_default"], &tuiDefault); err != nil || !tuiDefault {
+		t.Fatalf("tui_default = %s, %v", ui["tui_default"], err)
+	}
+	if _, ok := ui["queue"]; !ok {
+		t.Fatalf("InteractiveConfigContext dropped existing UI profile: %s", data)
+	}
+	if _, ok := object["future"]; !ok {
+		t.Fatalf("InteractiveConfigContext dropped unknown profile fields: %s", data)
+	}
+}
+
+func TestInteractiveConfigContextPromptsForPathOnlyWhenEmpty(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	tmp := t.TempDir()
+	withWorkingDirectory(t, tmp)
+	withHomeDirectory(t, filepath.Join(tmp, "home"))
+	path := filepath.Join(tmp, "chosen", "config.json")
+
+	input := strings.NewReader(server.creds().URL + "\nadmin\nsecret\n" + path + "\n")
+	saved, err := InteractiveConfigContext(context.Background(), input, io.Discard, nil, "")
+	if err != nil {
+		t.Fatalf("empty-path InteractiveConfigContext returned error: %v", err)
+	}
+	if saved != path {
+		t.Fatalf("empty-path saved path = %q, want %q", saved, path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("selected config was not written: %v", err)
+	}
+}
+
+func TestInteractiveConfigContextRejectsInvalidURLBeforeConnecting(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	path := filepath.Join(t.TempDir(), "config.json")
+	input := strings.NewReader("http://qbt.test/?query=1\nhttp://qbt.test\nadmin\nsecret\n")
+	_, err := InteractiveConfigContext(context.Background(), input, io.Discard, nil, path)
+	if err != nil {
+		t.Fatalf("InteractiveConfigContext returned error after correction: %v", err)
+	}
+	if server.LoginCalls != 1 {
+		t.Fatalf("login calls = %d, want one after URL correction", server.LoginCalls)
 	}
 }

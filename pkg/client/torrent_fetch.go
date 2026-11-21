@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 )
 
 func (a *App) ResolveHash(shortHash string) (string, error) {
-	if shortHash == "" {
+	if strings.TrimSpace(shortHash) == "" {
 		return "", codedErrf(ExitBadArgs, "Hash required for this operation")
 	}
 
@@ -58,9 +59,11 @@ func (a *App) ResolveHashes(inputs []string) ([]string, error) {
 	// Check if all inputs are already full hashes
 	allFull := true
 	for _, input := range inputs {
+		if strings.TrimSpace(input) == "" {
+			return nil, codedErrf(ExitBadArgs, "Hash required for this operation")
+		}
 		if len(input) != 40 {
 			allFull = false
-			break
 		}
 	}
 	if allFull {
@@ -171,7 +174,7 @@ func (a *App) FetchAllTorrentsContext(ctx context.Context) ([]TorrentInfo, []byt
 	body, err := a.client.requestContext(ctx, http.MethodGet, "/api/v2/torrents/info", nil)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, nil, nil
+			return nil, nil, fmt.Errorf("failed to fetch torrent list: %w", err)
 		}
 		return nil, nil, codedErrf(ExitFetchFail, "Failed to fetch torrent list: %v", err)
 	}

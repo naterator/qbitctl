@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/naterator/qbitctl/internal/configfile"
@@ -33,6 +34,15 @@ const (
 
 var errUnsupportedPasswordFormat = errors.New("config file uses an unsupported password format")
 var errMacKeychainUnavailable = errors.New("macOS Keychain is unavailable")
+var errMasterKeyUnavailable = errors.New("qbitctl master key is unavailable")
+
+// Keep keyring access behind package-local functions so credential loading can
+// be tested without depending on a particular desktop keyring backend. The
+// production values are the go-keyring implementations.
+var (
+	masterSecretGet = keyring.Get
+	masterSecretSet = keyring.Set
+)
 
 // CodedError is an error that carries an exit code for CLI use.
 type CodedError struct {
@@ -80,7 +90,7 @@ func getMasterSecret() (string, error) {
 	if s := os.Getenv("QBITCTL_MASTER_KEY"); s != "" {
 		return s, nil
 	}
-	return keyring.Get(masterKeyService, masterKeyUser)
+	return masterSecretGet(masterKeyService, masterKeyUser)
 }
 
 func getOrCreateMasterKey() ([]byte, string, error) {
@@ -89,8 +99,12 @@ func getOrCreateMasterKey() ([]byte, string, error) {
 		sum := sha256.Sum256([]byte(secret))
 		return sum[:], "v2", nil
 	}
-	if runtime.GOOS == "darwin" && !errors.Is(err, keyring.ErrNotFound) {
-		return nil, "", fmt.Errorf("%w: read qbitctl master key: %v", errMacKeychainUnavailable, err)
+	if !errors.Is(err, keyring.ErrNotFound) {
+		unavailable := errMasterKeyUnavailable
+		if runtime.GOOS == "darwin" {
+			unavailable = errMacKeychainUnavailable
+		}
+		return nil, "", fmt.Errorf("%w: read qbitctl master key: %v", unavailable, err)
 	}
 
 	// Try to create one if it's missing
@@ -104,9 +118,11 @@ func getOrCreateMasterKey() ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-	} else if err := keyring.Set(masterKeyService, masterKeyUser, secret); err != nil {
-		// If keyring is unavailable, fall back to v1 hardcoded key
-		return deriveAuthKeyV1(), "v1", nil
+	} else if err := masterSecretSet(masterKeyService, masterKeyUser, secret); err != nil {
+		// New saves must never silently fall back to the publicly known v1 key.
+		// Existing v1 credentials remain readable, but callers must provide a
+		// keyring or QBITCTL_MASTER_KEY before saving them in the current format.
+		return nil, "", fmt.Errorf("%w: store qbitctl master key: %v", errMasterKeyUnavailable, err)
 	}
 
 	sum := sha256.Sum256([]byte(secret))
@@ -161,12 +177,7 @@ func decryptPassword(value string) (string, error) {
 
 	nonce, err := hex.DecodeString(parts[2])
 	if err != nil {
-		return "", err
-	}
-
-	ciphertext, err := hex.DecodeString(parts[3])
-	if err != nil {
-		return "", err
+		return "", fmt.Errorf("decode encrypted password nonce: %w", err)
 	}
 
 	block, err := aes.NewCipher(key)
@@ -177,6 +188,17 @@ func decryptPassword(value string) (string, error) {
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", err
+	}
+	if len(nonce) != gcm.NonceSize() {
+		return "", fmt.Errorf("invalid encrypted password nonce length: got %d, want %d", len(nonce), gcm.NonceSize())
+	}
+
+	ciphertext, err := hex.DecodeString(parts[3])
+	if err != nil {
+		return "", fmt.Errorf("decode encrypted password ciphertext: %w", err)
+	}
+	if len(ciphertext) < gcm.Overhead() {
+		return "", fmt.Errorf("encrypted password ciphertext is too short: got %d bytes, want at least %d", len(ciphertext), gcm.Overhead())
 	}
 
 	plain, err := gcm.Open(nil, nonce, ciphertext, nil)
@@ -308,13 +330,15 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 		// Migrate only the password field. The conditional update avoids
 		// overwriting newer URL or username credentials written concurrently.
 		encoded, encodeErr := encryptPassword(password)
-		if encodeErr != nil && !errors.Is(encodeErr, errMacKeychainUnavailable) {
+		if encodeErr != nil && !isMasterKeyUnavailable(encodeErr) {
 			return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", encodeErr)
 		}
 		if encodeErr == nil {
 			if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
 				return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", migrateErr)
 			}
+		} else if infoOut != nil {
+			fmt.Fprintf(infoOut, "[WARN] Kept legacy encrypted credentials in %s; set QBITCTL_MASTER_KEY or enable the keyring to migrate them to v2.\n", path)
 		}
 		// if infoOut != nil {
 		// 	fmt.Fprintf(infoOut, "[INFO] Migrated v1 encrypted password to latest format in config file: %s\n", path)
@@ -325,25 +349,37 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 			return Credentials{}, true, err
 		}
 		creds.Pass = password
+	case strings.HasPrefix(value, "enc:"):
+		// Never reinterpret an unrecognized encrypted value as plaintext.
+		_, err := decryptPassword(value)
+		return Credentials{}, true, err
 	case looksLikeOpaqueCiphertext(value):
 		return Credentials{}, true, errUnsupportedPasswordFormat
 	default:
 		creds.Pass = value
 		if value != "" {
 			encoded, encodeErr := encryptPassword(value)
-			if encodeErr != nil {
+			if encodeErr != nil && !isMasterKeyUnavailable(encodeErr) {
 				return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", encodeErr)
 			}
-			if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
-				return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", migrateErr)
-			}
-			if infoOut != nil {
-				fmt.Fprintf(infoOut, "[INFO] Migrated plaintext password in config file: %s\n", path)
+			if encodeErr == nil {
+				if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
+					return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", migrateErr)
+				}
+				if infoOut != nil {
+					fmt.Fprintf(infoOut, "[INFO] Migrated plaintext password in config file: %s\n", path)
+				}
+			} else if infoOut != nil {
+				fmt.Fprintf(infoOut, "[WARN] Kept plaintext credentials in %s; set QBITCTL_MASTER_KEY or enable the keyring to encrypt them.\n", path)
 			}
 		}
 	}
 
 	return creds, true, nil
+}
+
+func isMasterKeyUnavailable(err error) bool {
+	return errors.Is(err, errMasterKeyUnavailable) || errors.Is(err, errMacKeychainUnavailable)
 }
 
 func decodeConfigFile(object configfile.Object) (configFile, error) {
@@ -430,6 +466,13 @@ func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, err
 		}
 	}
 
+	// A saved password is scoped to the server origin it was entered for. Do
+	// not silently send it to a different host or scheme when a caller only
+	// overrides --url; require an explicit password for that transition.
+	if loaded && cli.URL != "" && cli.Pass == "" && creds.Pass != "" && !sameCredentialOrigin(creds.URL, cli.URL) {
+		return Credentials{}, selectedPath, codedErrf(ExitBadArgs, "Password required when changing server origin")
+	}
+
 	if cli.User != "" {
 		creds.User = cli.User
 	}
@@ -440,6 +483,18 @@ func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, err
 		creds.URL = cli.URL
 	}
 
+	if creds.URL != "" {
+		normalizedURL, err := ValidateConfigURL(creds.URL)
+		if err != nil {
+			code := ExitFile
+			if cli.URL != "" {
+				code = ExitBadArgs
+			}
+			return Credentials{}, selectedPath, codedErrf(code, "%v", err)
+		}
+		creds.URL = normalizedURL
+	}
+
 	if !canAttemptLogin(creds) {
 		return Credentials{}, selectedPath, codedErrf(ExitFile, "No credentials supplied")
 	}
@@ -448,6 +503,37 @@ func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, err
 		selectedPath = defaultAuthPath()
 	}
 	return creds, selectedPath, nil
+}
+
+// sameCredentialOrigin compares the parts of a URL that scope a Web UI
+// session. Default HTTP(S) ports are equivalent to their explicit forms, while
+// paths remain intentionally out of the comparison for reverse proxies.
+func sameCredentialOrigin(left, right string) bool {
+	leftURL, leftErr := url.Parse(strings.TrimSpace(left))
+	rightURL, rightErr := url.Parse(strings.TrimSpace(right))
+	if leftErr != nil || rightErr != nil || leftURL.Scheme == "" || leftURL.Host == "" || rightURL.Scheme == "" || rightURL.Host == "" {
+		return false
+	}
+	if !strings.EqualFold(leftURL.Scheme, rightURL.Scheme) || !strings.EqualFold(leftURL.Hostname(), rightURL.Hostname()) {
+		return false
+	}
+	return credentialPort(leftURL) == credentialPort(rightURL)
+}
+
+func credentialPort(value *url.URL) string {
+	port := value.Port()
+	if port == "" {
+		switch strings.ToLower(value.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	if numeric, err := strconv.Atoi(port); err == nil {
+		return strconv.Itoa(numeric)
+	}
+	return port
 }
 
 // NewClient authenticates using a background context. Call Logout when finished.
@@ -464,6 +550,9 @@ func NewClientContext(ctx context.Context, opts *Options) (*App, error) {
 // NewClientWithOutput authenticates with caller-provided output writers. A nil
 // writer uses the corresponding standard stream. Call Logout when finished.
 func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.Writer) (*App, error) {
+	if opts == nil {
+		return nil, codedErrf(ExitBadArgs, "Client options are required")
+	}
 	app := &App{Ctx: ctx, Stdout: stdout, Stderr: stderr}
 	newAppDefaults(app)
 
@@ -502,7 +591,7 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 	if urlValue == "" {
 		urlValue = defaultConfigURL
 	}
-	normalizedURL, err := normalizeConfigURL(urlValue)
+	normalizedURL, err := ValidateConfigURL(urlValue)
 	if err != nil {
 		return codedErrf(ExitBadArgs, "%v", err)
 	}
@@ -534,16 +623,28 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 	return nil
 }
 
-func normalizeConfigURL(value string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
+// ValidateConfigURL validates and normalizes a qBittorrent Web UI base URL.
+// It rejects URL components that would interfere with API endpoint joining.
+func ValidateConfigURL(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return "", errors.New("invalid server URL")
 	}
-	if parsed.Scheme == "" || parsed.Host == "" {
+	if parsed.User != nil {
+		return "", errors.New("URL must not include embedded credentials")
+	}
+	if parsed.Scheme == "" || parsed.Hostname() == "" {
 		return "", fmt.Errorf("URL must include a scheme and host, for example %s", defaultConfigURL)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", fmt.Errorf("URL scheme must be http or https")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return "", errors.New("URL must not include a query")
+	}
+	if parsed.Fragment != "" || strings.Contains(trimmed, "#") {
+		return "", errors.New("URL must not include a fragment")
 	}
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
@@ -583,45 +684,17 @@ func promptValidatedLine(out io.Writer, reader *bufio.Reader, prompt, defaultVal
 // A nil value means no echo hiding (the prompt function is called directly).
 type HiddenInputFunc func(fn func() (string, error)) (string, error)
 
-func runInteractiveConfig(reader *bufio.Reader, out io.Writer, hiddenInput HiddenInputFunc, savePath string, saveFn func(string, Credentials) error) int {
-	urlValue, err := promptValidatedLine(out, reader, fmt.Sprintf("URL [%s]: ", defaultConfigURL), defaultConfigURL, normalizeConfigURL)
-	if err != nil {
-		return ExitBadArgs
-	}
-
-	userValue, err := promptLineTo(out, reader, "Username [admin]: ", "admin")
-	if err != nil {
-		return ExitBadArgs
-	}
-
-	passwordValue, err := hiddenInput(func() (string, error) {
-		return promptLineTo(out, reader, "Password: ", "")
-	})
-	if err != nil {
-		return ExitBadArgs
-	}
-	if passwordValue == "" {
-		fmt.Fprintln(out, "Empty password, not saving config file.")
-		return ExitBadArgs
-	}
-
-	inputPath, err := promptLineTo(out, reader, fmt.Sprintf("Save path [%s]: ", savePath), savePath)
-	if err != nil {
-		return ExitBadArgs
-	}
-
-	if err := saveFn(inputPath, Credentials{URL: urlValue, User: userValue, Pass: passwordValue}); err != nil {
-		fmt.Fprintf(out, "[ERROR] Failed to save config file: %v\n", err)
-		return ExitFile
-	}
-
-	fmt.Fprintf(out, "Saved config to %s\n", inputPath)
-	return ExitOK
-}
-
+// InteractiveConfig validates and saves a profile using the text prompts.
 func InteractiveConfig(in io.Reader, out io.Writer, hiddenInput HiddenInputFunc) int {
-	if hiddenInput == nil {
-		hiddenInput = func(fn func() (string, error)) (string, error) { return fn() }
+	path, err := InteractiveConfigContext(context.Background(), in, out, hiddenInput, "")
+	if err != nil {
+		fmt.Fprintf(out, "[ERROR] %v\n", err)
+		var coded *CodedError
+		if errors.As(err, &coded) {
+			return coded.Code
+		}
+		return ExitBadArgs
 	}
-	return runInteractiveConfig(bufio.NewReader(in), out, hiddenInput, defaultAuthPath(), saveAuthFile)
+	fmt.Fprintf(out, "Saved config to %s\n", path)
+	return ExitOK
 }

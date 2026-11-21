@@ -30,16 +30,71 @@ func TestParseLimit(t *testing.T) {
 }
 
 func TestParseSeedtimeLimit(t *testing.T) {
-	got, err := parseSeedtimeLimit("3600")
-	if err != nil {
-		t.Fatalf("parseSeedtimeLimit returned error: %v", err)
-	}
-	if got != 3600 {
-		t.Fatalf("parseSeedtimeLimit = %d, want 3600", got)
+	for _, tt := range []struct {
+		input string
+		want  int64
+	}{
+		{input: "3600", want: 3600},
+		{input: "-1", want: -1},
+		{input: "-2", want: -2},
+	} {
+		got, err := parseSeedtimeLimit(tt.input)
+		if err != nil {
+			t.Fatalf("parseSeedtimeLimit(%q) returned error: %v", tt.input, err)
+		}
+		if got != tt.want {
+			t.Fatalf("parseSeedtimeLimit(%q) = %d, want %d", tt.input, got, tt.want)
+		}
 	}
 
 	if _, err := parseSeedtimeLimit("abc"); err == nil {
 		t.Fatal("parseSeedtimeLimit unexpectedly accepted non-numeric input")
+	}
+	if _, err := parseSeedtimeLimit("-3"); err == nil {
+		t.Fatal("parseSeedtimeLimit unexpectedly accepted an unsupported sentinel")
+	}
+}
+
+func TestSeedtimeLimitSecondsToMinutes(t *testing.T) {
+	tests := []struct {
+		seconds int64
+		want    int64
+		ok      bool
+	}{
+		{seconds: 3600, want: 60, ok: true},
+		{seconds: 0, want: 0, ok: true},
+		{seconds: -1, want: -1, ok: true},
+		{seconds: -2, want: -2, ok: true},
+		{seconds: 61, ok: false},
+		{seconds: -3, ok: false},
+	}
+	for _, tt := range tests {
+		got, err := seedtimeLimitSecondsToMinutes(tt.seconds)
+		if tt.ok {
+			if err != nil {
+				t.Fatalf("seedtimeLimitSecondsToMinutes(%d) returned error: %v", tt.seconds, err)
+			}
+			if got != tt.want {
+				t.Fatalf("seedtimeLimitSecondsToMinutes(%d) = %d, want %d", tt.seconds, got, tt.want)
+			}
+		} else if err == nil {
+			t.Fatalf("seedtimeLimitSecondsToMinutes(%d) unexpectedly succeeded", tt.seconds)
+		}
+	}
+}
+
+func TestSeedtimeLimitInputValue(t *testing.T) {
+	tests := map[int64]string{
+		60:                          "3600",
+		-1:                          "-1",
+		-2:                          "-2",
+		-3:                          "",
+		int64(^uint64(0)>>1)/60 + 1: "",
+	}
+	for minutes, want := range tests {
+		if got := SeedtimeLimitInputValue(minutes); got != want {
+			t.Fatalf("SeedtimeLimitInputValue(%d) = %q, want %q", minutes, got, want)
+		}
 	}
 }
 

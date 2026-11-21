@@ -16,6 +16,6 @@ func newTUICmd(opts *CLIOptions) *cobra.Command {
 
 func interactiveWorkspace(*cobra.Command) bool { return false }
 
-func runTUI(*cobra.Command, CLIOptions) error {
-	return result(codedErr(exitBadArgs, "The interactive terminal workspace is unavailable on Plan 9"))
+func runTUI(cmd *cobra.Command, _ CLIOptions) error {
+	return result(cmd, codedErr(exitBadArgs, "The interactive terminal workspace is unavailable on Plan 9"))
 }

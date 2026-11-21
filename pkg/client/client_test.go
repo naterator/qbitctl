@@ -2,16 +2,23 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/naterator/qbitctl/internal/qbtest"
 )
+
+type failingReadCloser struct{}
+
+func (failingReadCloser) Read([]byte) (int, error) { return 0, errors.New("body read failed") }
+func (failingReadCloser) Close() error             { return nil }
 
 func TestClientLoginResponses(t *testing.T) {
 	for _, tt := range []struct {
@@ -24,6 +31,7 @@ func TestClientLoginResponses(t *testing.T) {
 		{"modern success", http.StatusNoContent, "", true},
 		{"legacy invalid credentials", http.StatusOK, "Fails.", false},
 		{"legacy failure whitespace", http.StatusOK, " fails.\n", false},
+		{"legacy unexpected body", http.StatusOK, "welcome", false},
 		{"modern invalid credentials", http.StatusUnauthorized, "", false},
 		{"banned", http.StatusForbidden, "", false},
 		{"server error", http.StatusInternalServerError, "", false},
@@ -41,7 +49,11 @@ func TestClientLoginResponses(t *testing.T) {
 				if req.Form.Get("username") != c.creds.User || req.Form.Get("password") != c.creds.Pass {
 					t.Fatal("login form did not preserve credentials")
 				}
-				return &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
+				resp := &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}
+				if tt.wantOK {
+					resp.Header.Set("Set-Cookie", "SID=test-session; Path=/")
+				}
+				return resp, nil
 			})
 			if err := c.loginContext(context.Background()); (err == nil) != tt.wantOK {
 				t.Fatalf("login error = %v, want success %t", err, tt.wantOK)
@@ -58,6 +70,7 @@ func TestClientSessionCookiesAndRenewal(t *testing.T) {
 	}{
 		{"SID", http.StatusOK, "Ok."},
 		{"QBT_SID_8080", http.StatusNoContent, ""},
+		{"custom-session", http.StatusOK, "Ok."},
 	} {
 		t.Run(tt.cookie, func(t *testing.T) {
 			c := newClient(Credentials{URL: "https://qbt.test:8443/qbt/", User: "nate", Pass: "secret"}, io.Discard)
@@ -130,13 +143,111 @@ func TestClientLoginFailureOnNon200(t *testing.T) {
 	}
 }
 
+func TestClientLoginRejectsMissingSessionCookie(t *testing.T) {
+	c := newClient(Credentials{URL: "https://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req, Body: http.NoBody}
+		switch req.URL.Path {
+		case loginEndpoint:
+			resp.Body = io.NopCloser(strings.NewReader("Ok."))
+		case "/api/v2/app/version":
+			resp.StatusCode = http.StatusForbidden
+		default:
+			t.Fatalf("unexpected request path %s", req.URL.Path)
+		}
+		return resp, nil
+	})
+
+	err := c.loginContext(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "did not issue a session cookie") {
+		t.Fatalf("login error = %v, want missing-cookie error", err)
+	}
+}
+
+func TestClientLoginAcceptsVerifiedAuthBypassWithoutCleanup(t *testing.T) {
+	c := newClient(Credentials{URL: "https://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	var paths []string
+	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req, Body: http.NoBody}
+		switch req.URL.Path {
+		case loginEndpoint:
+			resp.Body = io.NopCloser(strings.NewReader("Ok."))
+		case "/api/v2/app/version":
+			resp.Body = io.NopCloser(strings.NewReader("v5.3.0"))
+		default:
+			t.Fatalf("unexpected request path %s", req.URL.Path)
+		}
+		return resp, nil
+	})
+
+	if err := c.loginContext(t.Context()); err != nil {
+		t.Fatalf("login returned error: %v", err)
+	}
+	c.logout()
+	if !slices.Equal(paths, []string{loginEndpoint, "/api/v2/app/version"}) {
+		t.Fatalf("request paths = %v, want verified login without logout", paths)
+	}
+}
+
+func TestClientLoginRejectsUnparseableAuthBypassVersion(t *testing.T) {
+	c := newClient(Credentials{URL: "https://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Request: req, Body: http.NoBody}
+		switch req.URL.Path {
+		case loginEndpoint:
+			resp.Body = io.NopCloser(strings.NewReader("Ok."))
+		case "/api/v2/app/version":
+			resp.Body = io.NopCloser(strings.NewReader("Welcome to qBittorrent"))
+		default:
+			t.Fatalf("unexpected request path %s", req.URL.Path)
+		}
+		return resp, nil
+	})
+
+	err := c.loginContext(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "invalid qBittorrent version") {
+		t.Fatalf("login error = %v, want invalid-version error", err)
+	}
+}
+
+func TestClientLoginBodyReadFailureStillCleansUpIssuedSession(t *testing.T) {
+	c := newClient(Credentials{URL: "https://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	loggedOut := false
+	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp := &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Request: req, Body: http.NoBody}
+		switch req.URL.Path {
+		case loginEndpoint:
+			resp.Header.Set("Set-Cookie", "custom-session=issued; Path=/")
+			resp.Body = failingReadCloser{}
+		case logoutEndpoint:
+			cookie, err := req.Cookie("custom-session")
+			if err != nil || cookie.Value != "issued" {
+				t.Fatalf("logout cookie = %v, want issued custom session", err)
+			}
+			loggedOut = true
+		default:
+			t.Fatalf("unexpected request path %s", req.URL.Path)
+		}
+		return resp, nil
+	})
+
+	if err := c.loginContext(t.Context()); err == nil || !strings.Contains(err.Error(), "body read failed") {
+		t.Fatalf("login error = %v, want body-read failure", err)
+	}
+	c.logout()
+	if !loggedOut {
+		t.Fatal("client did not clean up session after body read failure")
+	}
+}
+
 func TestClientLogoutAfterLoginRedirect(t *testing.T) {
-	c := newClient(Credentials{URL: "http://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	c := newClient(Credentials{URL: "https://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
 	var loggedOut bool
 	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		resp := &http.Response{StatusCode: http.StatusNoContent, Header: make(http.Header), Body: http.NoBody, Request: req}
 		switch req.URL.String() {
-		case "http://qbt.test" + loginEndpoint:
+		case "https://qbt.test" + loginEndpoint:
 			resp.StatusCode = http.StatusTemporaryRedirect
 			resp.Header.Set("Location", "https://qbt.test/qbt"+loginEndpoint)
 		case "https://qbt.test/qbt" + loginEndpoint:
@@ -158,6 +269,31 @@ func TestClientLogoutAfterLoginRedirect(t *testing.T) {
 	c.logout()
 	if !loggedOut {
 		t.Fatal("client skipped logout after redirect")
+	}
+}
+
+func TestClientLoginRejectsCrossOrigin307Redirect(t *testing.T) {
+	c := newClient(Credentials{URL: "https://qbt.test", User: "admin", Pass: "secret"}, io.Discard)
+	var paths []string
+	c.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.String())
+		if req.URL.String() == "https://qbt.test"+loginEndpoint {
+			return &http.Response{
+				StatusCode: http.StatusTemporaryRedirect,
+				Header:     http.Header{"Location": []string{"https://attacker.test" + loginEndpoint}},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		}
+		t.Fatalf("cross-origin redirect received login request: %s", req.URL)
+		return nil, nil
+	})
+
+	if err := c.loginContext(t.Context()); err == nil || !strings.Contains(err.Error(), "cross-origin login redirect") {
+		t.Fatalf("login error = %v, want cross-origin redirect error", err)
+	}
+	if !slices.Equal(paths, []string{"https://qbt.test" + loginEndpoint}) {
+		t.Fatalf("request paths = %v, want only original login request", paths)
 	}
 }
 

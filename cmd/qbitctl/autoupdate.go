@@ -29,6 +29,7 @@ type githubReleaseUpdater struct {
 	latestReleaseURL string
 	executablePath   func() (string, error)
 	verifyAsset      func(context.Context, string, string) error
+	renameFile       func(string, string) error
 	goos             string
 	goarch           string
 }
@@ -224,18 +225,26 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	if err := os.Chmod(tempPath, mode); err != nil {
 		return fmt.Errorf("mark downloaded binary executable: %w", err)
 	}
+	renameFile := u.renameFile
+	if renameFile == nil {
+		renameFile = os.Rename
+	}
 
 	// On Windows the OS locks a running executable, preventing overwrite.
 	// Rename the old binary out of the way first, then move the new one in.
 	if strings.EqualFold(u.goos, "windows") {
 		oldPath := exePath + ".old"
 		_ = os.Remove(oldPath)
-		if err := os.Rename(exePath, oldPath); err != nil {
+		if err := renameFile(exePath, oldPath); err != nil {
 			return fmt.Errorf("rename current executable out of the way: %w", err)
 		}
-	}
-
-	if err := os.Rename(tempPath, exePath); err != nil {
+		if err := renameFile(tempPath, exePath); err != nil {
+			if rollbackErr := renameFile(oldPath, exePath); rollbackErr != nil {
+				return fmt.Errorf("replace current executable %q: %w (rollback failed: %w)", exePath, err, rollbackErr)
+			}
+			return fmt.Errorf("replace current executable %q: %w (previous executable restored)", exePath, err)
+		}
+	} else if err := renameFile(tempPath, exePath); err != nil {
 		return fmt.Errorf("replace current executable %q: %w", exePath, err)
 	}
 	_ = os.RemoveAll(tempDir)

@@ -28,12 +28,12 @@ func newTUICmd(opts *CLIOptions) *cobra.Command {
 
 func runTUI(cmd *cobra.Command, opts CLIOptions) error {
 	if !interactiveWorkspace(cmd) {
-		return result(codedErr(exitBadArgs, "qbitctl tui requires an interactive terminal for input and output"))
+		return result(cmd, codedErr(exitBadArgs, "qbitctl tui requires an interactive terminal for input and output"))
 	}
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := tui.RunConfigurable(ctx, opts, cmd.InOrStdin(), cmd.OutOrStdout()); err != nil {
-		return result(codedErr(exitActionFail, fmt.Sprintf("Terminal workspace failed: %v", err)))
+		return result(cmd, codedErr(exitActionFail, fmt.Sprintf("Terminal workspace failed: %v", err)))
 	}
 	return nil
 }

@@ -210,6 +210,142 @@ func TestGitHubReleaseUpdaterReplacesExecutable(t *testing.T) {
 	}
 }
 
+func TestGitHubReleaseUpdaterWindowsReplacementFailureRestoresExecutable(t *testing.T) {
+	exePath := filepath.Join(t.TempDir(), "qbitctl.exe")
+	oldBody := []byte("old-binary")
+	newBody := []byte("new-binary-content")
+	if err := os.WriteFile(exePath, oldBody, 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	sum := sha256.Sum256(newBody)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/download/qbitctl-windows-amd64.exe" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write(newBody)
+	}))
+	defer server.Close()
+
+	replacementErr := errors.New("injected replacement failure")
+	var renameCalls int
+	updater := &githubReleaseUpdater{
+		client: server.Client(),
+		verifyAsset: func(context.Context, string, string) error {
+			return nil
+		},
+		renameFile: func(oldPath, newPath string) error {
+			renameCalls++
+			if renameCalls == 2 {
+				return replacementErr
+			}
+			return os.Rename(oldPath, newPath)
+		},
+		goos:   "windows",
+		goarch: "amd64",
+	}
+
+	err := updater.downloadAndReplace(
+		context.Background(),
+		exePath,
+		"v9.9.9",
+		"qbitctl-windows-amd64.exe",
+		server.URL+"/download/qbitctl-windows-amd64.exe",
+		hex.EncodeToString(sum[:]),
+	)
+	if err == nil {
+		t.Fatal("downloadAndReplace unexpectedly succeeded")
+	}
+	if !errors.Is(err, replacementErr) {
+		t.Fatalf("downloadAndReplace error = %v, want replacement error", err)
+	}
+	if !strings.Contains(err.Error(), "previous executable restored") {
+		t.Fatalf("downloadAndReplace error = %v, want restore diagnostic", err)
+	}
+	if renameCalls != 3 {
+		t.Fatalf("rename calls = %d, want replacement plus rollback", renameCalls)
+	}
+
+	got, readErr := os.ReadFile(exePath)
+	if readErr != nil {
+		t.Fatalf("ReadFile returned error: %v", readErr)
+	}
+	if string(got) != string(oldBody) {
+		t.Fatalf("restored executable content = %q, want %q", string(got), string(oldBody))
+	}
+	if _, statErr := os.Stat(exePath + ".old"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("old executable backup stat error = %v, want not-exist", statErr)
+	}
+}
+
+func TestGitHubReleaseUpdaterWindowsRollbackFailureReportsBothErrors(t *testing.T) {
+	exePath := filepath.Join(t.TempDir(), "qbitctl.exe")
+	oldBody := []byte("old-binary")
+	newBody := []byte("new-binary-content")
+	if err := os.WriteFile(exePath, oldBody, 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	sum := sha256.Sum256(newBody)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(newBody)
+	}))
+	defer server.Close()
+
+	replacementErr := errors.New("injected replacement failure")
+	rollbackErr := errors.New("injected rollback failure")
+	var renameCalls int
+	updater := &githubReleaseUpdater{
+		client: server.Client(),
+		verifyAsset: func(context.Context, string, string) error {
+			return nil
+		},
+		renameFile: func(oldPath, newPath string) error {
+			renameCalls++
+			switch renameCalls {
+			case 2:
+				return replacementErr
+			case 3:
+				return rollbackErr
+			default:
+				return os.Rename(oldPath, newPath)
+			}
+		},
+		goos:   "windows",
+		goarch: "amd64",
+	}
+
+	err := updater.downloadAndReplace(
+		context.Background(),
+		exePath,
+		"v9.9.9",
+		"qbitctl-windows-amd64.exe",
+		server.URL+"/download/qbitctl-windows-amd64.exe",
+		hex.EncodeToString(sum[:]),
+	)
+	if err == nil {
+		t.Fatal("downloadAndReplace unexpectedly succeeded")
+	}
+	if !errors.Is(err, replacementErr) {
+		t.Fatalf("downloadAndReplace error = %v, want replacement error", err)
+	}
+	if !errors.Is(err, rollbackErr) {
+		t.Fatalf("downloadAndReplace error = %v, want rollback error", err)
+	}
+	if !strings.Contains(err.Error(), "rollback failed") || !strings.Contains(err.Error(), rollbackErr.Error()) {
+		t.Fatalf("downloadAndReplace error = %v, want rollback diagnostic", err)
+	}
+	if renameCalls != 3 {
+		t.Fatalf("rename calls = %d, want replacement plus rollback", renameCalls)
+	}
+	if _, statErr := os.Stat(exePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("current executable stat error = %v, want not-exist after injected rollback failure", statErr)
+	}
+	if _, statErr := os.Stat(exePath + ".old"); statErr != nil {
+		t.Fatalf("old executable backup stat error = %v, want retained backup", statErr)
+	}
+}
+
 func TestGitHubReleaseUpdaterSkipsCurrentVersion(t *testing.T) {
 	exePath := filepath.Join(t.TempDir(), "qbitctl")
 	if err := os.WriteFile(exePath, []byte("existing-binary"), 0o755); err != nil {

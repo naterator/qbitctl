@@ -141,7 +141,12 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/v2/auth/login":
 		s.LoginCalls++
+		http.SetCookie(w, &http.Cookie{Name: "SID", Value: "test-session", Path: "/"})
 		_, _ = io.WriteString(w, "Ok.")
+	case "/api/v2/auth/logout":
+		// The fixture accepts logout so tests that exercise the real client
+		// lifecycle can verify the server-issued cookie without making every
+		// unrelated fixture endpoint session-aware.
 	case "/api/v2/torrents/info":
 		s.InfoCalls++
 		s.handleTorrentInfo(w, r)
@@ -165,6 +170,8 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 		s.recordMultipartForm(r.URL.Path, r)
 	case "/api/v2/torrents/setCategory",
 		"/api/v2/torrents/setTags",
+		"/api/v2/torrents/addTags",
+		"/api/v2/torrents/removeTags",
 		"/api/v2/torrents/setUploadLimit",
 		"/api/v2/torrents/setDownloadLimit",
 		"/api/v2/torrents/setShareLimits",

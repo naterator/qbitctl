@@ -24,25 +24,68 @@ env:
 
 jobs:
   package:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Validate release tag
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a version tag such as 1.2.3 or v1.2.3."
+            exit 1
+          fi
+        shell: bash
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: source
         with:
           ref: refs/tags/${{ env.RELEASE_TAG }}
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - name: Validate tag and run native tests
+      - name: Run native tests
         run: |
-          [[ "$RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]
           go vet ./...
           go test -race ./...
-        shell: bash
       - name: Build every release target
         run: VERSION="$RELEASE_TAG" bash scripts/build.sh
       - name: Smoke release binary
         run: python3 scripts/smoke_native.py "./dist/qbitctl-$(go env GOOS)-$(go env GOARCH)"
-      - uses: actions/upload-artifact@v6
+      - name: Require green CI for the release commit
+        timeout-minutes: 30
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          # PR checks normally test a merge commit. Use push runs for the source SHA.
+          deadline=$((SECONDS + 29 * 60))
+          while (( SECONDS < deadline )); do
+            run=$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f event=push -f head_sha="$RELEASE_COMMIT" -F per_page=1 \
+              --jq '.workflow_runs[0] // empty | [.status, (.conclusion // "pending"), .html_url] | @tsv')
+            if [[ -z "$run" ]]; then
+              echo "Waiting for a push-triggered CI run for $RELEASE_COMMIT."
+            else
+              IFS=$'\t' read -r status conclusion url <<< "$run"
+              if [[ "$status" == completed ]]; then
+                if [[ "$conclusion" == success ]]; then
+                  echo "CI passed for $RELEASE_COMMIT: $url"
+                  exit 0
+                fi
+                echo "::error::CI ended with $conclusion for $RELEASE_COMMIT: $url"
+                exit 1
+              fi
+              echo "CI is $status for $RELEASE_COMMIT: $url"
+            fi
+            sleep 15
+          done
+          echo "::error::Timed out waiting for CI for $RELEASE_COMMIT."
+          exit 1
+        shell: bash
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qbitctl-release-assets
           path: dist/qbitctl-*
@@ -50,13 +93,12 @@ jobs:
 
   upload:
     needs: package
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
     permissions:
       contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: qbitctl-release-assets
           path: dist
@@ -64,7 +106,15 @@ jobs:
         working-directory: dist
         run: sha256sum -c qbitctl-*.sha256
       - name: Attach binaries to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.package.outputs.commit }}
         run: |
+          current_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$RELEASE_TAG" --jq .sha)
+          if [[ "$current_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "::error::Tag $RELEASE_TAG moved from $RELEASE_COMMIT to $current_commit. Rerun the release workflow."
+            exit 1
+          fi
           if draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft); then
             if [[ "$draft" != true ]]; then
               echo "::error::Release $RELEASE_TAG is already published. Use a new version tag."

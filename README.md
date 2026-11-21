@@ -83,13 +83,13 @@ VERSION=v1.2.3 bash scripts/build.sh
 
 Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The target list comes from `go tool dist list` for the installed Go toolchain. Android and iOS require separate SDK/CGO builds.
 
-CI and release workflows follow the [notes workflow templates](https://github.com/naterator/notes/tree/main/.github/workflows), with every job running on `ubuntu-24.04`. CI runs formatting, vet, race tests, a native CLI/API smoke check, a vulnerability check, and all release cross-builds.
+CI and release workflows follow the [notes workflow templates](https://github.com/naterator/notes/tree/main/.github/workflows), with every job running on `ubuntu-26.04`. CI runs formatting, vet, race tests, a native CLI/API smoke check, a vulnerability check, and all release cross-builds.
 
 To publish releases that support verified updates:
 
 1. Enable **Release immutability** in the repository's GitHub settings before publishing new releases.
 2. Create and push a version tag, or manually run **Draft release assets** with an existing tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
-3. The workflow runs tests, builds and checksums every target, checks the native release binary, and attaches the assets to a draft release. It can resume an existing draft but refuses to change an already published release.
+3. The workflow runs tests, builds and checksums every target, and checks the native release binary. It waits for the latest push-triggered CI run for the exact release commit to pass before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
 4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation. Check a downloaded asset with `gh release verify-asset <exact-tag> <asset-path> --repo naterator/qbitctl`.
 
 See GitHub's [immutable release publishing guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). Attaching binaries after publication is incompatible with immutable releases.

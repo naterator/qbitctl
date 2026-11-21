@@ -117,7 +117,11 @@ func TestUpdateCommandNamesAndDryRun(t *testing.T) {
 func TestGitHubReleaseUpdaterReplacesExecutable(t *testing.T) {
 	for _, tag := range []string{"v9.9.9", "9.9.9"} {
 		t.Run(tag, func(t *testing.T) {
-			exePath := filepath.Join(t.TempDir(), "qbitctl")
+			exeName := "qbitctl"
+			if runtime.GOOS == "windows" {
+				exeName += ".exe"
+			}
+			exePath := filepath.Join(t.TempDir(), exeName)
 			if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
 				t.Fatalf("WriteFile returned error: %v", err)
 			}
@@ -190,12 +194,19 @@ func TestGitHubReleaseUpdaterReplacesExecutable(t *testing.T) {
 			if string(got) != string(binaryBody) {
 				t.Fatalf("updated executable content = %q, want %q", string(got), string(binaryBody))
 			}
-			info, err := os.Stat(exePath)
-			if err != nil {
-				t.Fatalf("Stat returned error: %v", err)
-			}
-			if info.Mode().Perm() != 0o755 {
-				t.Fatalf("updated executable mode = %#o, want 0755", info.Mode().Perm())
+			if runtime.GOOS == "windows" {
+				backup, err := os.ReadFile(exePath + ".old")
+				if err != nil || string(backup) != "old-binary" {
+					t.Fatalf("previous executable backup = %q, error = %v", backup, err)
+				}
+			} else {
+				info, err := os.Stat(exePath)
+				if err != nil {
+					t.Fatalf("Stat returned error: %v", err)
+				}
+				if info.Mode().Perm() != 0o755 {
+					t.Fatalf("updated executable mode = %#o, want 0755", info.Mode().Perm())
+				}
 			}
 			if metadataCalls != 1 || binaryCalls != 1 || checksumCalls != 1 {
 				t.Fatalf("calls = metadata:%d binary:%d checksum:%d", metadataCalls, binaryCalls, checksumCalls)

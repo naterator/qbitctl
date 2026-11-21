@@ -94,19 +94,14 @@ def start_container(
         container,
         "--user",
         f"{os.getuid()}:{os.getgid()}",
+        # The older image wrapper changes ownership before launching qBittorrent.
+        "--entrypoint",
+        "qbittorrent-nox",
         "--read-only",
         "--stop-timeout",
         "1800",
         "--tmpfs",
         "/tmp",
-        "--env",
-        "QBT_LEGAL_NOTICE=confirm",
-        "--env",
-        "QBT_EULA=accept",
-        "--env",
-        "QBT_TORRENTING_PORT=6881",
-        "--env",
-        f"QBT_WEBUI_PORT={web_port}",
         # qBittorrent 5.0 validates Host against the listening port.
         "--publish",
         f"127.0.0.1:{web_port}:{web_port}/tcp",
@@ -115,6 +110,9 @@ def start_container(
         "--volume",
         f"{downloads}:/downloads",
         image,
+        "--profile=/config",
+        f"--webui-port={web_port}",
+        "--confirm-legal-notice",
     ]
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode != 0:

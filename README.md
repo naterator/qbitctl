@@ -35,71 +35,21 @@ Supports both the older HTTP 200 login response and the HTTP 204 response used b
 
 ## Install
 
-Install the [GitHub CLI](https://cli.github.com/) and sign in with `gh auth login`. Download the binary and checksum from the same immutable release. Verify both the SHA-256 checksum and GitHub's release attestation before installing.
-
-### macOS and Linux
+Download the latest release for your platform:
 
 ```bash
-(
-  set -eu
-  repo=naterator/qbitctl
-  tag=$(gh release view --repo "$repo" --json tagName --jq .tagName)
-  os=$(uname -s | tr '[:upper:]' '[:lower:]')
-  arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-  asset="qbitctl-$os-$arch"
-  temp=$(mktemp -d)
-  trap 'rm -rf "$temp"' EXIT
-  cd "$temp"
-  gh release download "$tag" --repo "$repo" --pattern "$asset" --pattern "$asset.sha256"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c "$asset.sha256"
-  else
-    shasum -a 256 -c "$asset.sha256"
-  fi
-  gh release verify-asset "$tag" "$asset" --repo "$repo"
-  install -d "$HOME/.local/bin"
-  install -m 755 "$asset" "$HOME/.local/bin/qbitctl"
-)
+curl -Lo qbitctl "https://github.com/naterator/qbitctl/releases/latest/download/qbitctl-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+chmod +x qbitctl
+sudo mv qbitctl /usr/local/bin/
 ```
 
-Add `$HOME/.local/bin` to your `PATH` if needed. A user-writable directory lets `qbitctl update` replace the executable using your regular account.
-
-### Windows
-
-Use PowerShell. Set `$asset` to `qbitctl-windows-arm64.exe` on ARM64.
-
-```powershell
-$repo = 'naterator/qbitctl'
-$tag = gh release view --repo $repo --json tagName --jq .tagName
-if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the release tag' }
-$asset = 'qbitctl-windows-amd64.exe'
-$temp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
-$null = New-Item -ItemType Directory $temp -ErrorAction Stop
-try {
-    gh release download $tag --repo $repo --pattern $asset --pattern "$asset.sha256" --dir $temp
-    if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
-    $binary = Join-Path $temp $asset
-    $expected = ((Get-Content (Join-Path $temp "$asset.sha256") -Raw -ErrorAction Stop).Trim() -split '\s+')[0]
-    if ((Get-FileHash $binary -Algorithm SHA256 -ErrorAction Stop).Hash -ne $expected) { throw 'Checksum mismatch' }
-    gh release verify-asset $tag $binary --repo $repo
-    if ($LASTEXITCODE -ne 0) { throw 'Release attestation verification failed' }
-    $bin = Join-Path $env:LOCALAPPDATA 'Programs\qbitctl'
-    $null = New-Item -ItemType Directory $bin -Force -ErrorAction Stop
-    Copy-Item $binary (Join-Path $bin 'qbitctl.exe') -ErrorAction Stop
-} finally {
-    Remove-Item $temp -Recurse -Force
-}
-```
-
-Add `%LOCALAPPDATA%\Programs\qbitctl` to your user `Path`.
-
-### Updates
+Once installed, keep it up to date with:
 
 ```bash
 qbitctl update
 ```
 
-Self-update checks SHA-256 and verifies the GitHub release attestation using `gh`. The release must be immutable and published with all assets already attached.
+Self-update checks SHA-256 and verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl update`. The release must be immutable and published with all assets already attached. Mutable releases have no release attestation and cannot pass this verification.
 
 ## Build from source
 

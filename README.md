@@ -1,4 +1,4 @@
-# <img src="assets/logo.svg" alt="" width="38" height="38" align="middle"> qbitctl
+# <img src="assets/logo.svg" alt="qbitctl" width="418">
 
 **qbitctl** is an interactive terminal UI, command-line tool, and Go library for controlling qBittorrent through its Web API.
 

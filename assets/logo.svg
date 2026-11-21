@@ -1,6 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-labelledby="title">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 48" width="176" height="48" role="img" aria-labelledby="title">
   <title id="title">qbitctl</title>
-  <rect x="1" y="1" width="46" height="46" rx="8" fill="#1d2531" stroke="#536478" stroke-width="2"/>
+  <rect x="1" y="1" width="174" height="46" rx="8" fill="#1d2531" stroke="#536478" stroke-width="2"/>
   <path fill="#9ac8ff" fill-rule="evenodd" d="M15 9h15v4h4v17H15v-4h-4V13h4zm1 5v11h13V14z"/>
   <path fill="#85d7c8" d="M29 30h5v4h5v3h-4v3h-7v-3h-4v-3h5z"/>
+  <g fill="#9ac8ff" transform="translate(0 5.5)">
+    <!-- b -->
+    <path transform="translate(43)" fill-rule="evenodd" d="M0 8h5v5h12v4h4v9h-4v4H0zm5 9v9h11v-9z"/>
+    <!-- i -->
+    <path transform="translate(68)" d="M2 14h7v12h3v4H0v-4h4v-8H2z"/>
+    <rect x="72" y="7" width="5" height="4" fill="#85d7c8"/>
+    <!-- t -->
+    <path transform="translate(84)" d="M5 7h5v6h7v4h-7v9h7v4H9v-3H5V17H0v-4h5z"/>
+    <!-- c -->
+    <path transform="translate(105)" d="M4 10h15v4H5v12h14v4H4v-4H0V14h4z"/>
+    <!-- t -->
+    <path transform="translate(128)" d="M5 7h5v6h7v4h-7v9h7v4H9v-3H5V17H0v-4h5z"/>
+    <!-- l -->
+    <path transform="translate(151)" d="M2 8h6v18h6v4H6v-3H2z"/>
+  </g>
 </svg>

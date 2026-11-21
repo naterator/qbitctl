@@ -29,10 +29,10 @@ const (
 	defaultConfigURL = "http://localhost:8080"
 	masterKeyService = "qbitctl"
 	masterKeyUser    = "master-key"
-	v1HardcodedKey   = "encv1:40FC81BE491B5946F16245A7C918B59F158D758E"
 )
 
 var errUnsupportedPasswordFormat = errors.New("config file uses an unsupported password format")
+var errReenterEncryptedPassword = fmt.Errorf("%w; run qbitctl config to re-enter credentials", errUnsupportedPasswordFormat)
 var errMacKeychainUnavailable = errors.New("macOS Keychain is unavailable")
 var errMasterKeyUnavailable = errors.New("qbitctl master key is unavailable")
 
@@ -81,11 +81,6 @@ func defaultAuthPath() string {
 	return filepath.Join(base, defaultAuthDir, defaultAuthFile)
 }
 
-func deriveAuthKeyV1() []byte {
-	sum := sha256.Sum256([]byte(v1HardcodedKey))
-	return sum[:]
-}
-
 func getMasterSecret() (string, error) {
 	if s := os.Getenv("QBITCTL_MASTER_KEY"); s != "" {
 		return s, nil
@@ -119,9 +114,7 @@ func getOrCreateMasterKey() ([]byte, string, error) {
 			return nil, "", err
 		}
 	} else if err := masterSecretSet(masterKeyService, masterKeyUser, secret); err != nil {
-		// New saves must never silently fall back to the publicly known v1 key.
-		// Existing v1 credentials remain readable, but callers must provide a
-		// keyring or QBITCTL_MASTER_KEY before saving them in the current format.
+		// New saves must never silently fall back to a predictable encryption key.
 		return nil, "", fmt.Errorf("%w: store qbitctl master key: %v", errMasterKeyUnavailable, err)
 	}
 
@@ -160,27 +153,22 @@ func decryptPassword(value string) (string, error) {
 		return "", fmt.Errorf("invalid encrypted password format")
 	}
 
-	var key []byte
-	switch parts[1] {
-	case "v1":
-		key = deriveAuthKeyV1()
-	case "v2":
-		secret, err := getMasterSecret()
-		if err != nil {
-			return "", fmt.Errorf("failed to retrieve master key from keyring: %w. Set QBITCTL_MASTER_KEY if keyring is unavailable", err)
-		}
-		sum := sha256.Sum256([]byte(secret))
-		key = sum[:]
-	default:
-		return "", fmt.Errorf("unknown encryption version: %s", parts[1])
+	if parts[1] != "v2" {
+		return "", errReenterEncryptedPassword
 	}
+
+	secret, err := getMasterSecret()
+	if err != nil {
+		return "", fmt.Errorf("failed to retrieve master key from keyring: %w. Set QBITCTL_MASTER_KEY if keyring is unavailable", err)
+	}
+	key := sha256.Sum256([]byte(secret))
 
 	nonce, err := hex.DecodeString(parts[2])
 	if err != nil {
 		return "", fmt.Errorf("decode encrypted password nonce: %w", err)
 	}
 
-	block, err := aes.NewCipher(key)
+	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return "", err
 	}
@@ -321,28 +309,6 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 	creds.User = diskConfig.User
 
 	switch value := diskConfig.Password; {
-	case strings.HasPrefix(value, "enc:v1:"):
-		password, err := decryptPassword(value)
-		if err != nil {
-			return Credentials{}, true, err
-		}
-		creds.Pass = password
-		// Migrate only the password field. The conditional update avoids
-		// overwriting newer URL or username credentials written concurrently.
-		encoded, encodeErr := encryptPassword(password)
-		if encodeErr != nil && !isMasterKeyUnavailable(encodeErr) {
-			return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", encodeErr)
-		}
-		if encodeErr == nil {
-			if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
-				return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", migrateErr)
-			}
-		} else if infoOut != nil {
-			fmt.Fprintf(infoOut, "[WARN] Kept legacy encrypted credentials in %s; set QBITCTL_MASTER_KEY or enable the keyring to migrate them to v2.\n", path)
-		}
-		// if infoOut != nil {
-		// 	fmt.Fprintf(infoOut, "[INFO] Migrated v1 encrypted password to latest format in config file: %s\n", path)
-		// }
 	case strings.HasPrefix(value, "enc:v2:"):
 		password, err := decryptPassword(value)
 		if err != nil {
@@ -350,9 +316,7 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 		}
 		creds.Pass = password
 	case strings.HasPrefix(value, "enc:"):
-		// Never reinterpret an unrecognized encrypted value as plaintext.
-		_, err := decryptPassword(value)
-		return Credentials{}, true, err
+		return Credentials{}, true, errReenterEncryptedPassword
 	case looksLikeOpaqueCiphertext(value):
 		return Credentials{}, true, errUnsupportedPasswordFormat
 	default:

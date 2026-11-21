@@ -88,15 +88,11 @@ CI and release packaging run on `ubuntu-26.04`, with a focused `windows-2025` jo
 To publish releases that support verified updates:
 
 1. Enable **Release immutability** in the repository's GitHub settings before publishing new releases.
-2. Create and push a version tag, or manually run **Draft release assets** with an existing tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
+2. Create a signed version tag with `git tag -s` and push it, or manually run **Draft release assets** with an existing signed tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
 3. The workflow waits for the latest push-triggered CI run for the exact release commit to pass before cross-building assets. It checks the native release binary and verifies the tag again before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
 4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation for self-updates.
 
 See GitHub's [immutable release publishing guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). Attaching binaries after publication is incompatible with immutable releases.
-
-### Upgrading from 1.0.2 or 1.0.3
-
-These versions incorrectly add `v` to unprefixed tags before verification, so a release tagged `1.0.3` is looked up as `v1.0.3`. This is fixed in source by preserving the exact published tag for verification. Existing installations can either install a release manually once, or update to a newer **`v`-prefixed immutable release** using their existing update command (`selfupdate` in 1.0.2, `update` in 1.0.3). Renaming a tag alone does not supply the missing release attestation.
 
 ## Project layout
 
@@ -130,7 +126,7 @@ qbitctl needs qBittorrent Web API credentials. It loads the first matching confi
 
 Command-line overrides use `-u/--url`, `-U/--user`, and `-p/--pass`. Supply an explicit password when overriding the URL to point at a different server origin. Server URLs can include a reverse-proxy path prefix. Use an HTTP or HTTPS URL without embedded credentials, a query, or a fragment.
 
-New credential saves use a private master key from the OS keyring or `QBITCTL_MASTER_KEY`. On a headless host, supply a stable secret through the environment before saving credentials and on later runs. Existing plaintext and legacy `enc:v1` passwords remain readable. Once a keyring or master key is available, qbitctl migrates them to `enc:v2` on the next load.
+qbitctl encrypts saved credentials with a private master key from the OS keyring or `QBITCTL_MASTER_KEY`. On a headless host, supply a stable secret through the environment before saving credentials and on later runs. If qbitctl cannot read an existing saved password, run `qbitctl config` to enter it again.
 
 Each authenticated command uses its own Web UI session. qbitctl attempts to
 log out when the command finishes, including after errors or Ctrl-C. A failed

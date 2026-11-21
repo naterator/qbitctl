@@ -213,6 +213,29 @@ func TestConnectAndSaveSetupRequiresPasswordForChangedOrigin(t *testing.T) {
 	}
 }
 
+func TestConnectAndSaveSetupRejectsUnsupportedSavedPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	original := `{"url":"http://old.example","user":"admin","password":"enc:v1:not-decrypted:payload"}`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ConnectAndSaveSetup(context.Background(), path, Credentials{URL: "http://old.example", User: "admin"}, false)
+	if !errors.Is(err, errUnsupportedPasswordFormat) {
+		t.Fatalf("ConnectAndSaveSetup error = %v, want unsupported-password error", err)
+	}
+	if !strings.Contains(err.Error(), "qbitctl config") {
+		t.Fatalf("ConnectAndSaveSetup error = %v, want reconfiguration guidance", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(after) != original {
+		t.Fatalf("unsupported config was rewritten: %s", after)
+	}
+}
+
 func TestConnectAndSaveSetupDoesNotPersistSavedCredentialsAfterConcurrentChange(t *testing.T) {
 	withMockMasterKey(t)
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -276,7 +299,7 @@ func TestInteractiveConfigContextVerifiesAndPreservesProfile(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	path := filepath.Join(t.TempDir(), "selected", "config.json")
-	original := `{"url":"http://old.example","user":"old-user","password":"enc:v1:legacy","ui":{"tui_default":true,"queue":{"sort":"progress-desc"}},"future":{"keep":true}}`
+	original := `{"url":"http://old.example","user":"old-user","password":"enc:v2:legacy","ui":{"tui_default":true,"queue":{"sort":"progress-desc"}},"future":{"keep":true}}`
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

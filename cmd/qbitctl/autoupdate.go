@@ -115,8 +115,7 @@ func (u *githubReleaseUpdater) Run(ctx context.Context, currentVersion string, d
 	}
 
 	fmt.Fprintf(stdout, "Updating qbitctl from %s to %s\n", currentVersionText, latestVersion)
-	// Normalize only for version comparisons and display. GitHub looks up the
-	// exact published tag, so "1.0.3" and "v1.0.3" are different release names.
+	// Use the exact published tag when verifying the release attestation.
 	if err := u.downloadAndReplace(ctx, exePath, release.TagName, binaryAsset.Name, binaryAsset.BrowserDownloadURL, expectedChecksum); err != nil {
 		return err
 	}

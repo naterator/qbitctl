@@ -4,9 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -476,36 +473,31 @@ func TestClientConstructorsRejectNilOptions(t *testing.T) {
 	}
 }
 
-func TestLoadAuthFileMigratesV1ToV2(t *testing.T) {
-	withMockMasterKey(t)
+func TestLoadAuthFileRejectsUnsupportedEncryptedPasswordWithoutDecrypting(t *testing.T) {
+	withUnavailableMasterKey(t)
 	path := filepath.Join(t.TempDir(), "config.json")
-
-	// Manual v1 encryption
-	block, _ := aes.NewCipher(deriveAuthKeyV1())
-	gcm, _ := cipher.NewGCM(block)
-	nonce := make([]byte, gcm.NonceSize())
-	ciphertext := gcm.Seal(nil, nonce, []byte("secret"), nil)
-	v1Value := "enc:v1:" + hex.EncodeToString(nonce) + ":" + hex.EncodeToString(ciphertext)
-
-	content := `{"url":"http://localhost:8080","user":"admin","password":"` + v1Value + `"}`
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+	original := `{"url":"http://localhost:8080","user":"admin","password":"enc:v1:not-decrypted:payload"}`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatalf("write config file failed: %v", err)
 	}
 
-	got, ok, err := loadAuthFile(path, io.Discard)
-	if err != nil {
-		t.Fatalf("loadAuthFile returned error: %v", err)
-	}
+	_, ok, err := loadAuthFile(path, io.Discard)
 	if !ok {
 		t.Fatal("loadAuthFile reported missing file")
 	}
-	if got.Pass != "secret" {
-		t.Fatalf("loadAuthFile decrypted = %q, want secret", got.Pass)
+	if !errors.Is(err, errUnsupportedPasswordFormat) {
+		t.Fatalf("loadAuthFile err = %v, want unsupported-password error", err)
+	}
+	if !strings.Contains(err.Error(), "qbitctl config") {
+		t.Fatalf("loadAuthFile err = %v, want reconfiguration guidance", err)
 	}
 
-	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), `"enc:v2:`) {
-		t.Fatalf("config was not migrated to v2: %s", string(raw))
+	raw, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read config file failed: %v", readErr)
+	}
+	if string(raw) != original {
+		t.Fatalf("legacy config was rewritten: %s", raw)
 	}
 }
 
@@ -517,7 +509,7 @@ func TestLoadAuthFileMissingAndInvalidEncryptedFormats(t *testing.T) {
 	}
 
 	invalid := filepath.Join(t.TempDir(), "invalid-config.json")
-	content := `{"url":"http://localhost:8080","user":"admin","password":"enc:v1:zz:zz"}`
+	content := `{"url":"http://localhost:8080","user":"admin","password":"enc:v3:zz:zz"}`
 	if err := os.WriteFile(invalid, []byte(content), 0o600); err != nil {
 		t.Fatalf("write invalid config file failed: %v", err)
 	}
@@ -544,45 +536,6 @@ func TestDecryptPasswordRejectsMalformedNonceWithoutPanicking(t *testing.T) {
 				t.Fatalf("decryptPassword(%q) error = %v, want nonce error", value, err)
 			}
 		})
-	}
-}
-
-func TestLoadAuthFileReadsLegacyCredentialsWithoutKeyringAndDoesNotRewrite(t *testing.T) {
-	withUnavailableMasterKey(t)
-	path := filepath.Join(t.TempDir(), "config.json")
-	block, err := aes.NewCipher(deriveAuthKeyV1())
-	if err != nil {
-		t.Fatalf("aes.NewCipher returned error: %v", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("cipher.NewGCM returned error: %v", err)
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	ciphertext := gcm.Seal(nil, nonce, []byte("secret"), nil)
-	v1Value := "enc:v1:" + hex.EncodeToString(nonce) + ":" + hex.EncodeToString(ciphertext)
-	original := `{"url":"http://localhost:8080","user":"admin","password":"` + v1Value + `"}`
-	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
-		t.Fatalf("write config file failed: %v", err)
-	}
-
-	var info strings.Builder
-	got, ok, err := loadAuthFile(path, &info)
-	if err != nil {
-		t.Fatalf("loadAuthFile returned error: %v", err)
-	}
-	if !ok || got != (Credentials{URL: "http://localhost:8080", User: "admin", Pass: "secret"}) {
-		t.Fatalf("loadAuthFile = %#v, %v", got, ok)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read config file failed: %v", err)
-	}
-	if string(after) != original {
-		t.Fatalf("legacy config was rewritten without a keyring: %s", after)
-	}
-	if !strings.Contains(info.String(), "QBITCTL_MASTER_KEY") {
-		t.Fatalf("migration hint = %q, want QBITCTL_MASTER_KEY guidance", info.String())
 	}
 }
 

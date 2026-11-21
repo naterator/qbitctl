@@ -283,11 +283,13 @@ func readSavedPassword(path string) (string, string, *setupAuthSnapshot, error) 
 		url:      savedURLRaw,
 		password: append(json.RawMessage(nil), value...),
 	}
-	if strings.HasPrefix(password, "enc:v1:") || strings.HasPrefix(password, "enc:v2:") {
+	if strings.HasPrefix(password, "enc:v2:") {
 		password, err = decryptPassword(password)
 		if err != nil {
 			return "", "", nil, errors.New("saved password could not be decrypted")
 		}
+	} else if strings.HasPrefix(password, "enc:") {
+		return "", "", nil, errReenterEncryptedPassword
 	} else if looksLikeOpaqueCiphertext(password) {
 		return "", "", nil, errUnsupportedPasswordFormat
 	}

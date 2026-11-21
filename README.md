@@ -49,7 +49,7 @@ Once installed, keep it up to date with:
 qbitctl update
 ```
 
-Self-update checks SHA-256 and verifies the downloaded release asset with GitHub release attestations using the GitHub CLI (`gh`). Install `gh` before using `qbitctl update`. The release must be immutable and published with all assets already attached. Mutable releases have no release attestation and cannot pass this verification.
+qbitctl checks the SHA-256 checksum and verifies GitHub's signed release attestation before replacing the executable. Self-update works without a separate CLI or sign-in. The release must be immutable and published with all assets already attached.
 
 ## Build from source
 
@@ -90,7 +90,7 @@ To publish releases that support verified updates:
 1. Enable **Release immutability** in the repository's GitHub settings before publishing new releases.
 2. Create and push a version tag, or manually run **Draft release assets** with an existing tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
 3. The workflow waits for the latest push-triggered CI run for the exact release commit to pass before cross-building assets. It checks the native release binary and verifies the tag again before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
-4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation. Check a downloaded asset with `gh release verify-asset <exact-tag> <asset-path> --repo naterator/qbitctl`.
+4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation for self-updates.
 
 See GitHub's [immutable release publishing guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). Attaching binaries after publication is incompatible with immutable releases.
 

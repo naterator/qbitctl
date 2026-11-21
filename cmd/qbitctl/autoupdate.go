@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -18,7 +17,7 @@ import (
 	"time"
 )
 
-const githubLatestReleaseURL = "https://api.github.com/repos/naterator/qbitctl/releases/latest"
+const githubLatestReleaseURL = githubReleaseAPI + "/releases/latest"
 
 type releaseUpdater interface {
 	Run(ctx context.Context, currentVersion string, dryRun bool, stdout io.Writer) error
@@ -53,7 +52,6 @@ func newDefaultReleaseUpdater() releaseUpdater {
 		},
 		latestReleaseURL: githubLatestReleaseURL,
 		executablePath:   os.Executable,
-		verifyAsset:      verifyGitHubReleaseAsset,
 		goos:             runtime.GOOS,
 		goarch:           runtime.GOARCH,
 	}
@@ -210,12 +208,14 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 		return fmt.Errorf("checksum mismatch for downloaded binary: got %s want %s", actualChecksum, expectedChecksum)
 	}
 
-	verifyAsset := u.verifyAsset
-	if verifyAsset == nil {
-		verifyAsset = verifyGitHubReleaseAsset
+	var verificationErr error
+	if u.verifyAsset == nil {
+		verificationErr = u.verifyReleaseAttestation(ctx, releaseTag, assetName, actualChecksum)
+	} else {
+		verificationErr = u.verifyAsset(ctx, releaseTag, tempPath)
 	}
-	if err := verifyAsset(ctx, releaseTag, tempPath); err != nil {
-		return fmt.Errorf("verify release asset attestation: %w", err)
+	if verificationErr != nil {
+		return fmt.Errorf("verify release asset attestation: %w", verificationErr)
 	}
 
 	mode := info.Mode().Perm()
@@ -249,19 +249,6 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	}
 	_ = os.RemoveAll(tempDir)
 	removeTemp = false
-	return nil
-}
-
-func verifyGitHubReleaseAsset(ctx context.Context, releaseTag, filePath string) error {
-	cmd := exec.CommandContext(ctx, "gh", "release", "verify-asset", releaseTag, filePath, "--repo", "naterator/qbitctl")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		return fmt.Errorf("release %q: %s. Verification requires GitHub CLI with release verify-asset support and an immutable release published with all assets attached", releaseTag, message)
-	}
 	return nil
 }
 

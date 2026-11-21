@@ -48,10 +48,10 @@ func (m *model) setQueueSort(order queueSort) {
 		m.queueSort = order
 		m.rebuildQueue()
 	}
-	if m.queuePreferencesFile == "" {
+	if m.preferencesPath == "" {
 		return
 	}
-	if err := saveQueuePreferences(m.queuePreferencesFile, order); err != nil {
+	if err := saveQueuePreferences(m.preferencesPath, order); err != nil {
 		m.notice, m.failed = "Could not save queue sort. "+err.Error(), true
 		return
 	}

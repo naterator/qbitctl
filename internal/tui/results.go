@@ -84,7 +84,7 @@ func (m *model) setResultSort(order resultSort) {
 	}
 	m.resultSort = order
 	m.rebuildSearchResults()
-	m.persistSearchPreferences()
+	m.persistSearchPreferences(order, nil)
 }
 
 type resultBound struct {
@@ -113,25 +113,15 @@ func (m *model) clearResultFilter() {
 	hadBounds := m.resultFilter.numeric().active()
 	m.setResultFilter(resultFilter{})
 	if hadBounds {
-		m.persistSearchPreferences()
+		m.persistSearchPreferences("", &m.resultFilter)
 	}
 }
 
-func (m *model) loadSearchPreferences(path string) {
-	m.searchPreferencesFile = path
-	order, filter, err := loadSearchPreferences(path)
-	if err != nil {
-		m.notice = "Could not load search preferences. " + err.Error()
+func (m *model) persistSearchPreferences(order resultSort, filter *resultFilter) {
+	if m.preferencesPath == "" {
 		return
 	}
-	m.resultSort, m.resultFilter = order, filter
-}
-
-func (m *model) persistSearchPreferences() {
-	if m.searchPreferencesFile == "" {
-		return
-	}
-	if err := saveSearchPreferences(m.searchPreferencesFile, m.resultSort, m.resultFilter); err != nil {
+	if err := saveSearchPreferences(m.preferencesPath, order, filter); err != nil {
 		m.notice, m.failed = "Could not save search preferences. "+err.Error(), true
 		return
 	}
@@ -217,6 +207,7 @@ func (m *model) startResultFilter() tea.Cmd {
 		input := textinput.New()
 		input.Prompt = ""
 		input.Placeholder = field.placeholder
+		input.SetStyles(viewInputStyle(viewFieldColor))
 		input.SetValue(values[i])
 		editor.inputs[i] = input
 	}
@@ -242,7 +233,7 @@ func (m *model) updateResultFilter(msg tea.Msg) tea.Cmd {
 				changedBounds := m.resultFilter.numeric() != editor.previous.numeric()
 				m.resultEditor = nil
 				if changedBounds {
-					m.persistSearchPreferences()
+					m.persistSearchPreferences("", &m.resultFilter)
 				}
 			}
 			return nil

@@ -3,7 +3,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,7 +41,7 @@ func TestTUIPreferencesDirUsesHomeWhenXDGIsUnset(t *testing.T) {
 }
 
 func TestLoadSearchPreferencesMissingDefaults(t *testing.T) {
-	order, filter, err := loadSearchPreferences(filepath.Join(t.TempDir(), "missing.json"))
+	order, filter, err := loadSearchPreferences(filepath.Join(t.TempDir(), "config.json"))
 	if err != nil {
 		t.Fatalf("loadSearchPreferences returned error for missing file: %v", err)
 	}
@@ -56,14 +55,14 @@ func TestLoadSearchPreferencesCorruptAndInvalidData(t *testing.T) {
 		name string
 		data string
 	}{
-		{name: "malformed JSON", data: `{"sort":`},
-		{name: "unknown sort", data: `{"sort":"not-a-sort"}`},
-		{name: "invalid seeders", data: `{"sort":"size-desc","min_seeders":"-1"}`},
-		{name: "invalid range", data: `{"sort":"size-desc","min_size":"4 GiB","max_size":"2 GiB"}`},
+		{name: "malformed JSON", data: `{"ui":{"search":{"sort":`},
+		{name: "unknown sort", data: `{"ui":{"search":{"sort":"not-a-sort"}}}`},
+		{name: "invalid seeders", data: `{"ui":{"search":{"sort":"size-desc","min_seeders":"-1"}}}`},
+		{name: "invalid range", data: `{"ui":{"search":{"sort":"size-desc","min_size":"4 GiB","max_size":"2 GiB"}}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "tui-search.json")
+			path := filepath.Join(t.TempDir(), "config.json")
 			if err := os.WriteFile(path, []byte(tt.data), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -79,8 +78,8 @@ func TestLoadSearchPreferencesCorruptAndInvalidData(t *testing.T) {
 }
 
 func TestLoadSearchPreferencesOptionalFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tui-search.json")
-	if err := os.WriteFile(path, []byte(`{"sort":"size-asc"}`), 0o600); err != nil {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"ui":{"search":{"sort":"size-asc"}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,12 +93,12 @@ func TestLoadSearchPreferencesOptionalFields(t *testing.T) {
 }
 
 func TestSearchPreferencesRoundTripExcludesQuery(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "tui-search.json")
+	path := filepath.Join(t.TempDir(), "nested", "config.json")
 	filter, err := parseResultFilter([len(resultFilterFields)]string{"Ubuntu 24.04", "25", "500 MB", "4 GiB"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := saveSearchPreferences(path, resultSeedersDesc, filter); err != nil {
+	if err := saveSearchPreferences(path, resultSeedersDesc, &filter); err != nil {
 		t.Fatalf("saveSearchPreferences returned error: %v", err)
 	}
 
@@ -125,15 +124,11 @@ func TestSearchPreferencesRoundTripExcludesQuery(t *testing.T) {
 	if strings.Contains(string(disk), "Ubuntu 24.04") || strings.Contains(string(disk), "query") {
 		t.Fatalf("saved preferences leaked query: %s", disk)
 	}
-	var fields map[string]any
-	if err := json.Unmarshal(disk, &fields); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := fields["sort"]; !ok {
-		t.Fatalf("saved preferences omitted sort: %s", disk)
+	if got := configStringField(t, disk, "ui", "search", "sort"); got != string(resultSeedersDesc) {
+		t.Fatalf("saved preferences omitted search sort: %s", disk)
 	}
 	for _, field := range []string{"min_seeders", "min_size", "max_size"} {
-		if _, ok := fields[field]; !ok {
+		if !configHasField(t, disk, "ui", "search", field) {
 			t.Fatalf("saved preferences omitted %s: %s", field, disk)
 		}
 	}
@@ -163,8 +158,8 @@ func TestSaveSearchPreferencesPreservesExistingDirectoryMode(t *testing.T) {
 	if err := os.Chmod(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "tui-search.json")
-	if err := saveSearchPreferences(path, resultOriginal, resultFilter{}); err != nil {
+	path := filepath.Join(dir, "config.json")
+	if err := saveSearchPreferences(path, resultOriginal, &resultFilter{}); err != nil {
 		t.Fatalf("saveSearchPreferences returned error: %v", err)
 	}
 	info, err := os.Stat(dir)
@@ -177,14 +172,15 @@ func TestSaveSearchPreferencesPreservesExistingDirectoryMode(t *testing.T) {
 }
 
 func TestSaveSearchPreferencesRejectsInvalidValues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "tui-search.json")
-	if err := saveSearchPreferences(path, resultSort("unknown"), resultFilter{}); err == nil {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := saveSearchPreferences(path, resultSort("unknown"), nil); err == nil {
 		t.Fatal("saveSearchPreferences accepted an unknown sort")
 	}
-	if err := saveSearchPreferences(path, resultOriginal, resultFilter{
+	invalid := resultFilter{
 		minSize: resultBound{text: "4 GiB", value: 4 << 30},
 		maxSize: resultBound{text: "2 GiB", value: 2 << 30},
-	}); err == nil {
+	}
+	if err := saveSearchPreferences(path, resultOriginal, &invalid); err == nil {
 		t.Fatal("saveSearchPreferences accepted an invalid range")
 	}
 }

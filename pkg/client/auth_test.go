@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/hex"
@@ -186,6 +187,160 @@ func TestLoadAuthFileMigratesPlaintextPasswordToEncryptedConfig(t *testing.T) {
 	}
 	if disk.Password == "secret" {
 		t.Fatal("password remained in cleartext on disk")
+	}
+}
+
+func TestAuthWritesPreserveUIAndUnknownConfigFields(t *testing.T) {
+	withMockMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := `{"url":"http://localhost:8080","user":"admin","password":"secret","ui":{"queue":{"sort":"progress-desc"}},"future":{"enabled":true}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config file failed: %v", err)
+	}
+
+	if err := saveAuthFile(path, Credentials{URL: "http://new-host:8080", User: "new-user", Pass: "new-secret"}); err != nil {
+		t.Fatalf("saveAuthFile returned error: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config file failed: %v", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("saved config is not valid JSON: %v", err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, object["ui"]); err != nil {
+		t.Fatalf("decode saved ui settings: %v", err)
+	}
+	if compact.String() != `{"queue":{"sort":"progress-desc"}}` {
+		t.Fatalf("saveAuthFile replaced ui settings: %s", object["ui"])
+	}
+	compact.Reset()
+	if err := json.Compact(&compact, object["future"]); err != nil {
+		t.Fatalf("decode saved unknown fields: %v", err)
+	}
+	if compact.String() != `{"enabled":true}` {
+		t.Fatalf("saveAuthFile dropped unknown fields: %s", object["future"])
+	}
+
+	if _, _, err := loadAuthFile(path, io.Discard); err != nil {
+		t.Fatalf("loadAuthFile returned error: %v", err)
+	}
+	raw, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated config failed: %v", err)
+	}
+	var migrated map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &migrated); err != nil {
+		t.Fatalf("migrated config is not valid JSON: %v", err)
+	}
+	compact.Reset()
+	if err := json.Compact(&compact, migrated["ui"]); err != nil {
+		t.Fatalf("decode migrated ui settings: %v", err)
+	}
+	if compact.String() != `{"queue":{"sort":"progress-desc"}}` {
+		t.Fatalf("password migration replaced ui settings: %s", migrated["ui"])
+	}
+	compact.Reset()
+	if err := json.Compact(&compact, migrated["future"]); err != nil {
+		t.Fatalf("decode migrated unknown fields: %v", err)
+	}
+	if compact.String() != `{"enabled":true}` {
+		t.Fatalf("password migration dropped unknown fields: %s", migrated["future"])
+	}
+}
+
+func TestLoadAuthFileAcceptsMixedCaseAuthFieldsAndMigratesPassword(t *testing.T) {
+	withMockMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	content := `{"URL":"http://localhost:8080","User":"admin","Password":"secret","ui":{"queue":{"sort":"name-asc"}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write config file failed: %v", err)
+	}
+	got, ok, err := loadAuthFile(path, io.Discard)
+	if err != nil || !ok {
+		t.Fatalf("loadAuthFile = %#v, %v, %v", got, ok, err)
+	}
+	if got != (Credentials{URL: "http://localhost:8080", User: "admin", Pass: "secret"}) {
+		t.Fatalf("mixed-case credentials = %#v", got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read migrated config failed: %v", err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("migrated config is not valid JSON: %v", err)
+	}
+	// Password migration is intentionally conditional and only rewrites the
+	// password field. Rewriting URL/user here could clobber newer credentials
+	// written after the initial read. The decoder still accepts encoding/json's
+	// case-insensitive legacy field spellings, and the migrated password uses
+	// the canonical key.
+	if _, ok := object["password"]; !ok {
+		t.Fatalf("migrated config missing canonical password: %s", raw)
+	}
+	if _, ok := object["Password"]; ok {
+		t.Fatalf("migrated config retained mixed-case Password: %s", raw)
+	}
+	for _, key := range []string{"URL", "User"} {
+		if _, ok := object[key]; !ok {
+			t.Fatalf("password-only migration unexpectedly rewrote %s: %s", key, raw)
+		}
+	}
+	for _, key := range []string{"url", "user"} {
+		if _, ok := object[key]; ok {
+			t.Fatalf("password-only migration added duplicate canonical %s: %s", key, raw)
+		}
+	}
+}
+
+func TestPasswordMigrationDoesNotReplaceNewerPassword(t *testing.T) {
+	withMockMasterKey(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"url":"http://localhost:8080","user":"admin","password":"newer"}`), 0o600); err != nil {
+		t.Fatalf("write config file failed: %v", err)
+	}
+	encoded, err := encryptPassword("old")
+	if err != nil {
+		t.Fatalf("encryptPassword returned error: %v", err)
+	}
+	if err := migratePassword(path, "old", encoded); err != nil {
+		t.Fatalf("migratePassword returned error: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config file failed: %v", err)
+	}
+	if strings.Contains(string(raw), encoded) || !strings.Contains(string(raw), `"password":"newer"`) {
+		t.Fatalf("migration replaced newer password: %s", raw)
+	}
+}
+
+func TestInitAuthWithPathReportsSelectedOrDefaultConfigPath(t *testing.T) {
+	withMockMasterKey(t)
+	tmp := t.TempDir()
+	withWorkingDirectory(t, tmp)
+	withHomeDirectory(t, filepath.Join(tmp, "home"))
+
+	path := filepath.Join(tmp, "selected.json")
+	creds := Credentials{URL: "http://selected:8080", User: "user", Pass: "secret"}
+	if err := saveAuthFile(path, creds); err != nil {
+		t.Fatalf("saveAuthFile returned error: %v", err)
+	}
+	got, selected, err := initAuthWithPath(Options{ConfigPath: path}, io.Discard)
+	if err != nil || got != creds || selected != path {
+		t.Fatalf("explicit config selection = %#v, %q, %v", got, selected, err)
+	}
+
+	cli := Credentials{URL: "http://cli:8080", User: "cli", Pass: "secret"}
+	got, selected, err = initAuthWithPath(Options{URL: cli.URL, User: cli.User, Pass: cli.Pass}, io.Discard)
+	if err != nil || got != cli {
+		t.Fatalf("CLI config selection = %#v, %q, %v", got, selected, err)
+	}
+	if selected != defaultAuthPath() {
+		t.Fatalf("CLI default config path = %q, want %q", selected, defaultAuthPath())
 	}
 }
 

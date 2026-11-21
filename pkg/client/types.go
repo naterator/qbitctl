@@ -83,9 +83,23 @@ type Client struct {
 type App struct {
 	client *Client
 	creds  Credentials
-	Stdout io.Writer
-	Stderr io.Writer
-	Ctx    context.Context
+	// configPath is the file selected while resolving credentials. It remains
+	// useful to callers even when credentials came from command-line flags and
+	// no file existed yet, in which case it points at the default save target.
+	configPath string
+	Stdout     io.Writer
+	Stderr     io.Writer
+	Ctx        context.Context
+}
+
+// ConfigPath returns the config file selected for this authenticated app.
+// The path is also populated when credentials were supplied entirely through
+// flags, so a caller can persist UI preferences beside the auth config.
+func (a *App) ConfigPath() string {
+	if a == nil {
+		return ""
+	}
+	return a.configPath
 }
 
 type Options struct {

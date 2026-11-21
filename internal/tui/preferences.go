@@ -3,11 +3,14 @@
 package tui
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/naterator/qbitctl/internal/configfile"
 )
 
 func tuiPreferencesDir() (string, error) {
@@ -17,66 +20,177 @@ func tuiPreferencesDir() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("find home directory: %w", err)
 		}
-		if home == "" {
-			return "", errors.New("home directory is empty")
-		}
 		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, "qbitctl"), nil
 }
 
-func readPreferences(path string, disk any) error {
-	data, err := os.ReadFile(path)
+func (m *model) loadPreferences(path string) {
+	m.preferencesPath = path
+	if path == "" {
+		return
+	}
+	if dir, err := tuiPreferencesDir(); err == nil && usesDefaultPreferences(path, dir) {
+		m.preferenceNotice(migratePreferences(path, dir))
+	}
+	order, err := loadQueuePreferences(path)
+	m.queueSort = order
+	if err != nil {
+		m.preferenceNotice(fmt.Errorf("queue preferences: %w", err))
+	}
+	sortOrder, filter, err := loadSearchPreferences(path)
+	m.resultSort, m.resultFilter = sortOrder, filter
+	if err != nil {
+		m.preferenceNotice(fmt.Errorf("search preferences: %w", err))
+	}
+	m.loadTheme(path)
+}
+
+func usesDefaultPreferences(path, dir string) bool {
+	active, activeErr := filepath.Abs(path)
+	primary, primaryErr := filepath.Abs(filepath.Join(dir, "config.json"))
+	if activeErr != nil || primaryErr != nil {
+		return false
+	}
+	if active == primary {
+		return true
+	}
+	local, localErr := filepath.Abs("config.json")
+	if localErr != nil || active != local {
+		return false
+	}
+	_, err := os.Stat(primary)
+	return errors.Is(err, os.ErrNotExist)
+}
+
+func (m *model) preferenceNotice(err error) {
+	if err != nil {
+		if m.notice != "" {
+			m.notice += " · "
+		}
+		m.notice += err.Error()
+		m.failed = true
+	}
+}
+
+func readPreferences(path, section string) (json.RawMessage, error) {
+	root, err := configfile.Read(path)
+	if err != nil {
+		return nil, err
+	}
+	ui, err := root.Child("ui")
+	if err != nil {
+		return nil, err
+	}
+	return ui[section], nil
+}
+
+func updatePreferences(path, section string, edit func(configfile.Object) (bool, error)) error {
+	return configfile.Update(path, func(root configfile.Object) (bool, error) {
+		ui, err := root.Child("ui")
+		if err != nil {
+			return false, err
+		}
+		fields, err := ui.Child(section)
+		if err != nil {
+			return false, err
+		}
+		changed, err := edit(fields)
+		if err != nil || !changed {
+			return false, err
+		}
+		update, err := json.Marshal(fields)
+		if err != nil {
+			return false, err
+		}
+		ui[section] = update
+		root["ui"], err = json.Marshal(ui)
+		return err == nil, err
+	})
+}
+
+func writePreferences(path, section string, values map[string]string) error {
+	return updatePreferences(path, section, func(fields configfile.Object) (bool, error) {
+		changed := false
+		for key, value := range values {
+			raw, _ := json.Marshal(value)
+			if !bytes.Equal(fields[key], raw) {
+				fields[key] = raw
+				changed = true
+			}
+		}
+		return changed, nil
+	})
+}
+
+func migratePreferences(path, legacyDir string) error {
+	return errors.Join(
+		migratePreferenceFile(path, "queue", filepath.Join(legacyDir, queuePreferencesFileName),
+			func(raw json.RawMessage) error {
+				_, err := decodeQueuePreferences(raw)
+				return err
+			}),
+		migratePreferenceFile(path, "search", filepath.Join(legacyDir, searchPreferencesFileName),
+			func(raw json.RawMessage) error {
+				_, _, err := decodeSearchPreferences(raw)
+				return err
+			}),
+	)
+}
+
+func migratePreferenceFile(path, section, legacyPath string, validate func(json.RawMessage) error) error {
+	before, err := os.ReadFile(legacyPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read preferences: %w", err)
+		return fmt.Errorf("read %s: %w", filepath.Base(legacyPath), err)
 	}
-	if err := json.Unmarshal(data, disk); err != nil {
-		return fmt.Errorf("decode preferences: %w", err)
+	var legacy configfile.Object
+	if err := json.Unmarshal(before, &legacy); err != nil {
+		return fmt.Errorf("decode %s: %w", filepath.Base(legacyPath), err)
 	}
-	return nil
+	if legacy == nil {
+		return fmt.Errorf("%s must contain a JSON object", filepath.Base(legacyPath))
+	}
+	if err := validate(before); err != nil {
+		return fmt.Errorf("invalid %s: %w", filepath.Base(legacyPath), err)
+	}
+
+	if err := updatePreferences(path, section, func(fields configfile.Object) (bool, error) {
+		changed := false
+		for key, value := range legacy {
+			if _, exists := fields[key]; !exists {
+				fields[key] = value
+				changed = true
+			}
+		}
+		merged, err := json.Marshal(fields)
+		if err != nil {
+			return false, err
+		}
+		return changed, validate(merged)
+	}); err != nil {
+		return fmt.Errorf("migrate %s: %w", filepath.Base(legacyPath), err)
+	}
+
+	return removeMigratedPreferences(legacyPath, before)
 }
 
-func writePreferences(path string, disk any) error {
-	if path == "" {
-		return errors.New("invalid preferences path")
+func removeMigratedPreferences(path string, migrated []byte) error {
+	// A previous release may still have this file open for writes.
+	current, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	data, err := json.MarshalIndent(disk, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode preferences: %w", err)
+		return fmt.Errorf("verify migrated %s: %w", filepath.Base(path), err)
 	}
-	data = append(data, '\n')
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create preferences directory: %w", err)
+	if !bytes.Equal(current, migrated) {
+		return fmt.Errorf("%s changed during migration", filepath.Base(path))
 	}
-
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create preferences temporary file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("protect preferences temporary file: %w", err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write preferences: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("sync preferences: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close preferences temporary file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace preferences: %w", err)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove migrated %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }

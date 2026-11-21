@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ const (
 	queuePage page = iota
 	searchPage
 	serverPage
+	configPage
 	pageCount
 )
 
@@ -33,6 +33,7 @@ const (
 	serverWork
 	detailWork
 	actionWork
+	configWork
 )
 
 type service interface {
@@ -44,26 +45,36 @@ type service interface {
 }
 
 type workDone struct {
-	kind    workKind
-	queue   []client.TorrentInfo
-	results []client.SearchResult
-	rows    []detailRow
-	title   string
-	notice  string
-	err     error
+	kind       workKind
+	queue      []client.TorrentInfo
+	results    []client.SearchResult
+	rows       []detailRow
+	title      string
+	notice     string
+	app        *client.App
+	setup      setupState
+	setDefault *bool
+	err        error
 }
 
 type refreshTick struct{}
 
 type model struct {
-	ctx                   context.Context
-	backend               service
-	workers               sync.WaitGroup
-	cancel                context.CancelFunc
-	work                  workKind
-	quitting              bool
-	searchPreferencesFile string
-	queuePreferencesFile  string
+	ctx             context.Context
+	backend         service
+	app             *client.App
+	ownsApp         bool
+	workers         sync.WaitGroup
+	pendingMu       sync.Mutex
+	pendingApps     []*client.App
+	cancel          context.CancelFunc
+	work            workKind
+	quitting        bool
+	preferencesPath string
+	configPath      string
+	setup           setupState
+	theme           themeID
+	themePreview    themeID
 
 	page          page
 	width, height int
@@ -95,6 +106,7 @@ func newModel(ctx context.Context, backend service) *model {
 		marked: make(map[string]bool), stateFilter: "all",
 		queueSort: queueActiveFirst, resultSort: resultOriginal,
 		searchPlugin: "jackett", searchTimeout: 30 * time.Second,
+		theme: defaultThemeID,
 	}
 }
 
@@ -102,21 +114,21 @@ func newModel(ctx context.Context, backend service) *model {
 func Run(ctx context.Context, app *client.App, input io.Reader, output io.Writer) error {
 	sessionCtx, stop := context.WithCancel(ctx)
 	m := newModel(sessionCtx, &tuiClient{app: app})
-	dir, err := tuiPreferencesDir()
-	if err != nil {
-		m.notice = "TUI preferences are unavailable. " + err.Error()
-	} else {
-		m.loadSearchPreferences(filepath.Join(dir, searchPreferencesFileName))
-		m.loadQueuePreferences(filepath.Join(dir, queuePreferencesFileName))
-	}
+	m.app, m.configPath = app, app.ConfigPath()
+	m.loadPreferences(m.configPath)
+	m.loadSetup(client.Options{ConfigPath: m.configPath})
 	defer func() {
 		stop()
 		// A canceled search still needs time to delete its remote job before
 		// the caller logs out the session.
 		m.workers.Wait()
+		m.cleanupPendingApps()
+		if m.ownsApp && m.app != nil {
+			m.app.Logout()
+		}
 	}()
 	program := tea.NewProgram(m, tea.WithContext(sessionCtx), tea.WithoutSignalHandler(), tea.WithInput(input), tea.WithOutput(output))
-	_, err = program.Run()
+	_, err := program.Run()
 	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
 		return nil
 	}
@@ -143,7 +155,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workDone:
 		return m, m.finishWork(msg)
 	case refreshTick:
-		if m.busy == "" && m.dialog == nil && m.page != searchPage && !m.quitting {
+		if m.busy == "" && m.dialog == nil && m.page != searchPage && m.page != configPage && !m.quitting {
 			return m, tea.Batch(m.refresh(), nextTick())
 		}
 		return m, nextTick()
@@ -185,6 +197,8 @@ func (m *model) handleKey(key string) tea.Cmd {
 		return m.goTo(searchPage)
 	case "3":
 		return m.goTo(serverPage)
+	case "4":
+		return m.goTo(configPage)
 	case "ctrl+p", ":":
 		return m.openAction("palette")
 	case "?":
@@ -230,9 +244,22 @@ func (m *model) handleKey(key string) tea.Cmd {
 			}
 			return m.openAction("search")
 		}
+		if m.page == configPage {
+			m.openConfigDialog()
+			return nil
+		}
 		if len(m.serverRows) > 0 {
 			m.openDetailDialog("Server & transfers", m.serverRows)
 		}
+	}
+	if m.page == configPage {
+		if key == "d" {
+			return m.toggleTUIDefault()
+		}
+		if key == "c" {
+			return m.openThemePicker()
+		}
+		return nil
 	}
 	if m.page == searchPage {
 		switch key {
@@ -282,6 +309,11 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 		defer m.workers.Done()
 		defer cancel()
 		result := task(ctx)
+		if result.app != nil {
+			m.pendingMu.Lock()
+			m.pendingApps = append(m.pendingApps, result.app)
+			m.pendingMu.Unlock()
+		}
 		result.kind = kind
 		done <- result
 	}()
@@ -291,9 +323,17 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 func (m *model) finishWork(done workDone) tea.Cmd {
 	m.cancel, m.busy = nil, ""
 	if m.quitting {
+		m.releasePendingApp(done.app)
+		if done.app != nil {
+			done.app.Logout()
+		}
 		return tea.Quit
 	}
+	m.releasePendingApp(done.app)
 	if done.err != nil {
+		if done.app != nil {
+			done.app.Logout()
+		}
 		m.notice, m.failed = done.err.Error(), true
 		return nil
 	}
@@ -315,6 +355,27 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		if m.page == queuePage {
 			return m.refresh()
 		}
+	case configWork:
+		if done.setDefault != nil {
+			m.setup.tuiDefault = *done.setDefault
+			m.notice, m.failed = "TUI startup preference saved", false
+		}
+		if done.app != nil {
+			if m.app != nil && m.app != done.app {
+				// No request worker can be active while the config dialog is
+				// submitted. Release the old Web UI session before replacing it.
+				m.app.Logout()
+			}
+			m.app, m.ownsApp = done.app, true
+			m.backend = &tuiClient{app: done.app}
+			m.configPath = done.setup.path
+			m.setup = done.setup
+			m.resetRemoteState()
+			m.loadPreferences(m.configPath)
+			m.page = queuePage
+			m.notice, m.failed = "Configuration saved · reconnecting", false
+			return m.refresh()
+		}
 	}
 	if (m.page == serverPage && done.kind != serverWork && m.serverRows == nil) ||
 		(m.page == queuePage && done.kind != queueWork && m.allTorrents == nil) {
@@ -323,8 +384,37 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	return nil
 }
 
+func (m *model) releasePendingApp(app *client.App) {
+	if app == nil {
+		return
+	}
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	for i, pending := range m.pendingApps {
+		if pending == app {
+			m.pendingApps = append(m.pendingApps[:i], m.pendingApps[i+1:]...)
+			return
+		}
+	}
+}
+
+func (m *model) cleanupPendingApps() {
+	m.pendingMu.Lock()
+	pending := append([]*client.App(nil), m.pendingApps...)
+	m.pendingApps = nil
+	m.pendingMu.Unlock()
+	for _, app := range pending {
+		if app != nil {
+			app.Logout()
+		}
+	}
+}
+
 func (m *model) refresh() tea.Cmd {
 	if m.busy != "" {
+		return nil
+	}
+	if m.backend == nil {
 		return nil
 	}
 	switch m.page {
@@ -338,6 +428,8 @@ func (m *model) refresh() tea.Cmd {
 			return m.openAction("search")
 		}
 		return m.launchSearch(m.query, m.searchPlugin, m.searchTimeout)
+	case configPage:
+		return nil
 	default:
 		return m.startWork(queueWork, "Refreshing queue", func(ctx context.Context) workDone {
 			torrents, err := m.backend.queue(ctx)
@@ -348,7 +440,7 @@ func (m *model) refresh() tea.Cmd {
 
 func (m *model) goTo(next page) tea.Cmd {
 	m.page = next
-	if next == searchPage {
+	if next == searchPage || next == configPage || m.backend == nil {
 		return nil
 	}
 	return m.refresh()

@@ -367,18 +367,35 @@ def main():
         recording = None
         try:
             recording = Recording(binary, base, server.server_address[1])
-            recording.wait("QUEUE")
+            recording.wait("Ubuntu 24.04 LTS")
             recording.hold(1.6)
 
-            # Queue overview and the detail panel.
+            recording.key(b"?", "Keyboard shortcuts")
+            recording.hold(1.4)
+            recording.key(b"escape")
+            recording.key(b"\x10", "Command palette")
+            recording.hold(1.3)
+            recording.type_text("sort queue")
+            recording.hold(0.8)
+            recording.key(b"escape")
+
+            # Open Config and preview a color scheme without saving it.
+            recording.key(b"4", "Color scheme")
+            recording.key(b"c", "Color scheme")
+            recording.key(b"down")
+            recording.hold(1.0)
+            recording.key(b"escape")
+            recording.key(b"1")
+
+            # Inspect the selected transfer.
             recording.key(b"enter", "Full Path")
             recording.hold(0.8)
-            recording.key(b"escape", "QUEUE")
+            recording.key(b"escape")
             recording.hold(0.5)
 
             # Search Jackett for Ubuntu, sort locally, then filter the loaded
             # rows without issuing another search.
-            recording.key(b"2", "SEARCH")
+            recording.key(b"2", "Search results")
             recording.key(b"/", "Search Jackett")
             recording.type_text("Ubuntu 24.04")
             recording.key(b"enter", "Ready")

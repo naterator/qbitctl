@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -51,10 +52,10 @@ func TestNewSearchCarriesSortAndBounds(t *testing.T) {
 }
 
 func TestSearchPreferencesSaveOnlyCommittedBounds(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "qbitctl", "tui-search.json")
+	path := filepath.Join(t.TempDir(), "qbitctl", "config.json")
 	m := newModel(t.Context(), nil)
 	m.page = searchPage
-	m.loadSearchPreferences(path)
+	m.loadPreferences(path)
 	m.setResultSort(resultSeedersDesc)
 	m.replaceSearchResults([]client.SearchResult{{ID: 1, Name: "Ubuntu", Seeders: 12, Size: 3 << 30}})
 	m.handleKey("f")
@@ -65,19 +66,72 @@ func TestSearchPreferencesSaveOnlyCommittedBounds(t *testing.T) {
 		m.Update(tea.PasteMsg{Content: value})
 	}
 	reopened := newModel(t.Context(), nil)
-	reopened.loadSearchPreferences(path)
+	reopened.loadPreferences(path)
 	if reopened.resultSort != resultSeedersDesc || reopened.resultFilter.active() {
 		t.Fatal("uncommitted numeric filters were saved")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	reopened.loadSearchPreferences(path)
+	reopened.loadPreferences(path)
 	if reopened.resultSort != resultSeedersDesc || reopened.resultFilter != m.resultFilter.numeric() {
 		t.Fatal("committed bounds and sort were not restored independently of the text filter")
 	}
 	m.handleKey("esc")
-	reopened.loadSearchPreferences(path)
+	reopened.loadPreferences(path)
 	if reopened.resultSort != resultSeedersDesc || reopened.resultFilter.active() {
 		t.Fatal("clearing filters did not clear the saved bounds and keep the sort")
+	}
+}
+
+func TestLoadPreferencesMigratesLegacyFilesOnlyForDefaultConfig(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	defaultDir := filepath.Join(configHome, "qbitctl")
+	defaultPath := filepath.Join(defaultDir, "config.json")
+	if err := os.MkdirAll(defaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultPath, []byte(`{"url":"http://qbittorrent"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacyQueue := filepath.Join(defaultDir, queuePreferencesFileName)
+	if err := os.WriteFile(legacyQueue, []byte(`{"sort":"progress-desc"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacySearch := filepath.Join(defaultDir, searchPreferencesFileName)
+	if err := os.WriteFile(legacySearch, []byte(`{"sort":"size-asc"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// An explicitly selected config file must be isolated from the default
+	// config directory and its legacy files.
+	alternatePath := filepath.Join(t.TempDir(), "alternate", "config.json")
+	alternate := newModel(t.Context(), nil)
+	alternate.loadPreferences(alternatePath)
+	if alternate.queueSort != queueActiveFirst {
+		t.Fatalf("alternate config consumed default legacy queue sort: %q", alternate.queueSort)
+	}
+	if alternate.resultSort != resultOriginal {
+		t.Fatalf("alternate config consumed default legacy search sort: %q", alternate.resultSort)
+	}
+	for _, legacy := range []string{legacyQueue, legacySearch} {
+		if _, err := os.Stat(legacy); err != nil {
+			t.Fatalf("alternate config removed default legacy file %s: %v", filepath.Base(legacy), err)
+		}
+	}
+
+	defaultModel := newModel(t.Context(), nil)
+	defaultModel.loadPreferences(defaultPath)
+	if defaultModel.queueSort != queueProgressDesc {
+		t.Fatalf("default config did not load migrated queue sort: %q", defaultModel.queueSort)
+	}
+	if defaultModel.resultSort != resultSizeAsc {
+		t.Fatalf("default config did not load migrated search sort: %q", defaultModel.resultSort)
+	}
+	for _, legacy := range []string{legacyQueue, legacySearch} {
+		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+			t.Fatalf("default config left migrated legacy file %s in place, stat error = %v", filepath.Base(legacy), err)
+		}
 	}
 }
 

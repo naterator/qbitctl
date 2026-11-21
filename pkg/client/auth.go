@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/naterator/qbitctl/internal/configfile"
 	"github.com/zalando/go-keyring"
 )
 
@@ -196,49 +197,70 @@ func saveAuthFile(path string, creds Credentials) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-
-	content, err := json.MarshalIndent(configFile{
-		URL:      creds.URL,
-		User:     creds.User,
-		Password: encodedPass,
-	}, "", "  ")
-	if err != nil {
-		return err
-	}
-	content = append(content, '\n')
-
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
+	return configfile.Update(path, func(object configfile.Object) (bool, error) {
+		urlValue, err := json.Marshal(creds.URL)
+		if err != nil {
+			return false, err
 		}
-	}()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	cleanup = false
+		userValue, err := json.Marshal(creds.User)
+		if err != nil {
+			return false, err
+		}
+		passwordValue, err := json.Marshal(encodedPass)
+		if err != nil {
+			return false, err
+		}
+		setConfigValue(object, "url", urlValue)
+		setConfigValue(object, "user", userValue)
+		setConfigValue(object, "password", passwordValue)
+		return true, nil
+	})
+}
 
-	return os.Chmod(path, 0o600)
+func setConfigValue(object configfile.Object, key string, value json.RawMessage) {
+	for existing := range object {
+		if strings.EqualFold(existing, key) {
+			delete(object, existing)
+		}
+	}
+	object[key] = value
+}
+
+func configValue(object configfile.Object, key string) (json.RawMessage, bool) {
+	if value, ok := object[key]; ok {
+		return value, true
+	}
+	for existing, value := range object {
+		if strings.EqualFold(existing, key) {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func migratePassword(path, previousPassword, encodedPassword string) error {
+	encoded, err := json.Marshal(encodedPassword)
+	if err != nil {
+		return err
+	}
+	return configfile.Update(path, func(object configfile.Object) (bool, error) {
+		current, ok := configValue(object, "password")
+		if !ok {
+			return false, nil
+		}
+		var currentPassword string
+		if err := json.Unmarshal(current, &currentPassword); err != nil {
+			return false, fmt.Errorf("decode current password during migration: %w", err)
+		}
+		// Another writer may have replaced the credentials after this process
+		// read them. Preserve that newer value and let the next login migrate it
+		// if needed.
+		if currentPassword != previousPassword {
+			return false, nil
+		}
+		setConfigValue(object, "password", encoded)
+		return true, nil
+	})
 }
 
 func warnLoosePermissions(path string, infoOut io.Writer) {
@@ -252,8 +274,7 @@ func warnLoosePermissions(path string, infoOut io.Writer) {
 }
 
 func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Credentials{}, false, nil
 		}
@@ -264,8 +285,12 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 		warnLoosePermissions(path, infoOut)
 	}
 
-	var diskConfig configFile
-	if err := json.Unmarshal(content, &diskConfig); err != nil {
+	object, err := configfile.Read(path)
+	if err != nil {
+		return Credentials{}, true, err
+	}
+	diskConfig, err := decodeConfigFile(object)
+	if err != nil {
 		return Credentials{}, true, err
 	}
 
@@ -280,9 +305,16 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 			return Credentials{}, true, err
 		}
 		creds.Pass = password
-		// Migrate to latest version (keyring if possible)
-		if err := saveAuthFile(path, creds); err != nil && !errors.Is(err, errMacKeychainUnavailable) {
-			return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", err)
+		// Migrate only the password field. The conditional update avoids
+		// overwriting newer URL or username credentials written concurrently.
+		encoded, encodeErr := encryptPassword(password)
+		if encodeErr != nil && !errors.Is(encodeErr, errMacKeychainUnavailable) {
+			return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", encodeErr)
+		}
+		if encodeErr == nil {
+			if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
+				return Credentials{}, true, fmt.Errorf("migrate v1 config: %w", migrateErr)
+			}
 		}
 		// if infoOut != nil {
 		// 	fmt.Fprintf(infoOut, "[INFO] Migrated v1 encrypted password to latest format in config file: %s\n", path)
@@ -298,8 +330,12 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 	default:
 		creds.Pass = value
 		if value != "" {
-			if err := saveAuthFile(path, creds); err != nil {
-				return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", err)
+			encoded, encodeErr := encryptPassword(value)
+			if encodeErr != nil {
+				return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", encodeErr)
+			}
+			if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
+				return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", migrateErr)
 			}
 			if infoOut != nil {
 				fmt.Fprintf(infoOut, "[INFO] Migrated plaintext password in config file: %s\n", path)
@@ -308,6 +344,24 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 	}
 
 	return creds, true, nil
+}
+
+func decodeConfigFile(object configfile.Object) (configFile, error) {
+	var diskConfig configFile
+	for key, target := range map[string]*string{
+		"url":      &diskConfig.URL,
+		"user":     &diskConfig.User,
+		"password": &diskConfig.Password,
+	} {
+		value, ok := configValue(object, key)
+		if !ok {
+			continue
+		}
+		if err := json.Unmarshal(value, target); err != nil {
+			return configFile{}, fmt.Errorf("decode config field %q: %w", key, err)
+		}
+	}
+	return diskConfig, nil
 }
 
 func canAttemptLogin(creds Credentials) bool {
@@ -323,6 +377,11 @@ func defaultAuthSearchPaths() []string {
 }
 
 func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
+	creds, _, err := initAuthWithPath(opts, infoOut)
+	return creds, err
+}
+
+func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, error) {
 	cli := Credentials{
 		URL:  opts.URL,
 		User: opts.User,
@@ -331,23 +390,25 @@ func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
 	configPath := opts.ConfigPath
 	var creds Credentials
 	loaded := false
+	selectedPath := ""
 
 	if configPath != "" {
 		fileInfo, err := os.Stat(configPath)
 		if err != nil || fileInfo.IsDir() {
-			return Credentials{}, codedErrf(ExitBadArgs, "Config file '%s' does not exist or is not readable", configPath)
+			return Credentials{}, configPath, codedErrf(ExitBadArgs, "Config file '%s' does not exist or is not readable", configPath)
 		}
 
 		loadedCreds, ok, err := loadAuthFile(configPath, infoOut)
 		if err != nil {
 			if errors.Is(err, errUnsupportedPasswordFormat) {
-				return Credentials{}, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, configPath)
+				return Credentials{}, configPath, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, configPath)
 			}
-			return Credentials{}, codedErrf(ExitFile, "Failed to load config file '%s': %v", configPath, err)
+			return Credentials{}, configPath, codedErrf(ExitFile, "Failed to load config file '%s': %v", configPath, err)
 		}
 		if ok {
 			creds = loadedCreds
 			loaded = true
+			selectedPath = configPath
 		}
 	}
 
@@ -356,13 +417,14 @@ func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
 			loadedCreds, ok, err := loadAuthFile(path, infoOut)
 			if err != nil {
 				if errors.Is(err, errUnsupportedPasswordFormat) {
-					return Credentials{}, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, path)
+					return Credentials{}, path, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, path)
 				}
-				return Credentials{}, codedErrf(ExitFile, "Failed to load %s: %v", path, err)
+				return Credentials{}, path, codedErrf(ExitFile, "Failed to load %s: %v", path, err)
 			}
 			if ok {
 				creds = loadedCreds
 				loaded = true
+				selectedPath = path
 				break
 			}
 		}
@@ -379,10 +441,13 @@ func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
 	}
 
 	if !canAttemptLogin(creds) {
-		return Credentials{}, codedErrf(ExitFile, "No credentials supplied")
+		return Credentials{}, selectedPath, codedErrf(ExitFile, "No credentials supplied")
 	}
 
-	return creds, nil
+	if selectedPath == "" {
+		selectedPath = defaultAuthPath()
+	}
+	return creds, selectedPath, nil
 }
 
 // NewClient authenticates using a background context. Call Logout when finished.
@@ -402,12 +467,13 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 	app := &App{Ctx: ctx, Stdout: stdout, Stderr: stderr}
 	newAppDefaults(app)
 
-	creds, err := initAuth(*opts, app.Stderr)
+	creds, configPath, err := initAuthWithPath(*opts, app.Stderr)
 	if err != nil {
 		return nil, err
 	}
 
 	app.creds = creds
+	app.configPath = configPath
 	app.client = newClient(creds, app.Stderr)
 
 	if err := app.client.loginContext(app.context()); err != nil {

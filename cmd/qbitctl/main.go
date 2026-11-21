@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -85,10 +86,19 @@ func result(err error) error {
 
 func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
+		authOpts := *opts
+		if interactiveWorkspace(cmd) {
+			if setup, err := qbt.ReadSetup(authOpts); err == nil && !setup.Ready() {
+				finished, err := firstRunSetup(cmd, &authOpts, setup.Path)
+				if finished || err != nil {
+					return err
+				}
+			}
+		}
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		app, err := qbt.NewClientContext(ctx, opts)
+		app, err := qbt.NewClientContext(ctx, &authOpts)
 		if err != nil {
 			return result(err)
 		}
@@ -119,13 +129,13 @@ func executeConfigWrite(opts CLIOptions, outputPath string) error {
 	return result(qbt.ExecuteConfigWrite(opts, outputPath, os.Stderr))
 }
 
-func makeHiddenInput(in *os.File) qbt.HiddenInputFunc {
+func makeHiddenInput(in *os.File, out io.Writer) qbt.HiddenInputFunc {
 	return func(fn func() (string, error)) (string, error) {
 		restore, err := disableTerminalEcho(in)
 		if err == nil {
 			defer func() {
 				_ = restore()
-				fmt.Println()
+				fmt.Fprintln(out)
 			}()
 		}
 		return fn()
@@ -141,8 +151,9 @@ func newRootCmd() *cobra.Command {
 		Version:       qbitctlVersion,
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
+		Args:          cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runDefault(cmd, opts)
 		},
 	}
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
@@ -162,6 +173,7 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(
 		newConfigCmd(&opts),
+		newTUIDefaultCmd(&opts),
 		newCompletionCmd(rootCmd),
 		newVersionCmd(),
 		newUpdateCmd(),
@@ -181,6 +193,7 @@ func newRootCmd() *cobra.Command {
 		newRemoveCmd(&opts, true),
 	)
 
+	installHelp(rootCmd)
 	rootCmd.InitDefaultHelpCmd()
 	for _, cmd := range rootCmd.Commands() {
 		if cmd.Name() == "help" {

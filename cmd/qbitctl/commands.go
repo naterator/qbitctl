@@ -21,7 +21,7 @@ func newConfigCmd(opts *CLIOptions) *cobra.Command {
 		Short:   "Manage qBittorrent credentials",
 		GroupID: "setup",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return result(resultOK(qbt.InteractiveConfig(os.Stdin, os.Stdout, makeHiddenInput(os.Stdin))))
+			return result(resultOK(qbt.InteractiveConfig(os.Stdin, os.Stdout, makeHiddenInput(os.Stdin, os.Stdout))))
 		},
 	}
 	writeOutput := ""

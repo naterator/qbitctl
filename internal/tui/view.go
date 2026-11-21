@@ -4,25 +4,43 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
+	"math"
 	"strings"
 	"unicode"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
-// The accent follows the terminal's palette. Selection and focus also have
-// visible markers for terminals without color.
 var (
-	viewAccentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("37"))
-	viewBrandStyle  = viewAccentStyle.Bold(true)
-	viewTitleStyle  = viewAccentStyle.Bold(true)
-	viewMutedStyle  = lipgloss.NewStyle().Faint(true)
-	viewSelectedSty = lipgloss.NewStyle().Reverse(true)
-	viewErrorStyle  = lipgloss.NewStyle().Bold(true)
+	viewCanvasColor = lipgloss.Color("#1D2531")
+	viewPanelColor  = lipgloss.Color("#334155")
+	viewFieldColor  = lipgloss.Color("#242F3F")
+	viewTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E9EEF5"))
+	viewTitleStyle  = viewTextStyle.Bold(true)
+	viewAccentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#85D7C8"))
+	viewKeyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#9AC8FF")).Bold(true)
+	viewMutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#AFBCCD"))
+	viewRuleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#536478"))
+	viewSelectedSty = lipgloss.NewStyle().Foreground(lipgloss.Color("#102A2D")).
+			Background(lipgloss.Color("#92DACD")).Bold(true)
+	viewErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAEA9")).Bold(true)
+	viewWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD18E"))
 )
+
+func viewInputStyle(background color.Color) textinput.Styles {
+	text := viewTextStyle.Background(background)
+	secondary := viewMutedStyle.Background(background)
+	return textinput.Styles{
+		Focused: textinput.StyleState{Text: text, Placeholder: secondary, Suggestion: secondary},
+		Blurred: textinput.StyleState{Text: text, Placeholder: secondary, Suggestion: secondary},
+		Cursor:  textinput.CursorStyle{Color: viewAccentStyle.GetForeground(), Shape: tea.CursorBlock},
+	}
+}
 
 const (
 	viewHeaderLines = 3
@@ -42,14 +60,19 @@ func (m *model) View() tea.View {
 		height = 24
 	}
 
-	var content string
-	if m.dialog != nil {
-		// dialogView owns the complete overlay and is responsible for keeping
-		// its own controls inside the available frame.
-		content = lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, m.dialogView(width, height))
+	content := m.viewScreen(width, height)
+	if m.dialog != nil && m.dialog.kind != dialogHelp {
+		panel := m.dialogView(width, height)
+		backdrop := lipgloss.NewLayer(viewSurface(ansi.Strip(content), width, height,
+			lipgloss.Color("#151C26"), lipgloss.Color("#718195")))
+		overlay := lipgloss.NewLayer(panel).
+			X(max(0, (width-lipgloss.Width(panel))/2)).
+			Y(max(0, (height-lipgloss.Height(panel))/2)).Z(1)
+		content = lipgloss.NewCompositor(backdrop, overlay).Render()
 	} else {
-		content = m.viewScreen(width, height)
+		content = viewSurface(content, width, height, viewCanvasColor, viewTextStyle.GetForeground())
 	}
+	content = applyTheme(content, width, height, m.activeThemeID())
 
 	v := tea.NewView(viewFillScreen(content, width, height))
 	v.AltScreen = true
@@ -64,9 +87,8 @@ func (m *model) tableHeight() int {
 	if height < 1 {
 		height = 24
 	}
-	// The panel consumes two border rows and the table consumes one heading
-	// row, leaving this many actual result rows for a page movement.
-	rows := height - viewHeaderLines - viewFooterLines - 3
+	// The panel title and table headings each take one row.
+	rows := height - viewHeaderLines - viewFooterLines - 2
 	if m.page == searchPage {
 		// Search results always have a filter and sort summary. While the
 		// result filter editor is open that summary grows by one line for the
@@ -86,28 +108,51 @@ func (m *model) resultFilterVisualHeight() int {
 }
 
 func (m *model) viewScreen(width, height int) string {
-	header := m.viewHeader(width)
-	footer := m.viewFooter(width)
+	inner := viewContentWidth(width)
+	header := m.viewHeader(inner)
+	footer := m.viewFooter(inner)
+	if m.dialog != nil && m.dialog.kind == dialogHelp {
+		footer = []string{viewRule(inner), viewKeys(inner, "esc", "back", "↑/↓", "scroll", "pgup/pgdn", "page")}
+	}
 	bodyHeight := max(1, height-len(header)-len(footer))
-	body := m.viewBody(width, bodyHeight)
+	var body []string
+	if m.dialog != nil && m.dialog.kind == dialogHelp {
+		body = m.helpView(inner, bodyHeight)
+	} else {
+		body = m.viewBody(inner, bodyHeight)
+	}
 
 	lines := make([]string, 0, height)
 	lines = append(lines, header...)
-	lines = append(lines, body...)
+	lines = append(lines, viewFitLines(body, inner, bodyHeight)...)
 	lines = append(lines, footer...)
-	return strings.Join(viewFitLines(lines, width, height), "\n")
+	lines = viewFitLines(lines, inner, height)
+	if inner < width {
+		for i := range lines {
+			lines[i] = "  " + lines[i] + "  "
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func viewContentWidth(width int) int {
+	if width >= 40 {
+		return width - 4
+	}
+	return width
 }
 
 func (m *model) viewHeader(width int) []string {
-	pageName := m.viewPageName()
-	state := m.viewStatus()
-	brand := viewBrandStyle.Render("qbitctl") + "  " + viewTitleStyle.Render(pageName)
-	first := viewRightAligned(width, brand, state)
-
+	brand := viewAccentStyle.Render("⇅") + " " + viewTitleStyle.Render("qbitctl")
+	first := brand
+	if m.dialog == nil || m.dialog.kind != dialogHelp {
+		first = viewRightAligned(width, brand, viewKeys(max(0, width-lipgloss.Width(brand)-2), "?", "shortcuts", "ctrl+p", "commands"))
+	}
 	tabs := []string{
 		m.viewTab("1 Queue", queuePage),
 		m.viewTab("2 Search", searchPage),
 		m.viewTab("3 Server", serverPage),
+		m.viewTab("4 Config", configPage),
 	}
 	context := ""
 	switch m.page {
@@ -121,28 +166,17 @@ func (m *model) viewHeader(width int) []string {
 		}
 	}
 	second := strings.Join(tabs, "   ")
-	if context != "" {
-		second += "   " + viewMutedStyle.Render(context)
+	if context != "" && lipgloss.Width(second)+3 < width {
+		second += "   " + viewMutedStyle.Render(viewFit(context, width-lipgloss.Width(second)-3))
 	}
 	return []string{first, second, viewRule(width)}
 }
 
 func (m *model) viewTab(label string, p page) string {
 	if m.page == p {
-		return viewSelectedSty.Render("[" + label + "]")
+		return viewTitleStyle.Background(viewPanelColor).Render("▸ " + label + " ")
 	}
-	return viewMutedStyle.Render(" " + label + " ")
-}
-
-func (m *model) viewPageName() string {
-	switch m.page {
-	case searchPage:
-		return "Search"
-	case serverPage:
-		return "Server"
-	default:
-		return "Queue"
-	}
+	return viewMutedStyle.Render("  " + label + " ")
 }
 
 func (m *model) viewBody(width, height int) []string {
@@ -151,24 +185,29 @@ func (m *model) viewBody(width, height int) []string {
 		return m.viewSearch(width, height)
 	case serverPage:
 		return m.viewServer(width, height)
+	case configPage:
+		return m.viewConfig(width, height)
 	default:
 		return m.viewQueue(width, height)
 	}
 }
 
 func (m *model) viewQueue(width, height int) []string {
-	title := "QUEUE"
+	title := fmt.Sprintf("Transfers  ·  %d", len(m.queue))
 	if m.queueSort != queueActiveFirst {
 		title += " · " + m.queueSort.label()
+	}
+	if len(m.marked) > 0 {
+		title += fmt.Sprintf(" · %d marked", len(m.marked))
 	}
 	if viewHasDetail(width) {
 		rightWidth := viewDetailWidth(width)
 		leftWidth := max(1, width-rightWidth-1)
-		left := m.viewPanel(title, m.viewQueueList(leftWidth-2, height-2), leftWidth, height)
-		right := m.viewPanel("DETAIL", m.viewTorrentDetail(rightWidth-2), rightWidth, height)
+		left := viewPanel(title, m.viewQueueList(leftWidth-2, height-1), leftWidth, height)
+		right := viewPanel("Selected torrent", m.viewTorrentDetail(rightWidth-2), rightWidth, height)
 		return viewColumns(left, right, leftWidth, rightWidth, height)
 	}
-	return m.viewPanel(title, m.viewQueueList(width-2, height-2), width, height)
+	return viewPanel(title, m.viewQueueList(width-2, height-1), width, height)
 }
 
 func (m *model) viewQueueList(width, height int) []string {
@@ -193,23 +232,23 @@ func (m *model) viewQueueList(width, height int) []string {
 }
 
 func (m *model) viewQueueHeader(width int) string {
-	showSpeed := width >= 88
-	nameWidth, _, _, _ := viewQueueColumns(width, showSpeed)
+	name, progress, state, speed := viewQueueColumns(width)
 	parts := []string{
 		viewColumn("", 2),
-		viewColumn("NAME", nameWidth),
-		viewColumn("PROGRESS", 16),
-		viewColumn("STATE", 13),
+		viewColumn("Name", name),
+		viewColumn("Done", progress),
 	}
-	if showSpeed {
-		parts = append(parts, viewColumn("DOWN / UP", 20))
+	if state > 0 {
+		parts = append(parts, viewColumn("State", state))
+	}
+	if speed > 0 {
+		parts = append(parts, viewColumn("Down / Up", speed))
 	}
 	return viewMutedStyle.Render(strings.Join(parts, " "))
 }
 
 func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) string {
-	showSpeed := width >= 88
-	nameWidth, _, _, speedWidth := viewQueueColumns(width, showSpeed)
+	name, progress, state, speed := viewQueueColumns(width)
 	marker := "  "
 	if m.marked != nil && m.marked[t.Hash] {
 		marker = "* "
@@ -220,20 +259,43 @@ func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) str
 			marker = "›*"
 		}
 	}
+	progressText := viewProgress(t.Progress, progress)
+	stateText := viewSafe(t.State)
+	if !selected {
+		progressText = viewAccentStyle.Render(progressText)
+		stateText = viewTorrentState(t.State)
+	}
 	parts := []string{
 		viewColumn(marker, 2),
-		viewColumn(viewSafe(t.Name), nameWidth),
-		viewColumn(viewProgress(t.Progress, 16), 16),
-		viewColumn(viewSafe(t.State), 13),
+		viewColumn(viewSafe(t.Name), name),
+		viewColumn(progressText, progress),
 	}
-	if showSpeed {
-		parts = append(parts, viewColumn(viewSpeed(t.DLSpeed)+" / "+viewSpeed(t.UpSpeed), speedWidth))
+	if state > 0 {
+		parts = append(parts, viewColumn(stateText, state))
 	}
-	line := strings.Join(parts, " ")
+	if speed > 0 {
+		parts = append(parts, viewColumn(viewSpeed(t.DLSpeed)+" / "+viewSpeed(t.UpSpeed), speed))
+	}
+	line := viewFit(strings.Join(parts, " "), width)
 	if selected {
 		return viewSelectedSty.Width(width).Render(viewFit(line, width))
 	}
 	return line
+}
+
+func viewTorrentState(state string) string {
+	style := viewMutedStyle
+	switch state {
+	case "downloading", "forcedDL":
+		style = viewKeyStyle.Bold(false)
+	case "uploading", "forcedUP", "stalledUP":
+		style = viewAccentStyle
+	case "error", "missingFiles":
+		style = viewErrorStyle
+	case "checkingDL", "checkingUP", "checkingResumeData", "stalledDL", "metaDL", "forcedMetaDL", "moving":
+		style = viewWarnStyle
+	}
+	return style.Render(viewSafe(state))
 }
 
 func (m *model) viewTorrentDetail(width int) []string {
@@ -242,17 +304,16 @@ func (m *model) viewTorrentDetail(width int) []string {
 		return []string{"Select a torrent to inspect it.", "", "Enter opens details."}
 	}
 	return []string{
-		viewKeyValue("Name", viewSafe(t.Name), width),
-		viewKeyValue("State", viewSafe(t.State), width),
-		viewKeyValue("Progress", viewProgress(t.Progress, 16), width),
-		viewKeyValue("Size", viewBytes(t.TotalSize), width),
-		viewKeyValue("Down", viewSpeed(t.DLSpeed), width),
-		viewKeyValue("Up", viewSpeed(t.UpSpeed), width),
-		viewKeyValue("Ratio", fmt.Sprintf("%.2f", t.Ratio), width),
-		viewKeyValue("Tracker", viewSafe(t.Tracker), width),
-		viewKeyValue("Path", viewSafe(t.ContentPath), width),
+		viewTitleStyle.Render(viewFit(viewSafe(t.Name), width)),
+		viewTorrentState(t.State) + viewMutedStyle.Render("  ·  "+viewBytes(t.TotalSize)),
 		"",
-		viewMutedStyle.Render("Enter details · e edit · a add"),
+		viewAccentStyle.Render(viewProgress(t.Progress, min(24, width))),
+		"",
+		viewKeyValue("Down", viewSpeed(t.DLSpeed)),
+		viewKeyValue("Up", viewSpeed(t.UpSpeed)),
+		viewKeyValue("Ratio", fmt.Sprintf("%.2f", t.Ratio)),
+		viewKeyValue("Tracker", viewSafe(t.Tracker)),
+		viewKeyValue("Path", viewSafe(t.ContentPath)),
 	}
 }
 
@@ -260,11 +321,11 @@ func (m *model) viewSearch(width, height int) []string {
 	if viewHasDetail(width) {
 		rightWidth := viewDetailWidth(width)
 		leftWidth := max(1, width-rightWidth-1)
-		left := m.viewPanel("SEARCH", m.viewSearchList(leftWidth-2, height-2), leftWidth, height)
-		right := m.viewPanel("RESULT", m.viewResultDetail(rightWidth-2), rightWidth, height)
+		left := viewPanel("Search results", m.viewSearchList(leftWidth-2, height-1), leftWidth, height)
+		right := viewPanel("Selected result", m.viewResultDetail(rightWidth-2), rightWidth, height)
 		return viewColumns(left, right, leftWidth, rightWidth, height)
 	}
-	return m.viewPanel("SEARCH", m.viewSearchList(width-2, height-2), width, height)
+	return viewPanel("Search results", m.viewSearchList(width-2, height-1), width, height)
 }
 
 func (m *model) viewSearchList(width, height int) []string {
@@ -299,7 +360,7 @@ func (m *model) viewSearchList(width, height int) []string {
 const resultFilterPrompt = "Filter "
 
 func (m *model) resultFilterInputWidth() int {
-	width := m.width
+	width := viewContentWidth(m.width)
 	if viewHasDetail(width) {
 		width -= viewDetailWidth(width) + 1
 	}
@@ -371,42 +432,42 @@ func (m *model) viewResultFilterEditor(width int) []string {
 	input := m.resultEditor.inputs[active].View()
 	return []string{
 		viewFit(strings.Join(tabs, "  "), width),
-		viewAccentStyle.Render(prefix) + input,
+		viewSurface(viewFit(viewAccentStyle.Render(prefix)+input, width), width, 1,
+			viewFieldColor, viewTextStyle.GetForeground()),
 	}
 }
 
 func (m *model) viewSearchHeader(width int) string {
-	nameWidth, _, _, _ := viewSearchColumns(width)
-	parts := []string{
-		viewColumn("", 2),
-		viewColumn("NAME", nameWidth),
-		viewColumn("ID", 12),
-		viewColumn("SIZE", 10),
-		viewColumn("SEEDS", 6),
-		viewColumn("SOURCE", 16),
-	}
-	return viewMutedStyle.Render(strings.Join(parts, " "))
+	return viewMutedStyle.Render(viewSearchLine(width, "", "Title", "ID", "Size", "Seeds", "Source"))
 }
 
 func (m *model) viewSearchRow(r client.SearchResult, selected bool, width int) string {
-	nameWidth, _, _, _ := viewSearchColumns(width)
 	id := "—"
 	if r.ID > 0 {
 		id = fmt.Sprintf("%d", r.ID)
 	}
-	parts := []string{
-		viewColumn(map[bool]string{true: "› ", false: "  "}[selected], 2),
-		viewColumn(viewSafe(r.Name), nameWidth),
-		viewColumn(id, 12),
-		viewColumn(viewBytes(r.Size), 10),
-		viewColumn(fmt.Sprintf("%d", r.Seeders), 6),
-		viewColumn(viewSafe(r.Source), 16),
-	}
-	line := strings.Join(parts, " ")
+	marker := ""
 	if selected {
-		return viewSelectedSty.Width(width).Render(viewFit(line, width))
+		marker = "›"
+	}
+	line := viewSearchLine(width, marker, viewSafe(r.Name), id, viewBytes(r.Size), fmt.Sprintf("%d", r.Seeders), viewSafe(r.Source))
+	if selected {
+		return viewSelectedSty.Width(width).Render(line)
 	}
 	return line
+}
+
+func viewSearchLine(width int, marker, title, id, size, seeds, source string) string {
+	columns := []string{viewColumn(size, 9), viewColumn(seeds, 5)}
+	if width >= 58 {
+		columns = append(columns, viewColumn(id, 10))
+	}
+	if width >= 68 {
+		columns = append(columns, viewColumn(source, 14))
+	}
+	metrics := strings.Join(columns, " ")
+	nameWidth := max(1, width-4-lipgloss.Width(metrics))
+	return viewFit(viewColumn(marker, 2)+" "+viewColumn(title, nameWidth)+" "+metrics, width)
 }
 
 func (m *model) viewResultDetail(width int) []string {
@@ -419,14 +480,12 @@ func (m *model) viewResultDetail(width int) []string {
 		id = fmt.Sprintf("%d", r.ID)
 	}
 	return []string{
-		viewKeyValue("Name", viewSafe(r.Name), width),
-		viewKeyValue("ID", id, width),
-		viewKeyValue("Size", viewBytes(r.Size), width),
-		viewKeyValue("Seeders", fmt.Sprintf("%d", r.Seeders), width),
-		viewKeyValue("Leechers", fmt.Sprintf("%d", r.Leechers), width),
-		viewKeyValue("Source", viewSafe(r.Source), width),
+		viewTitleStyle.Render(viewFit(viewSafe(r.Name), width)),
+		viewMutedStyle.Render(viewBytes(r.Size) + "  ·  " + viewSafe(r.Source)),
 		"",
-		viewMutedStyle.Render("Enter add · a add · / new search"),
+		viewKeyValue("Seeders", fmt.Sprintf("%d", r.Seeders)),
+		viewKeyValue("Leechers", fmt.Sprintf("%d", r.Leechers)),
+		viewKeyValue("Result ID", id),
 	}
 }
 
@@ -439,82 +498,132 @@ func (m *model) viewServer(width, height int) []string {
 			rows = append(rows, viewMutedStyle.Render("No server information loaded. Press r to refresh."))
 		}
 	} else {
-		rows = append(rows, viewMutedStyle.Render(viewColumn("SETTING", max(1, width/3))+" "+"VALUE"))
+		labelWidth := min(24, max(1, width/2-2))
 		for _, row := range m.serverRows {
-			label := viewSafe(row.label)
+			label := viewMutedStyle.Render(viewColumn(viewSafe(row.label), labelWidth))
 			value := viewSafe(row.value)
-			rows = append(rows, viewColumn(label, max(1, width/3))+" "+value)
+			if row.label == "Connection" && strings.EqualFold(value, "connected") {
+				value = viewAccentStyle.Render("● " + value)
+			}
+			rows = append(rows, label+" "+value)
 		}
 	}
-	return m.viewPanel("SERVER", rows, width, height)
+	return viewPanel("Server & transfers", rows, width, height)
+}
+
+func (m *model) viewConfig(width, height int) []string {
+	rowWidth := max(1, width-2)
+	rows := []string{
+		viewAccentStyle.Render("Connection"),
+		viewConfigRow("Server address", m.setup.url, rowWidth),
+		viewConfigRow("Username", m.setup.user, rowWidth),
+		viewConfigRow("Password", configPasswordStatus(m.setup.hasPassword), rowWidth),
+		"",
+		viewAccentStyle.Render("Startup"),
+		viewConfigRow("TUI by default", configToggleStatus(m.setup.tuiDefault), rowWidth),
+		viewConfigRow("Color scheme", configThemeStatus(m), rowWidth),
+		"",
+		viewMutedStyle.Render("Config file"),
+		viewMutedStyle.Render(viewSafe(m.configPath)),
+	}
+	return viewPanel("Configuration", rows, width, height)
+}
+
+func viewConfigRow(label, value string, width int) string {
+	labelWidth := min(22, max(14, width/3))
+	label = viewSafe(strings.TrimSpace(label))
+	value = strings.TrimSpace(viewSafe(value))
+	if value == "" {
+		value = "Not configured"
+	}
+	labelCell := viewMutedStyle.Background(viewFieldColor).Render(" " + viewColumn(label, labelWidth) + " ")
+	valueCell := viewTextStyle.Render(" " + viewFit(value, max(1, width-labelWidth-5)))
+	line := labelCell + viewRuleStyle.Render("│") + valueCell
+	return viewSurface(viewFit(line, width), width, 1, viewPanelColor, viewTextStyle.GetForeground())
+}
+
+func configPasswordStatus(saved bool) string {
+	if saved {
+		return "••••••••  saved (hidden)"
+	}
+	return "Not configured"
+}
+
+func configToggleStatus(enabled bool) string {
+	if enabled {
+		return "Enabled"
+	}
+	return "Disabled"
+}
+
+func configThemeStatus(m *model) string {
+	label := m.themeLabel()
+	if strings.TrimSpace(label) == "" {
+		return "Default"
+	}
+	return label
 }
 
 func (m *model) viewFooter(width int) []string {
-	status := m.viewStatus()
-	if m.failed {
-		status = viewErrorStyle.Render("ERROR")
+	status := viewAccentStyle.Render("● Ready")
+	switch {
+	case m.busy != "":
+		status = viewWarnStyle.Render("◌ " + viewSafe(m.busy))
+	case m.failed:
+		status = viewErrorStyle.Render("● Error")
+	case m.notice != "":
+		status = viewAccentStyle.Render("● " + viewSafe(m.notice))
 	}
-	if m.notice != "" {
-		if status == "Ready" {
-			status = viewSafe(m.notice)
-		} else {
-			status += " · " + viewSafe(m.notice)
-		}
+	if m.notice != "" && (m.busy != "" || m.failed) {
+		status += viewMutedStyle.Render("  ·  " + viewSafe(m.notice))
 	}
 	if m.resultEditor != nil && strings.TrimSpace(m.resultEditor.problem) != "" {
 		// A parse error belongs to the draft currently being edited. Prefer it
 		// over an older notice so it remains readable in the compact footer.
 		status = viewErrorStyle.Render(viewSafe(strings.TrimSpace(m.resultEditor.problem)))
 	}
-	statusLine := viewRightAligned(width, status, "")
-
-	hint := ""
+	var keys []string
 	switch m.page {
 	case searchPage:
-		hint = "/ search  s sort  f filter  Enter add  Ctrl+P actions  q quit"
+		keys = []string{"/", "search", "s", "sort", "f", "filter", "enter", "add", "q", "quit"}
 		if m.resultEditor != nil {
-			hint = "Tab field  Enter keep  Esc cancel  ↑↓ move"
+			keys = []string{"tab", "field", "enter", "apply", "esc", "cancel", "↑/↓", "move"}
 		} else if m.busy != "" && m.work == searchWork {
-			hint = "Esc cancel search  Ctrl+P actions  q quit"
+			keys = []string{"esc", "cancel search", "q", "quit"}
 		} else if m.resultFilter.active() {
-			hint = "/ search  s sort  f filter  Esc clear  Enter add  Ctrl+P actions"
+			keys = []string{"/", "search", "s", "sort", "f", "filter", "esc", "clear", "enter", "add", "q", "quit"}
 		}
 	case serverPage:
-		hint = "Enter details  r refresh  Ctrl+P actions  q quit"
+		keys = []string{"enter", "details", "r", "refresh", "q", "quit"}
+	case configPage:
+		keys = []string{"enter", "edit", "d", "toggle default", "c", "colors", "q", "quit"}
 	default:
-		hint = "/ filter  o sort  Enter details  Space mark  a add  Ctrl+P actions  q quit"
+		keys = []string{"/", "filter", "o", "sort", "enter", "details", "space", "mark", "a", "add", "q", "quit"}
 	}
-	return []string{statusLine, viewMutedStyle.Render(hint)}
+	return []string{viewFit(status, width), viewKeys(width, keys...)}
 }
 
-func (m *model) viewStatus() string {
-	if m.busy != "" {
-		return "BUSY " + viewSafe(m.busy)
-	}
-	if m.failed {
-		return "ERROR"
-	}
-	return "Ready"
-}
-
-func (m *model) viewPanel(title string, body []string, width, height int) []string {
-	width = max(4, width)
-	height = max(2, height)
-	inner := width - 2
-	titleText := " " + viewSafe(title) + " "
-	if lipgloss.Width(titleText) > inner {
-		titleText = " "
-	}
-	top := "┌" + titleText + strings.Repeat("─", max(0, inner-lipgloss.Width(titleText))) + "┐"
-	lines := []string{top}
-	for i := 0; i < height-2; i++ {
-		line := ""
-		if i < len(body) {
-			line = body[i]
+func viewKeys(width int, pairs ...string) string {
+	var hints []string
+	remaining := width
+	for i := 0; i+1 < len(pairs); i += 2 {
+		key, label := pairs[i], pairs[i+1]
+		span := lipgloss.Width(key + " " + label)
+		if span > remaining {
+			break
 		}
-		lines = append(lines, "│"+viewColumn(line, inner)+"│")
+		hints = append(hints, viewKeyStyle.Render(key)+" "+viewMutedStyle.Render(label))
+		remaining -= span + 3
 	}
-	lines = append(lines, "└"+strings.Repeat("─", inner)+"┘")
+	return strings.Join(hints, "   ")
+}
+
+func viewPanel(title string, body []string, width, height int) []string {
+	lines := []string{viewTitleStyle.Render(viewFit(title, width-2))}
+	lines = append(lines, body...)
+	for i := range lines {
+		lines[i] = " " + viewColumn(lines[i], width-2) + " "
+	}
 	return viewFitLines(lines, width, height)
 }
 
@@ -528,35 +637,33 @@ func viewColumns(left, right []string, leftWidth, rightWidth, height int) []stri
 		if i < len(right) {
 			r = right[i]
 		}
-		lines = append(lines, viewFit(l, leftWidth)+" "+viewFit(r, rightWidth))
+		lines = append(lines, viewColumn(l, leftWidth)+viewRuleStyle.Render("│")+viewFit(r, rightWidth))
 	}
 	return lines
 }
 
 func viewHasDetail(width int) bool {
-	return width >= 112
+	return width >= 102
 }
 
 func viewDetailWidth(width int) int {
 	return max(30, width/3)
 }
 
-func viewQueueColumns(width int, showSpeed bool) (name, progress, state, speed int) {
-	progress, state, speed = 16, 13, 20
-	fixed := 2 + progress + state + 3 // marker and three separators
-	if showSpeed {
-		fixed += speed + 1 // the additional separator before speeds
+func viewQueueColumns(width int) (name, progress, state, speed int) {
+	progress = 4
+	if width >= 62 {
+		progress = 15
 	}
-	name = max(1, width-fixed)
-	if !showSpeed {
-		speed = 0
+	fixed := 2 + progress + 2 // marker and separators
+	if width >= 34 {
+		state = 13
+		fixed += state + 1
 	}
-	return
-}
-
-func viewSearchColumns(width int) (name, id, size, seed int) {
-	id, size, seed = 12, 10, 6
-	fixed := 2 + id + size + seed + 16 + 5 // marker, source, and separators
+	if width >= 85 {
+		speed = 23
+		fixed += speed + 1
+	}
 	name = max(1, width-fixed)
 	return
 }
@@ -573,39 +680,30 @@ func viewWindowStart(index, count, visible int) int {
 	return start
 }
 
-func viewKeyValue(label, value string, width int) string {
-	label = viewSafe(label)
-	value = viewSafe(value)
-	return viewTitleStyle.Render(label+":") + " " + value
+func viewKeyValue(label, value string) string {
+	return viewMutedStyle.Render(viewColumn(label, 10)) + value
 }
 
 func viewProgress(progress float64, width int) string {
-	if width <= 7 {
+	if width <= 5 {
 		return viewPercent(progress)
 	}
-	barWidth := width - 7 // two brackets, a separator, and a four-cell percent
-	if progress < 0 {
-		progress = 0
-	}
-	if progress > 1 {
-		progress = 1
-	}
+	barWidth := width - 5 // one separator and a four-cell percent
+	progress = boundedProgress(progress)
 	filled := int(progress * float64(barWidth))
-	if filled > barWidth {
-		filled = barWidth
-	}
-	bar := "[" + strings.Repeat("=", filled) + strings.Repeat(".", barWidth-filled) + "]"
-	return viewAccentStyle.Render(bar + " " + viewPercent(progress))
+	bar := strings.Repeat("━", filled) + strings.Repeat("┄", barWidth-filled)
+	return bar + " " + viewPercent(progress)
 }
 
 func viewPercent(progress float64) string {
-	if progress < 0 {
-		progress = 0
+	return fmt.Sprintf("%3.0f%%", boundedProgress(progress)*100)
+}
+
+func boundedProgress(progress float64) float64 {
+	if math.IsNaN(progress) {
+		return 0
 	}
-	if progress > 1 {
-		progress = 1
-	}
-	return fmt.Sprintf("%3.0f%%", progress*100)
+	return min(1, max(0, progress))
 }
 
 func viewBytes(value int64) string {
@@ -656,7 +754,7 @@ func viewRightAligned(width int, left, right string) string {
 }
 
 func viewRule(width int) string {
-	return strings.Repeat("─", max(0, width))
+	return viewRuleStyle.Render(strings.Repeat("─", max(0, width)))
 }
 
 func viewFit(value string, width int) string {
@@ -690,6 +788,27 @@ func viewFitLines(lines []string, width, height int) []string {
 
 func viewFillScreen(content string, width, height int) string {
 	return strings.Join(viewFitLines(strings.Split(content, "\n"), width, height), "\n")
+}
+
+// Apply the surface colors to individual cells. An inline style can reset SGR,
+// so wrapping the styled string in a background style can leave unpainted gaps.
+func viewSurface(content string, width, height int, background, foreground color.Color) string {
+	canvas := lipgloss.NewCanvas(width, height).Compose(lipgloss.NewLayer(content))
+	for y := range height {
+		for x := range width {
+			cell := canvas.CellAt(x, y)
+			if cell.Width == 0 {
+				continue // continuation of a wide glyph
+			}
+			if cell.Style.Bg == nil {
+				cell.Style.Bg = background
+			}
+			if cell.Style.Fg == nil {
+				cell.Style.Fg = foreground
+			}
+		}
+	}
+	return canvas.Render()
 }
 
 // viewSafe converts all terminal control characters, including C1 controls,

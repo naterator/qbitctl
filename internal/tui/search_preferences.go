@@ -2,7 +2,10 @@
 
 package tui
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 const searchPreferencesFileName = "tui-search.json"
 
@@ -17,10 +20,20 @@ type searchPreferences struct {
 }
 
 func loadSearchPreferences(path string) (resultSort, resultFilter, error) {
+	data, err := readPreferences(path, "search")
+	if err != nil {
+		return resultOriginal, resultFilter{}, err
+	}
+	return decodeSearchPreferences(data)
+}
+
+func decodeSearchPreferences(data json.RawMessage) (resultSort, resultFilter, error) {
 	defaults := resultFilter{}
 	var disk searchPreferences
-	if err := readPreferences(path, &disk); err != nil {
-		return resultOriginal, defaults, err
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &disk); err != nil {
+			return resultOriginal, defaults, err
+		}
 	}
 
 	order := disk.Sort
@@ -47,20 +60,23 @@ func knownResultSort(order resultSort) bool {
 	return false
 }
 
-func saveSearchPreferences(path string, order resultSort, filter resultFilter) error {
-	if !knownResultSort(order) {
-		return fmt.Errorf("invalid result sort %q", order)
+func saveSearchPreferences(path string, order resultSort, filter *resultFilter) error {
+	fields := make(map[string]string)
+	if order != "" {
+		if !knownResultSort(order) {
+			return fmt.Errorf("invalid result sort %q", order)
+		}
+		fields["sort"] = string(order)
 	}
-	values := [...]string{"", filter.minSeeders.text, filter.minSize.text, filter.maxSize.text}
-	validated, err := parseResultFilter(values)
-	if err != nil {
-		return fmt.Errorf("invalid search bounds: %w", err)
+	if filter != nil {
+		values := [...]string{"", filter.minSeeders.text, filter.minSize.text, filter.maxSize.text}
+		validated, err := parseResultFilter(values)
+		if err != nil {
+			return fmt.Errorf("invalid search bounds: %w", err)
+		}
+		fields["min_seeders"] = validated.minSeeders.text
+		fields["min_size"] = validated.minSize.text
+		fields["max_size"] = validated.maxSize.text
 	}
-	disk := searchPreferences{
-		Sort:       order,
-		MinSeeders: validated.minSeeders.text,
-		MinSize:    validated.minSize.text,
-		MaxSize:    validated.maxSize.text,
-	}
-	return writePreferences(path, disk)
+	return writePreferences(path, "search", fields)
 }

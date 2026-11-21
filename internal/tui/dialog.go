@@ -36,6 +36,8 @@ const (
 	dialogDelete     dialogKind = "delete"
 	dialogDetails    dialogKind = "details"
 	dialogHelp       dialogKind = "help"
+	dialogConfig     dialogKind = "config"
+	dialogTheme      dialogKind = "theme"
 )
 
 type dialogField struct {
@@ -46,6 +48,7 @@ type dialogField struct {
 }
 
 type dialogItem struct {
+	group       string
 	label       string
 	action      string
 	description string
@@ -80,6 +83,7 @@ func newDialogField(label, value, placeholder, help string) dialogField {
 	input := textinput.New()
 	input.Prompt = ""
 	input.Placeholder = placeholder
+	input.SetStyles(viewInputStyle(viewFieldColor))
 	input.SetValue(value)
 	return dialogField{
 		label:       label,
@@ -87,6 +91,13 @@ func newDialogField(label, value, placeholder, help string) dialogField {
 		placeholder: placeholder,
 		input:       input,
 	}
+}
+
+func newPasswordDialogField(label, placeholder, help string) dialogField {
+	field := newDialogField(label, "", placeholder, help)
+	field.input.EchoMode = textinput.EchoPassword
+	field.input.EchoCharacter = '•'
+	return field
 }
 
 func (d *dialog) value(index int) string {
@@ -128,32 +139,6 @@ func (d *dialog) cycleField(backward bool) tea.Cmd {
 		next = 0
 	}
 	return d.focusField(next)
-}
-
-func (d *dialog) refreshPalette() {
-	if d == nil || d.kind != dialogPalette || len(d.fields) == 0 {
-		return
-	}
-	query := strings.ToLower(strings.TrimSpace(d.value(0)))
-	d.items = d.items[:0]
-	for _, item := range d.allItems {
-		if query == "" || strings.Contains(strings.ToLower(item.label), query) ||
-			strings.Contains(strings.ToLower(item.action), query) ||
-			strings.Contains(strings.ToLower(item.description), query) ||
-			strings.Contains(strings.ToLower(item.keys), query) {
-			d.items = append(d.items, item)
-		}
-	}
-	if len(d.items) == 0 {
-		d.selected = 0
-		return
-	}
-	if d.selected >= len(d.items) {
-		d.selected = len(d.items) - 1
-	}
-	if d.selected < 0 {
-		d.selected = 0
-	}
 }
 
 func (d *dialog) stepSelection(delta int) {
@@ -217,6 +202,9 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "server", "server-page":
 		m.dialog = nil
 		return m.goTo(serverPage)
+	case "config", "config-page", "settings":
+		m.dialog = nil
+		return m.goTo(configPage)
 	case "search":
 		m.openSearchDialog()
 		return nil
@@ -292,59 +280,6 @@ func (m *model) openAction(action string) tea.Cmd {
 	default:
 		return nil
 	}
-}
-
-func (m *model) openPaletteDialog() {
-	items := []dialogItem{
-		{label: "Queue", action: "queue", description: "Browse and manage torrents", keys: "1"},
-		{label: "Search", action: "search", description: "Search Jackett and qBittorrent"},
-		{label: "Search page", action: "search-page", description: "Show the latest search results", keys: "2"},
-		{label: "Server", action: "server", description: "View qBittorrent server information", keys: "3"},
-		{label: "Add torrent", action: "add", description: "Add a magnet, URL, or .torrent file", keys: "a"},
-		{label: "Refresh", action: "refresh", description: "Reload the current page", keys: "r"},
-		{label: "Help", action: "help", description: "Show keyboard shortcuts", keys: "?"},
-		{label: "Quit", action: "quit", description: "Close qbitctl", keys: "q"},
-	}
-	if m.page == searchPage {
-		for i := range items {
-			if items[i].action == "search" {
-				items[i].keys = "/"
-				break
-			}
-		}
-	}
-	if m.page == queuePage {
-		items = append(items,
-			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
-			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by name, progress, or state", keys: "o"},
-			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent", keys: "enter"},
-			dialogItem{label: "Trackers", action: "trackers", description: "Inspect tracker status", keys: "t"},
-			dialogItem{label: "Edit torrent", action: "edit", description: "Set a qBittorrent torrent field", keys: "e"},
-			dialogItem{label: "Start", action: "start", description: "Start selected torrents", keys: "s"},
-			dialogItem{label: "Pause", action: "pause", description: "Pause selected torrents", keys: "p"},
-			dialogItem{label: "Force start", action: "force-start", description: "Force selected torrents to start", keys: "f"},
-			dialogItem{label: "Move", action: "move", description: "Change the selected torrent path", keys: "m"},
-			dialogItem{label: "Remove", action: "remove", description: "Remove torrents but keep files", keys: "x"},
-			dialogItem{label: "Delete files", action: "delete", description: "Remove torrents and delete files", keys: "D"},
-			dialogItem{label: "Clear marks", action: "clear-marks", description: "Clear multi-select marks", keys: "Esc"},
-		)
-	}
-	if m.page == searchPage {
-		items = append(items,
-			dialogItem{label: "Filter results", action: "filter-results", description: "Narrow loaded results by text, seeders, or size", keys: "f"},
-			dialogItem{label: "Sort results", action: "sort-results", description: "Sort the current results by seeders or size", keys: "s"},
-			dialogItem{label: "Add selected result", action: "add-result", description: "Submit a cached search result", keys: "enter"},
-		)
-	}
-	d := &dialog{
-		kind:     dialogPalette,
-		title:    "Command palette",
-		fields:   []dialogField{newDialogField("Filter", "", "type to filter commands", "")},
-		allItems: items,
-		items:    append([]dialogItem(nil), items...),
-	}
-	m.dialog = d
-	d.focusField(0)
 }
 
 func (m *model) openSearchDialog() {
@@ -542,23 +477,35 @@ func selectionMessage(m *model, hashes []string, deleteFiles bool) string {
 }
 
 func (m *model) openHelpDialog() {
-	rows := []detailRow{
-		{label: "Navigation", value: "↑/↓ or j/k move · PgUp/PgDn scroll · Tab changes page"},
-		{label: "Palette", value: "Ctrl+P or : opens commands; type to filter; Enter runs"},
-		{label: "Queue", value: "Space marks · Enter details · a add · e edit · p pause · s start"},
-		{label: "Queue", value: "f force-start · m move · x remove · D delete files · Esc marks"},
-		{label: "Queue sort", value: "o sorts by name, progress, or state · Active first restores the default"},
-		{label: "Filter", value: "/ queue filter · name/hash/category/tags · state all/active/etc."},
-		{label: "Search", value: "/ new search · f filter current results · s sort results · Enter add selected result"},
-		{label: "Result filters", value: "Tab between text, minimum seeders, and size bounds. Enter keeps filters, Esc cancels edits."},
-		{label: "Dialogs", value: "Tab/Shift+Tab fields · Enter submit · Esc cancel"},
-		{label: "Safety", value: "Delete files requires typing DELETE; actions target marks first"},
-		{label: "Global", value: "q quits · Ctrl+C cancels search or exits"},
+	m.dialog = &dialog{kind: dialogHelp}
+}
+
+func (m *model) openConfigDialog() {
+	// ReadSetup exposes only HasPassword metadata. Keep this field empty even
+	// when a password is saved so the secret can never be rendered or copied
+	// into the TUI.
+	passwordPlaceholder := "Leave blank to keep saved password"
+	passwordHelp := "Typed characters are hidden; blank keeps the saved password"
+	if !m.setup.hasPassword {
+		passwordPlaceholder = "Password required for first connection"
+		passwordHelp = "Typed characters are hidden; a password is required"
 	}
-	m.openDetailDialog("qbitctl TUI help", rows)
-	if m.dialog != nil {
-		m.dialog.kind = dialogHelp
+	defaultChoice := "no"
+	if m.setup.tuiDefault {
+		defaultChoice = "yes"
 	}
+	d := &dialog{
+		kind:  dialogConfig,
+		title: "Configure qBittorrent",
+		fields: []dialogField{
+			newDialogField("Server", m.setup.url, "http://localhost:8080", "qBittorrent Web API address"),
+			newDialogField("Username", m.setup.user, "admin", "Web API username"),
+			newPasswordDialogField("Password", passwordPlaceholder, passwordHelp),
+			newDialogField("TUI default", defaultChoice, "yes or no", "Start qbitctl in the TUI by default"),
+		},
+	}
+	m.dialog = d
+	d.focusField(0)
 }
 
 func (m *model) openDetailDialog(title string, rows []detailRow) {
@@ -592,7 +539,11 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 
 	// Ctrl+C is intentionally handled by the parent model. This keeps one
 	// cancellation policy for in-flight requests and for the interactive UI.
-	if name == "esc" || name == "escape" {
+	if name == "esc" || name == "escape" || (name == "?" && d.kind == dialogHelp) ||
+		(name == "ctrl+p" && d.kind == dialogPalette) {
+		if d.kind == dialogTheme {
+			m.themePreview = ""
+		}
 		m.dialog = nil
 		return nil
 	}
@@ -629,22 +580,49 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		d.refreshPalette()
 		return cmd
 
-	case dialogEditSelect, dialogResultSort, dialogQueueSort:
+	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme:
 		switch name {
 		case "up", "ctrl+k", "k":
 			d.stepSelection(-1)
+			if d.kind == dialogTheme {
+				m.previewThemeFromDialog()
+			}
 			return nil
 		case "down", "ctrl+j", "j":
 			d.stepSelection(1)
+			if d.kind == dialogTheme {
+				m.previewThemeFromDialog()
+			}
 			return nil
 		case "pgup", "ctrl+u":
 			d.pageSelection(-1)
+			if d.kind == dialogTheme {
+				m.previewThemeFromDialog()
+			}
 			return nil
 		case "pgdown", "ctrl+d":
 			d.pageSelection(1)
+			if d.kind == dialogTheme {
+				m.previewThemeFromDialog()
+			}
 			return nil
 		case "enter", "return":
 			if len(d.items) == 0 {
+				return nil
+			}
+			if d.kind == dialogTheme {
+				id := themeID(d.items[d.selected].action)
+				if !knownTheme(id) {
+					m.themePreview = ""
+					m.dialog = nil
+					return nil
+				}
+				m.theme = id
+				m.themePreview = ""
+				m.dialog = nil
+				if err := m.persistTheme(); err != nil {
+					m.notice, m.failed = "Color scheme: "+err.Error(), true
+				}
 				return nil
 			}
 			if d.kind == dialogResultSort || d.kind == dialogQueueSort {
@@ -672,8 +650,12 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 
 	case dialogDetails, dialogHelp:
 		innerWidth, _ := dialogDimensions(m.width)
-		visible := max(1, m.heightForDialog()-9)
+		visible := dialogBodyHeight(m.heightForDialog())
 		count := len(dialogDetailLines(d.rows, innerWidth))
+		if d.kind == dialogHelp {
+			visible, count = helpViewport(viewContentWidth(m.width), m.heightForDialog()-viewHeaderLines-viewFooterLines)
+		}
+		d.scroll = min(d.scroll, max(0, count-visible))
 		switch name {
 		case "up", "k":
 			d.stepScroll(-1, visible, count)
@@ -685,7 +667,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			d.stepScroll(visible, visible, count)
 		case "home", "g":
 			d.scroll = 0
-		case "end", "G":
+		case "end", "G", "shift+g":
 			d.scroll = max(0, count-visible)
 		}
 		return nil
@@ -720,7 +702,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			return m.launchAction("delete", request)
 		}
 
-	case dialogSearch, dialogFilter, dialogAdd, dialogAddResult, dialogEditValue, dialogMove:
+	case dialogSearch, dialogFilter, dialogAdd, dialogAddResult, dialogEditValue, dialogMove, dialogConfig:
 		switch name {
 		case "tab":
 			return d.cycleField(false)
@@ -819,6 +801,24 @@ func (m *model) submitDialog() tea.Cmd {
 		}
 		m.dialog = nil
 		return m.launchAction("move", actionRequest{kind: "move", hashes: d.request.hashes, value: path})
+
+	case dialogConfig:
+		choice := "no"
+		if len(d.fields) > 3 {
+			choice = d.value(3)
+		} else if m.setup.tuiDefault {
+			choice = "yes"
+		}
+		tuiDefault, err := parseTUIChoice(choice)
+		if err != nil {
+			d.status = err.Error()
+			return nil
+		}
+		return m.saveConfig(client.Credentials{
+			URL:  d.value(0),
+			User: d.value(1),
+			Pass: d.value(2),
+		}, tuiDefault)
 	}
 	return nil
 }
@@ -834,29 +834,69 @@ func dialogDimensions(width int) (innerWidth, padX int) {
 	if width < 1 {
 		width = 80
 	}
-	boxWidth := width - 4
-	if boxWidth < 8 {
-		boxWidth = width
+	if width < 12 {
+		return width, 0
 	}
-	if boxWidth > 94 {
-		boxWidth = 94
+	return min(76, width-8), 2
+}
+
+func dialogBodyHeight(height int) int {
+	if height >= 11 {
+		return height - 8
 	}
-	padX = 2
-	if boxWidth < 8 {
-		padX = 0
-	}
-	return max(1, boxWidth-2*padX-2), padX
+	return max(1, height-2)
 }
 
 func dialogDetailLines(rows []detailRow, width int) []string {
+	const columnGap = 4 // one cell of padding on either side of the label, then "│ "
+	stacked := width < 32
+	labelWidth, valueWidth := width, width
+	indent := ""
+	if !stacked {
+		labelWidth = 0
+		for _, row := range rows {
+			labelWidth = max(labelWidth, lipgloss.Width(strings.TrimSpace(viewSafe(row.label))))
+		}
+		// Keep the value column wide when the server returns extra fields.
+		labelWidth = min(labelWidth, width/3)
+		valueWidth = width - labelWidth - columnGap
+	} else if width >= 8 {
+		indent = "  "
+		valueWidth -= len(indent)
+	}
+	labelStyle := viewMutedStyle.Background(viewFieldColor)
+	divider := viewRuleStyle.Render("│") + " "
 	var lines []string
 	for _, row := range rows {
-		label := viewSafe(strings.TrimSpace(row.label))
-		line := viewSafe(strings.TrimSpace(row.value))
-		if label != "" {
-			line = label + ": " + line
+		label := strings.TrimSpace(viewSafe(row.label))
+		value := strings.TrimSpace(viewSafe(row.value))
+		valueStyle := viewTextStyle
+		if value == "" {
+			value = "—"
+			valueStyle = viewMutedStyle
 		}
-		lines = append(lines, strings.Split(ansi.Wrap(line, width, "/"), "\n")...)
+		labels := strings.Split(ansi.Wrap(label, labelWidth, ""), "\n")
+		values := strings.Split(ansi.Wrap(value, valueWidth, "/"), "\n")
+		if stacked {
+			for _, part := range labels {
+				lines = append(lines, viewMutedStyle.Render(part))
+			}
+			for _, part := range values {
+				lines = append(lines, indent+valueStyle.Render(part))
+			}
+			continue
+		}
+		for i := range max(len(labels), len(values)) {
+			labelPart, valuePart := "", ""
+			if i < len(labels) {
+				labelPart = strings.TrimSpace(labels[i])
+			}
+			if i < len(values) {
+				valuePart = values[i]
+			}
+			inset := strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(labelPart)))
+			lines = append(lines, labelStyle.Render(" "+inset+labelPart+" ")+divider+valueStyle.Render(valuePart))
+		}
 	}
 	return lines
 }
@@ -869,139 +909,112 @@ func (m *model) dialogView(width, height int) string {
 	if height < 1 {
 		height = 24
 	}
+	if d.kind == dialogPalette {
+		width = min(66, width)
+	}
 	innerWidth, padX := dialogDimensions(width)
-
-	lines := make([]string, 0, 24)
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("37")).Render(clipDialog(viewSafe(d.title), innerWidth)))
-	lines = append(lines, "")
+	visible := dialogBodyHeight(height)
+	var body []string
+	footer := viewKeys(innerWidth, "tab", "next", "enter", "submit", "esc", "cancel")
+	if d.status != "" {
+		visible = max(1, visible-1)
+	}
 
 	switch d.kind {
 	case dialogPalette:
-		if len(d.fields) > 0 {
-			lines = append(lines, dialogInputLine(d.fields[0], d.focus == 0, innerWidth))
-			lines = append(lines, "")
-		}
-		visible := max(3, height-10)
-		start := d.selected - visible/2
-		if start < 0 {
-			start = 0
-		}
-		if start > len(d.items)-visible {
-			start = max(0, len(d.items)-visible)
-		}
-		end := min(len(d.items), start+visible)
-		for i := start; i < end; i++ {
+		body = m.dialogPaletteLines(innerWidth, visible)
+		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "run")
+
+	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme:
+		start := min(max(0, d.selected-visible/2), max(0, len(d.items)-visible))
+		for i := start; i < min(len(d.items), start+visible); i++ {
 			item := d.items[i]
-			prefix := "  "
+			line := "  " + item.label
 			if i == d.selected {
-				prefix = "› "
-			}
-			label := prefix + item.label
-			if item.keys != "" {
-				label += "  " + item.keys
+				line = "› " + item.label
 			}
 			if item.description != "" {
-				label += " — " + item.description
+				line += " · " + item.description
 			}
-			label = clipDialog(label, innerWidth)
+			line = viewFit(line, innerWidth)
 			if i == d.selected {
-				label = lipgloss.NewStyle().Foreground(lipgloss.Color("37")).Bold(true).Render(label)
+				line = viewSelectedSty.Width(innerWidth).Render(line)
 			}
-			lines = append(lines, label)
+			body = append(body, line)
 		}
-		if len(d.items) == 0 {
-			lines = append(lines, lipgloss.NewStyle().Faint(true).Render("  No matching commands"))
+		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "select", "esc", "close")
+		if d.kind == dialogTheme {
+			footer = viewKeys(innerWidth, "↑/↓", "preview", "enter", "save", "esc", "cancel")
 		}
 
-	case dialogEditSelect, dialogResultSort, dialogQueueSort:
-		visible := max(3, height-8)
-		start := d.selected - visible/2
-		if start < 0 {
-			start = 0
-		}
-		if start > len(d.items)-visible {
-			start = max(0, len(d.items)-visible)
-		}
-		end := min(len(d.items), start+visible)
-		for i := start; i < end; i++ {
-			prefix := "  "
-			if i == d.selected {
-				prefix = "› "
-			}
-			line := prefix + d.items[i].label
-			if d.items[i].description != "" {
-				line += " — " + d.items[i].description
-			}
-			line = clipDialog(line, innerWidth)
-			if i == d.selected {
-				line = lipgloss.NewStyle().Foreground(lipgloss.Color("37")).Bold(true).Render(line)
-			}
-			lines = append(lines, line)
-		}
-
-	case dialogDetails, dialogHelp:
-		visible := max(1, height-9)
+	case dialogDetails:
 		details := dialogDetailLines(d.rows, innerWidth)
 		start := min(d.scroll, max(0, len(details)-visible))
-		end := min(len(details), start+visible)
-		lines = append(lines, details[start:end]...)
+		body = append(body, details[start:min(len(details), start+visible)]...)
 		if len(details) == 0 {
-			lines = append(lines, lipgloss.NewStyle().Faint(true).Render("(no details)"))
+			body = append(body, viewMutedStyle.Render("No details available"))
 		}
+		footer = viewKeys(innerWidth, "esc", "close", "↑/↓", "scroll", "pgup/pgdn", "page")
 
 	case dialogConfirm, dialogDelete:
-		for _, line := range strings.Split(d.message, "\n") {
-			lines = append(lines, clipDialog(viewSafe(line), innerWidth))
+		message := strings.Split(d.message, "\n")
+		messageRows := visible
+		footer = viewKeys(innerWidth, "enter", "confirm", "esc", "cancel")
+		if d.kind == dialogDelete {
+			messageRows--
+			footer = viewKeys(innerWidth, "enter", "delete", "esc", "cancel")
 		}
-		if len(d.fields) > 0 {
-			lines = append(lines, "", dialogInputLine(d.fields[0], d.focus == 0, innerWidth))
+		for i, line := range message[:max(0, min(len(message), messageRows))] {
+			style := viewTextStyle
+			if i == 0 {
+				style = viewWarnStyle.Bold(true)
+			}
+			body = append(body, style.Render(viewFit(viewSafe(line), innerWidth)))
+		}
+		if d.kind == dialogDelete && len(d.fields) > 0 {
+			body = append(body, dialogInputLine(d.fields[0], true, innerWidth))
 		}
 
 	default:
-		for i := range d.fields {
-			lines = append(lines, dialogInputLine(d.fields[i], i == d.focus, innerWidth))
-			if d.fields[i].help != "" {
-				lines = append(lines, lipgloss.NewStyle().Faint(true).Render("  "+clipDialog(d.fields[i].help, innerWidth-2)))
+		var focusedLine int
+		for i, field := range d.fields {
+			if i == d.focus {
+				focusedLine = len(body)
+			}
+			body = append(body, dialogInputLine(field, i == d.focus, innerWidth))
+			if field.help != "" && visible > len(d.fields) {
+				body = append(body, viewMutedStyle.Render(viewFit("  "+viewSafe(field.help), innerWidth)))
 			}
 		}
+		start := viewWindowStart(focusedLine, len(body), visible)
+		body = body[start:min(len(body), start+visible)]
+	}
+	if d.status != "" && height >= 4 {
+		body = append(body, viewErrorStyle.Render(viewFit(viewSafe(d.status), innerWidth)))
 	}
 
-	if d.status != "" {
-		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(clipDialog(viewSafe(d.status), innerWidth)))
+	title := viewTitleStyle.Render(viewFit(viewSafe(d.title), innerWidth))
+	if d.kind == dialogPalette && innerWidth >= 31 {
+		title = viewRightAligned(innerWidth, title, viewKeys(innerWidth, "esc", "close"))
+	} else if d.kind == dialogPalette {
+		footer = viewKeys(innerWidth, "esc", "close", "enter", "run")
+	}
+	lines := []string{title}
+	if height >= 11 {
+		lines = append([]string{"", title, ""}, body...)
+		lines = append(lines, "", footer, "")
+	} else {
+		lines = append(lines, body...)
+		lines = append(lines, footer)
 	}
 
-	footer := "Esc close"
-	switch d.kind {
-	case dialogPalette:
-		footer = "↑/↓ choose · Enter select · type to filter · Esc close"
-	case dialogEditSelect:
-		footer = "↑/↓ choose · Enter edit · Esc close"
-	case dialogResultSort, dialogQueueSort:
-		footer = "↑/↓ choose · Enter apply · Esc close"
-	case dialogDetails, dialogHelp:
-		footer = "↑/↓ scroll · PgUp/PgDn page · Esc close"
-	case dialogConfirm:
-		footer = "y/Enter confirm · n/Esc cancel"
-	case dialogDelete:
-		footer = "type DELETE · Enter confirm · Esc cancel"
-	default:
-		footer = "Tab next · Shift+Tab previous · Enter submit · Esc cancel"
+	padding := strings.Repeat(" ", padX)
+	for i, line := range lines {
+		lines[i] = padding + viewColumn(line, innerWidth) + padding
 	}
-	lines = append(lines, "", lipgloss.NewStyle().Faint(true).Render(clipDialog(footer, innerWidth)))
-
-	// Keep the modal bounded even when a torrent name, tracker URL, or error
-	// includes a very long line. The renderer can then center it predictably.
-	maxLines := max(1, height-4)
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-	}
-	content := strings.Join(lines, "\n")
-	style := lipgloss.NewStyle().
-		Width(innerWidth).
-		Padding(1, padX).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
-	return style.Render(content)
+	lines = lines[:min(height, len(lines))]
+	return viewSurface(strings.Join(lines, "\n"), innerWidth+2*padX, len(lines),
+		viewPanelColor, viewTextStyle.GetForeground())
 }
 
 func dialogInputLine(field dialogField, focused bool, width int) string {
@@ -1016,8 +1029,11 @@ func dialogInputLine(field dialogField, focused bool, width int) string {
 	available := max(1, width-lipgloss.Width(prefix+label)-3)
 	field.input.SetWidth(available)
 	value := field.input.View()
-	line := prefix + label + ": " + value
-	return clipDialog(line, width)
+	line := viewMutedStyle.Render(prefix+label+": ") + value
+	if focused {
+		line = viewAccentStyle.Render(prefix+label+": ") + value
+	}
+	return viewSurface(viewFit(line, width), width, 1, viewFieldColor, viewTextStyle.GetForeground())
 }
 
 func clipDialog(value string, width int) string {

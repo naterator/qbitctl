@@ -16,9 +16,9 @@ Use it as a **standalone command-line tool** to manage torrents from the termina
 
 ## TUI walkthrough
 
-The demo opens the queue, searches for Ubuntu, sorts and filters the results,
-and adds a selected torrent. It uses a local mock qBittorrent server with
-sample data.
+The demo shows the shortcut reference, command palette, and color scheme
+picker. It then searches for Ubuntu, sorts and filters the results, and adds
+a selected torrent. It uses a local mock qBittorrent server with sample data.
 
 ![qbitctl TUI walkthrough showing the queue and Ubuntu search](assets/demo.gif)
 
@@ -182,10 +182,19 @@ Run `qbitctl help <command>` to see its flags and any aliases.
 #### tui
 
 `qbitctl tui` opens the workspace in an interactive terminal using the same
-credentials as the other commands. Run `qbitctl config` before the first launch.
+config as the other commands. The Config tab guides you through first-time
+setup and lets you change the server address or credentials later. A blank
+password field keeps the saved password for the same server. Enter a password
+when switching to a different server.
 
-- Press `Tab` or `1`, `2`, and `3` to switch between Queue, Search, and Server.
-- Press `Ctrl+P` or `:` to filter available actions, and `?` to see shortcuts.
+- Press `Tab` or `1`, `2`, `3`, and `4` to switch between Queue, Search,
+  Server, and Config.
+- Open **Color scheme** in Config to preview Default or one of 16 other
+  palettes. Press `Enter` to save or `Esc` to return to the previous palette.
+- Press `Ctrl+P` or `:` to open the command palette. Type to find a command,
+  use the arrow keys to move, and press `Enter` to run it.
+- Press `?` for the grouped keyboard shortcut reference. Use the arrow keys
+  or Page Up and Page Down to scroll in smaller terminals. Press `Esc` to return.
 - In Queue, `/` filters by name, hash, category, tags, or state. Use the arrows
   or `j` and `k` to move, `Enter` for details, and `Space` to mark torrents for
   batch actions. The palette includes start, pause, force-start, move, edit,
@@ -193,9 +202,7 @@ credentials as the other commands. Run `qbitctl config` before the first launch.
   confirmation.
 - In Queue, press `o` or choose **Sort queue** in the palette to sort by name,
   progress, or state in either direction. Choose **Active first**
-  to restore the default order. The TUI saves the Queue sort to
-  `${XDG_CONFIG_HOME:-$HOME/.config}/qbitctl/tui-queue.json` and restores it when
-  you reopen it. Press `s` to start selected torrents.
+  to restore the default order. Press `s` to start selected torrents.
 - In Search, `/` opens the search form. It defaults to Jackett and 30 seconds.
   Press `Enter` on a result to open the add dialog, then `Enter` to submit it.
   Press `Esc` to cancel a running search.
@@ -205,11 +212,42 @@ credentials as the other commands. Run `qbitctl config` before the first launch.
   such as `500 MB` and `2 GiB`. Leave either size bound blank for an open-ended
   range. The results update as you type. `Enter` applies the filters and `Esc`
   discards edits. Press `Esc` on the results list to clear the applied filters.
-  The TUI saves sort order and numeric bounds in
-  `${XDG_CONFIG_HOME:-$HOME/.config}/qbitctl/tui-search.json` and reuses them
-  for new searches and future TUI sessions. Text filters apply to the current
-  search.
+  Text filters apply to the current search.
 - Press `a` to add a torrent file or magnet link, `r` to refresh, and `q` to quit.
+
+The TUI saves preferences in the active config file, including when you use
+`--config` to select a different file.
+
+```json
+{
+  "ui": {
+    "tui_default": false,
+    "theme": "default",
+    "queue": { "sort": "progress-desc" },
+    "search": {
+      "sort": "seeders-desc",
+      "min_seeders": "10",
+      "min_size": "500 MB",
+      "max_size": "4 GiB"
+    }
+  }
+}
+```
+
+On the first TUI launch with the default config or its `./config.json`
+fallback, qbitctl imports missing preferences from `tui-queue.json` and
+`tui-search.json`. It removes each old file after its settings have been
+saved to `config.json`.
+
+#### tui-default
+
+Run `qbitctl tui-default on` to open the TUI when you run bare `qbitctl`
+in an interactive terminal. Run `qbitctl tui-default off` to show CLI help
+once configured, or `qbitctl tui-default status` to read the setting.
+You can also change it in the TUI's Config tab. Explicit subcommands run
+directly when credentials are configured. On first use in a terminal,
+qbitctl offers TUI or text setup. Text setup resumes the requested command.
+TUI setup opens the workspace once the connection succeeds.
 
 #### info (aliases: i, in)
 

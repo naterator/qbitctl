@@ -17,9 +17,11 @@
 The walkthrough opens the grouped keyboard shortcuts and searchable command
 palette, changes the startup preference in Config, and shows its confirmation
 clear after five seconds. It previews a color scheme and opens the torrent
-details table, then searches for Ubuntu, sorts and filters the results, adds
-a result, and checks server status. The recording uses a local mock
-qBittorrent server and sample data.
+details table, then searches for Ubuntu and sorts and filters the results.
+After searching for Debian, it adds the earlier Ubuntu result by ID and checks
+server status. Recent IDs remain usable for up to 24 hours with the same
+qBittorrent URL and user. The recording uses a local mock qBittorrent server
+and sample data.
 
 ![qbitctl TUI walkthrough showing shortcuts, configuration, torrent details, and search](assets/demo.gif)
 

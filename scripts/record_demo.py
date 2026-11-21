@@ -143,10 +143,10 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(body=[{"url": "https://tracker.example/announce", "status": 2, "tier": 0}])
         elif parsed.path == "/api/v2/search/status":
             job_id = int(query["id"][0])
-            status = "Running" if self.fixture.search_running else "Stopped"
-            self.reply(body=[{"id": job_id, "status": status}])
+            self.reply(body=[{"id": job_id, "status": "Stopped"}])
         elif parsed.path == "/api/v2/search/results":
-            self.reply(body={"results": self.fixture.search_results})
+            pattern = self.fixture.search_jobs[int(query["id"][0])]
+            self.reply(body={"results": self.fixture.search_results[pattern]})
         else:
             self.reply(404)
 
@@ -163,9 +163,9 @@ class Fixture(BaseHTTPRequestHandler):
         if not self.protected():
             return
         if path == "/api/v2/search/start":
-            self.fixture.searches += 1
-            self.fixture.last_job = self.fixture.searches
-            self.reply(body={"id": self.fixture.last_job})
+            job_id = len(self.fixture.search_jobs) + 1
+            self.fixture.search_jobs[job_id] = form["pattern"][0]
+            self.reply(body={"id": job_id})
         elif path == "/api/v2/search/delete":
             self.fixture.deleted_jobs.append(int(form.get("id", [0])[0]))
             self.reply(204)
@@ -293,7 +293,7 @@ class Recording:
             text = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", bytes(self.output[start:]))
             if marker.encode("utf-8") in text:
                 self.hold(0.2)
-                return
+                return text
         raise RuntimeError(f"Missing {marker!r}: {self.output[-1200:]!r}")
 
     def key(self, key, expected=None):
@@ -304,9 +304,8 @@ class Recording:
         start = len(self.output)
         self.send(key)
         if expected:
-            self.wait(expected, start)
-        else:
-            self.hold(0.3)
+            return self.wait(expected, start)
+        self.hold(0.3)
 
     def type_text(self, value, delay=0.055):
         for character in value:
@@ -358,7 +357,7 @@ def main():
         torrent("Ubuntu 24.04 LTS", ALPHA, "downloading", 0.42, 4 * GIB, "ISO", "linux release"),
         torrent("Debian 12 Bookworm", BRAVO, "stoppedUP", 1.0, 2 * GIB, "ISO", "linux stable"),
     ]
-    fixture.search_results = [
+    ubuntu_results = [
         {
             "fileName": "Ubuntu 24.04 Server amd64",
             "fileSize": 2 * GIB,
@@ -390,9 +389,20 @@ def main():
             "engineName": "jackett",
         },
     ]
-    fixture.searches = 0
-    fixture.search_running = False
-    fixture.last_job = 0
+    fixture.search_results = {
+        "Ubuntu 24.04": ubuntu_results,
+        "Debian": [{
+            "fileName": "Debian 12.9 DVD amd64",
+            "fileSize": 4 * GIB,
+            "nbSeeders": 68,
+            "nbLeechers": 4,
+            "fileUrl": "https://jackett.example/download/debian?token=demo",
+            "siteUrl": "https://jackett.example",
+            "descrLink": "https://indexer.example/debian",
+            "engineName": "jackett",
+        }],
+    }
+    fixture.search_jobs = {}
     fixture.deleted_jobs = []
     fixture.deleted_torrents = []
     fixture.downloads = []
@@ -461,8 +471,26 @@ def main():
             recording.key(b"enter")
             recording.hold(1.0)
 
-            # Submit the focused filtered result, then show the server page.
-            recording.key(b"enter", "Add search result")
+            # Copy the filtered result's ID before running another search.
+            add_hint = "Use a recent result ID from this server and user"
+            dialog = recording.key(b"enter", add_hint)
+            result_id = re.search(rb"Result ID: ([0-9]+)\b", dialog)
+            if result_id is None:
+                raise RuntimeError("could not read the Ubuntu result ID")
+            recording.hold(1.4)
+            recording.key(b"escape")
+            recording.key(b"escape")
+            recording.key(b"/", "Search Jackett")
+            recording.key(b"\x15")  # Ctrl+U clears the previous query.
+            recording.type_text("Debian")
+            recording.key(b"enter", "Debian 12.9 DVD amd64")
+            recording.hold(1.0)
+
+            # Replace the selected Debian ID with the earlier Ubuntu ID.
+            recording.key(b"enter", add_hint)
+            recording.key(b"\x15")
+            recording.paste_text(result_id.group(1).decode("ascii"))
+            recording.hold(1.4)
             recording.key(b"enter", "Search result submitted")
             recording.hold(0.8)
             recording.key(b"3", "v5.3.0")
@@ -476,17 +504,17 @@ def main():
             if recording.proc.returncode != 0:
                 raise RuntimeError(f"qbitctl tui exited with status {recording.proc.returncode}")
             expected_download = {
-                "torrentUrl": [fixture.search_results[-1]["fileUrl"]],
+                "torrentUrl": [ubuntu_results[-1]["fileUrl"]],
                 "pluginName": ["jackett"],
             }
             if (
-                fixture.searches != 1
+                fixture.search_jobs != {1: "Ubuntu 24.04", 2: "Debian"}
                 or fixture.logouts != 1
-                or fixture.deleted_jobs != [1]
+                or fixture.deleted_jobs != [1, 2]
                 or fixture.downloads != [expected_download]
             ):
                 raise RuntimeError(
-                    f"fixture cleanup mismatch: logout={fixture.logouts}, "
+                    f"fixture mismatch: searches={fixture.search_jobs}, logout={fixture.logouts}, "
                     f"deleted={fixture.deleted_jobs}, downloads={fixture.downloads}"
                 )
             recording.save(output)

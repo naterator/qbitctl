@@ -143,10 +143,10 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(body=[{"url": "https://tracker.example/announce", "status": 2, "tier": 0}])
         elif parsed.path == "/api/v2/search/status":
             job_id = int(query["id"][0])
-            self.reply(body=[{"id": job_id, "status": "Stopped"}])
+            status = "Running" if self.fixture.search_running else "Stopped"
+            self.reply(body=[{"id": job_id, "status": status}])
         elif parsed.path == "/api/v2/search/results":
-            pattern = self.fixture.search_jobs[int(query["id"][0])]
-            self.reply(body={"results": self.fixture.search_results[pattern]})
+            self.reply(body={"results": self.search_results(int(query["id"][0]))})
         else:
             self.reply(404)
 
@@ -182,6 +182,10 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(204)
         else:
             self.reply(404)
+
+    def search_results(self, job_id):
+        pattern = self.fixture.search_jobs.get(job_id, "")
+        return self.fixture.search_results.get(pattern, [])
 
 
 class Recording:
@@ -403,6 +407,7 @@ def main():
         }],
     }
     fixture.search_jobs = {}
+    fixture.search_running = False
     fixture.deleted_jobs = []
     fixture.deleted_torrents = []
     fixture.downloads = []

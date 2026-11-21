@@ -208,9 +208,37 @@ class Recording:
             "COLORTERM": "truecolor",
             "TERM_PROGRAM": "qbitctl-demo",
             "HISTFILE": os.devnull,
+            # Keep the recording independent of the host Keychain while still
+            # exercising the encrypted config path shown by the Config tab.
+            "QBITCTL_MASTER_KEY": "qbitctl-demo-master-key",
         })
+        config_path = "./config.json"
+        setup = [
+            str(binary),
+            "--config", config_path,
+            "--url", f"http://127.0.0.1:{port}",
+            "--user", "demo",
+            "--pass", "demo",
+            "config", "write",
+        ]
+        result = subprocess.run(
+            setup,
+            cwd=base,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"could not prepare demo config ({result.returncode}): "
+                f"{result.stderr.strip()}"
+            )
         command = [
             str(binary),
+            "--config", config_path,
             "--url", f"http://127.0.0.1:{port}",
             "--user", "demo",
             "--pass", "demo",
@@ -379,17 +407,24 @@ def main():
             recording.hold(0.8)
             recording.key(b"escape")
 
+            # Show the masked credential metadata and startup preference, then
+            # let the saved-preference confirmation expire in the footer.
+            recording.key(b"4", "Configuration")
+            recording.hold(1.4)
+            recording.key(b"d", "TUI startup preference saved")
+            recording.hold(1.0)
+            recording.hold(4.3)
+
             # Open Config and preview a color scheme without saving it.
-            recording.key(b"4", "Color scheme")
             recording.key(b"c", "Color scheme")
             recording.key(b"down")
-            recording.hold(1.0)
+            recording.hold(1.2)
             recording.key(b"escape")
             recording.key(b"1")
 
             # Inspect the selected transfer.
             recording.key(b"enter", "Full Path")
-            recording.hold(0.8)
+            recording.hold(1.5)
             recording.key(b"escape")
             recording.hold(0.5)
 

@@ -64,13 +64,14 @@ func usesDefaultPreferences(path, dir string) bool {
 }
 
 func (m *model) preferenceNotice(err error) {
-	if err != nil {
-		if m.notice != "" {
-			m.notice += " · "
-		}
-		m.notice += err.Error()
-		m.failed = true
+	if err == nil {
+		return
 	}
+	message := err.Error()
+	if m.notice != "" {
+		message = m.notice + " · " + message
+	}
+	m.setNotice(message, true)
 }
 
 func readPreferences(path, section string) (json.RawMessage, error) {

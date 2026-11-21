@@ -122,10 +122,10 @@ func (m *model) persistSearchPreferences(order resultSort, filter *resultFilter)
 		return
 	}
 	if err := saveSearchPreferences(m.preferencesPath, order, filter); err != nil {
-		m.notice, m.failed = "Could not save search preferences. "+err.Error(), true
+		m.setNotice("Could not save search preferences. "+err.Error(), true)
 		return
 	}
-	m.notice, m.failed = "Search preferences saved", false
+	m.setNotice("Search preferences saved", false)
 }
 
 func (m *model) rebuildSearchResults() {
@@ -197,7 +197,7 @@ type resultFilterEditor struct {
 func (m *model) startResultFilter() tea.Cmd {
 	m.dialog = nil
 	if len(m.allResults) == 0 && !m.resultFilter.numeric().active() {
-		m.notice, m.failed = "Run a search to filter its results", false
+		m.setNotice("Run a search to filter its results", false)
 		return nil
 	}
 	filter := m.resultFilter

@@ -1,10 +1,8 @@
-# qbitctl
+# <img src="assets/logo.svg" alt="" width="38" height="38" align="middle"> qbitctl
 
-**qbitctl** is a Go library and CLI tool for controlling qBittorrent through its HTTP API.
+**qbitctl** is an interactive terminal UI, command-line tool, and Go library for controlling qBittorrent through its Web API.
 
-Use it as a **standalone command-line tool** to manage torrents from the terminal, or import `pkg/client` as a **Go library** to build qBittorrent automation into your own applications.
-
-- Query and display torrent properties
+- Query torrent properties from the CLI or inspect them in the TUI’s details table
 - Update torrent settings such as tags, category, limits, and share rules
 - Start, pause, move, remove, and delete torrents
 - View qBittorrent server info and transfer statistics
@@ -16,11 +14,14 @@ Use it as a **standalone command-line tool** to manage torrents from the termina
 
 ## TUI walkthrough
 
-The demo shows the shortcut reference, command palette, and color scheme
-picker. It then searches for Ubuntu, sorts and filters the results, and adds
-a selected torrent. It uses a local mock qBittorrent server with sample data.
+The walkthrough opens the grouped keyboard shortcuts and searchable command
+palette, changes the startup preference in Config, and shows its confirmation
+clear after five seconds. It previews a color scheme and opens the torrent
+details table, then searches for Ubuntu, sorts and filters the results, adds
+a result, and checks server status. The recording uses a local mock
+qBittorrent server and sample data.
 
-![qbitctl TUI walkthrough showing the queue and Ubuntu search](assets/demo.gif)
+![qbitctl TUI walkthrough showing shortcuts, configuration, torrent details, and search](assets/demo.gif)
 
 [Replayable terminal recording](assets/demo.cast) · [Recording script](scripts/record_demo.py)
 
@@ -185,7 +186,8 @@ Run `qbitctl help <command>` to see its flags and any aliases.
 config as the other commands. The Config tab guides you through first-time
 setup and lets you change the server address or credentials later. A blank
 password field keeps the saved password for the same server. Enter a password
-when switching to a different server.
+when switching to a different server. The Config tab shows whether a password
+is saved and masks new passwords as you type.
 
 - Press `Tab` or `1`, `2`, `3`, and `4` to switch between Queue, Search,
   Server, and Config.
@@ -200,6 +202,9 @@ when switching to a different server.
   batch actions. The palette includes start, pause, force-start, move, edit,
   trackers, remove, and delete. Removing torrents and deleting data require
   confirmation.
+- Torrent details use a two-column layout with right-aligned labels, a visual
+  divider, and left-aligned values. Long values wrap within the value column,
+  and the view remains scrollable in smaller terminals.
 - In Queue, press `o` or choose **Sort queue** in the palette to sort by name,
   progress, or state in either direction. Choose **Active first**
   to restore the default order. Press `s` to start selected torrents.
@@ -213,6 +218,9 @@ when switching to a different server.
   range. The results update as you type. `Enter` applies the filters and `Esc`
   discards edits. Press `Esc` on the results list to clear the applied filters.
   Text filters apply to the current search.
+- Footer confirmations, hints, and errors clear after about five seconds. A
+  newer message replaces the current one and receives its own timeout, while
+  active progress indicators continue until the operation finishes.
 - Press `a` to add a torrent file or magnet link, `r` to refresh, and `q` to quit.
 
 The TUI saves preferences in the active config file, including when you use
@@ -406,6 +414,10 @@ qbitctl version                # show version (aliases: v, ve, ver)
 qbitctl completion bash        # generate shell completions (alias: com)
 qbitctl help                   # help (aliases: h, he)
 ```
+
+The help view groups commands and flags by section. In a color-capable terminal,
+section headings, command names, and descriptions use separate colors. Set
+`NO_COLOR=1` for the same help content without styling.
 
 ### Output format flags
 

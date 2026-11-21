@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-labelledby="title">
+  <title id="title">qbitctl</title>
+  <rect x="1" y="1" width="46" height="46" rx="8" fill="#1d2531" stroke="#536478" stroke-width="2"/>
+  <path fill="#9ac8ff" fill-rule="evenodd" d="M15 9h15v4h4v17H15v-4h-4V13h4zm1 5v11h13V14z"/>
+  <path fill="#85d7c8" d="M29 30h5v4h5v3h-4v3h-7v-3h-4v-3h5z"/>
+</svg>

@@ -3,11 +3,13 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/naterator/qbitctl/pkg/client"
 )
@@ -70,6 +72,67 @@ func TestConfigPageShowsOnlyPasswordMetadata(t *testing.T) {
 	}
 	if strings.Contains(frame, "password") && strings.Contains(frame, "secret") {
 		t.Fatal("config page exposed a password-like value")
+	}
+}
+
+func TestFooterNoticeExpiry(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.page = configPage
+	enabled := true
+	saved := workDone{kind: configWork, setDefault: &enabled}
+	const confirmation = "TUI startup preference saved"
+	_, cmd := m.Update(saved)
+	if cmd == nil || m.notice != confirmation {
+		t.Fatal("startup preference save did not show a timed confirmation")
+	}
+	firstExpiry := noticeExpired(m.noticeID)
+
+	m.Update(tea.KeyPressMsg{Code: '2'})
+	if m.page != searchPage || m.notice != confirmation {
+		t.Fatal("switching tabs should preserve the active confirmation")
+	}
+	m.Update(saved)
+	secondExpiry := noticeExpired(m.noticeID)
+	m.Update(firstExpiry)
+	if m.notice != confirmation {
+		t.Fatal("an older timer cleared a newer confirmation")
+	}
+	m.Update(secondExpiry)
+	if m.notice != "" {
+		t.Fatal("confirmation did not clear when its timer expired")
+	}
+
+	const action = "Torrent submitted"
+	_, cmd = m.Update(workDone{kind: actionWork, notice: action})
+	if cmd == nil || m.notice != action {
+		t.Fatal("action did not show a timed confirmation")
+	}
+	actionExpiry := noticeExpired(m.noticeID)
+	_, cmd = m.Update(tea.KeyPressMsg{Code: 'f'})
+	const search = "Run a search to filter its results"
+	if cmd == nil || m.notice != search {
+		t.Fatal("a keyboard action did not show a timed status")
+	}
+	m.Update(actionExpiry)
+	if m.notice != search {
+		t.Fatal("confirmation timer cleared a newer status message")
+	}
+	m.Update(noticeExpired(m.noticeID))
+	if m.notice != "" {
+		t.Fatal("keyboard status did not expire")
+	}
+}
+
+func TestFooterErrorExpiresWhileWorkContinues(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	_, cmd := m.Update(workDone{kind: configWork, err: errors.New("Could not save preferences")})
+	if cmd == nil || !m.failed {
+		t.Fatal("failure did not show a timed error")
+	}
+	m.busy = "Refreshing queue"
+	m.Update(noticeExpired(m.noticeID))
+	if m.notice != "" || m.failed || m.busy != "Refreshing queue" {
+		t.Fatal("expiring an error should clear the error and preserve live progress")
 	}
 }
 

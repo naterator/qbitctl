@@ -52,10 +52,10 @@ func (m *model) setQueueSort(order queueSort) {
 		return
 	}
 	if err := saveQueuePreferences(m.preferencesPath, order); err != nil {
-		m.notice, m.failed = "Could not save queue sort. "+err.Error(), true
+		m.setNotice("Could not save queue sort. "+err.Error(), true)
 		return
 	}
-	m.notice, m.failed = "Queue sort saved", false
+	m.setNotice("Queue sort saved", false)
 }
 
 func (order queueSort) compare(left, right client.TorrentInfo) int {

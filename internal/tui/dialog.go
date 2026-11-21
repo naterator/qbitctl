@@ -244,18 +244,18 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "start", "pause", "force-start":
 		hashes := m.targetHashes()
 		if len(hashes) == 0 {
-			m.notice = "Select or mark a torrent first"
+			m.setNotice("Select or mark a torrent first", false)
 			return nil
 		}
 		if m.busy != "" {
-			m.notice = "Finish the current request first"
+			m.setNotice("Finish the current request first", false)
 			return nil
 		}
 		m.dialog = nil
 		return m.launchAction(action, actionRequest{kind: action, hashes: joinHashes(hashes)})
 	case "move":
 		if len(m.targetHashes()) == 0 {
-			m.notice = "Select or mark a torrent first"
+			m.setNotice("Select or mark a torrent first", false)
 			return nil
 		}
 		m.openMoveDialog()
@@ -348,7 +348,7 @@ func (m *model) openAddResultDialog() {
 func (m *model) openEditDialog() {
 	torrent, ok := m.focusedTorrent()
 	if !ok {
-		m.notice = "Select or mark a torrent first"
+		m.setNotice("Select or mark a torrent first", false)
 		return
 	}
 	items := make([]dialogItem, 0, len(client.SetFieldNames))
@@ -397,7 +397,7 @@ func (m *model) openSortDialog(kind dialogKind) {
 func (m *model) openMoveDialog() {
 	hashes := m.targetHashes()
 	if len(hashes) == 0 {
-		m.notice = "Select or mark a torrent first"
+		m.setNotice("Select or mark a torrent first", false)
 		return
 	}
 	d := &dialog{
@@ -415,7 +415,7 @@ func (m *model) openMoveDialog() {
 func (m *model) openRemoveDialog(deleteFiles bool) tea.Cmd {
 	hashes := m.targetHashes()
 	if len(hashes) == 0 {
-		m.notice = "Select or mark a torrent first"
+		m.setNotice("Select or mark a torrent first", false)
 		return nil
 	}
 	if deleteFiles {
@@ -621,7 +621,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				m.themePreview = ""
 				m.dialog = nil
 				if err := m.persistTheme(); err != nil {
-					m.notice, m.failed = "Color scheme: "+err.Error(), true
+					m.setNotice("Color scheme: "+err.Error(), true)
 				}
 				return nil
 			}

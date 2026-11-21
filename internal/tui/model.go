@@ -59,6 +59,8 @@ type workDone struct {
 
 type refreshTick struct{}
 
+type noticeExpired uint64
+
 type model struct {
 	ctx             context.Context
 	backend         service
@@ -98,6 +100,8 @@ type model struct {
 	dialog        *dialog
 	busy, notice  string
 	failed        bool
+
+	noticeID uint64
 }
 
 func newModel(ctx context.Context, backend service) *model {
@@ -136,7 +140,7 @@ func Run(ctx context.Context, app *client.App, input io.Reader, output io.Writer
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), nextTick())
+	return tea.Batch(m.refresh(), nextTick(), m.noticeTimer())
 }
 
 func nextTick() tea.Cmd {
@@ -144,45 +148,72 @@ func nextTick() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	noticeID := m.noticeID
+	cmd := m.update(msg)
+	if m.noticeID != noticeID {
+		cmd = tea.Batch(cmd, m.noticeTimer())
+	}
+	return m, cmd
+}
+
+func (m *model) setNotice(text string, failed bool) {
+	m.notice, m.failed = text, failed
+	m.noticeID++
+}
+
+func (m *model) noticeTimer() tea.Cmd {
+	if m.notice == "" {
+		return nil
+	}
+	expiry := noticeExpired(m.noticeID)
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return expiry })
+}
+
+func (m *model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.resultEditor != nil {
 			m.resultEditor.inputs[m.resultEditor.active].SetWidth(m.resultFilterInputWidth())
-			return m, m.updateResultFilter(msg)
+			return m.updateResultFilter(msg)
 		}
-		return m, nil
+		return nil
 	case workDone:
-		return m, m.finishWork(msg)
+		return m.finishWork(msg)
+	case noticeExpired:
+		if uint64(msg) == m.noticeID {
+			m.setNotice("", false)
+		}
+		return nil
 	case refreshTick:
 		if m.busy == "" && m.dialog == nil && m.page != searchPage && m.page != configPage && !m.quitting {
-			return m, tea.Batch(m.refresh(), nextTick())
+			return tea.Batch(m.refresh(), nextTick())
 		}
-		return m, nextTick()
+		return nextTick()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			if m.busy != "" && m.work == searchWork && !m.quitting {
 				m.cancelSearch()
-				return m, nil
+				return nil
 			}
-			return m, m.requestQuit()
+			return m.requestQuit()
 		}
 		if m.resultEditor != nil {
-			return m, m.updateResultFilter(msg)
+			return m.updateResultFilter(msg)
 		}
 		if m.dialog != nil {
-			return m, m.updateDialog(msg)
+			return m.updateDialog(msg)
 		}
-		return m, m.handleKey(msg.String())
+		return m.handleKey(msg.String())
 	default:
 		if m.resultEditor != nil {
-			return m, m.updateResultFilter(msg)
+			return m.updateResultFilter(msg)
 		}
 		if m.dialog != nil {
-			return m, m.updateDialog(msg)
+			return m.updateDialog(msg)
 		}
 	}
-	return m, nil
+	return nil
 }
 
 func (m *model) handleKey(key string) tea.Cmd {
@@ -334,11 +365,11 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		if done.app != nil {
 			done.app.Logout()
 		}
-		m.notice, m.failed = done.err.Error(), true
+		m.setNotice(done.err.Error(), true)
 		return nil
 	}
 	if done.notice != "" {
-		m.notice, m.failed = done.notice, false
+		m.setNotice(done.notice, false)
 	}
 	switch done.kind {
 	case queueWork:
@@ -358,7 +389,7 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	case configWork:
 		if done.setDefault != nil {
 			m.setup.tuiDefault = *done.setDefault
-			m.notice, m.failed = "TUI startup preference saved", false
+			m.setNotice("TUI startup preference saved", false)
 		}
 		if done.app != nil {
 			if m.app != nil && m.app != done.app {
@@ -373,7 +404,7 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 			m.resetRemoteState()
 			m.loadPreferences(m.configPath)
 			m.page = queuePage
-			m.notice, m.failed = "Configuration saved · reconnecting", false
+			m.setNotice("Configuration saved · reconnecting", false)
 			return m.refresh()
 		}
 	}
@@ -456,7 +487,7 @@ func (m *model) launchSearch(query, plugin string, timeout time.Duration) tea.Cm
 	}
 	m.page, m.query, m.searchPlugin, m.searchTimeout = searchPage, query, plugin, timeout
 	m.replaceSearchResults(nil)
-	m.notice, m.failed = "", false
+	m.setNotice("", false)
 	return m.startWork(searchWork, "Searching "+plugin, func(ctx context.Context) workDone {
 		results, notice, err := m.backend.search(ctx, query, plugin, timeout)
 		if ctx.Err() != nil {

@@ -55,7 +55,7 @@ func savedPasswordMetadata(setup client.Setup) client.Setup {
 func (m *model) loadSetup(opts client.Options) {
 	setup, err := client.ReadSetup(opts)
 	if err != nil {
-		m.notice, m.failed = "Configuration: "+err.Error(), true
+		m.setNotice("Configuration: "+err.Error(), true)
 		if m.configPath == "" {
 			m.configPath = opts.ConfigPath
 		}
@@ -89,8 +89,7 @@ func (m *model) toggleTUIDefault() tea.Cmd {
 	if m.configPath == "" {
 		// A caller without a resolved save path cannot persist the choice yet.
 		m.setup.tuiDefault = next
-		m.notice = "TUI startup preference will be saved with configuration"
-		m.failed = false
+		m.setNotice("TUI startup preference will be saved with configuration", false)
 		return nil
 	}
 	enabled := next
@@ -259,8 +258,7 @@ func runConfigurableBootstrap(ctx context.Context, opts client.Options, setup se
 	}
 	m.loadPreferences(m.configPath)
 	if setupErr != nil {
-		m.notice = "Saved credentials could not connect: " + setupErr.Error()
-		m.failed = true
+		m.setNotice("Saved credentials could not connect: "+setupErr.Error(), true)
 	}
 	m.openConfigDialog()
 	if setupErr != nil && m.dialog != nil {

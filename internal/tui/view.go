@@ -373,6 +373,9 @@ func (m *model) resultFilterInputWidth() int {
 }
 
 func (m *model) viewResultControls() string {
+	if m.resultEditor != nil && m.resultEditor.problem != "" {
+		return viewErrorStyle.Render(viewSafe(m.resultEditor.problem))
+	}
 	summary := fmt.Sprintf("%d results  ·  %s", len(m.results), m.resultSort.label())
 	if m.resultFilter.active() {
 		parts := []string{
@@ -576,11 +579,6 @@ func (m *model) viewFooter(width int) []string {
 	}
 	if m.notice != "" && (m.busy != "" || m.failed) {
 		status += viewMutedStyle.Render("  ·  " + viewSafe(m.notice))
-	}
-	if m.resultEditor != nil && strings.TrimSpace(m.resultEditor.problem) != "" {
-		// A parse error belongs to the draft currently being edited. Prefer it
-		// over an older notice so it remains readable in the compact footer.
-		status = viewErrorStyle.Render(viewSafe(strings.TrimSpace(m.resultEditor.problem)))
 	}
 	var keys []string
 	switch m.page {

@@ -9,6 +9,7 @@ release_targets=(
   freebsd/arm64
   illumos/amd64
   linux/amd64
+  linux/arm
   linux/arm64
   netbsd/amd64
   netbsd/arm64
@@ -46,7 +47,11 @@ while IFS=/ read -r goos goarch; do
     asset+=".exe"
   fi
   printf 'Building %s/%s\n' "$goos" "$goarch"
-  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+  build_env=(env CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch")
+  if [[ "$goos/$goarch" == linux/arm ]]; then
+    build_env+=(GOARM=7)
+  fi
+  "${build_env[@]}" go build -trimpath \
     -ldflags "-s -w -X github.com/naterator/qbitctl/pkg/client.Version=$version" \
     -o "$output_dir/$asset" ./cmd/qbitctl
   (

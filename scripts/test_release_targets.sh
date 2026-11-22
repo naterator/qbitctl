@@ -12,6 +12,7 @@ freebsd/amd64
 freebsd/arm64
 illumos/amd64
 linux/amd64
+linux/arm
 linux/arm64
 netbsd/amd64
 netbsd/arm64
@@ -43,7 +44,7 @@ fi
 supported=$(go tool dist list)
 for target in $actual; do
 	case "$target" in
-		*/amd64|*/arm64) ;;
+		*/amd64|*/arm64|linux/arm) ;;
 		*)
 			echo "release target has unsupported architecture: $target" >&2
 			exit 1

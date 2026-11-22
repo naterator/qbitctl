@@ -37,13 +37,96 @@ Supports both the older HTTP 200 login response and the HTTP 204 response used b
 
 ## Install
 
-Download the latest release for your platform:
+Download the latest release for your platform. The installer downloads into
+a private temporary directory and installs the binary after verifying the
+published SHA-256 checksum.
 
 ```bash
-curl -Lo qbitctl "https://github.com/naterator/qbitctl/releases/latest/download/qbitctl-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
-chmod +x qbitctl
-sudo mv qbitctl /usr/local/bin/
+bash <<'QBITCTL_INSTALL'
+set -euo pipefail
+
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$os" in
+  darwin|dragonfly|freebsd|illumos|linux|netbsd|openbsd|solaris) ;;
+  *)
+    printf 'unsupported operating system: %s\n' "$os" >&2
+    exit 1
+    ;;
+esac
+
+machine=$(uname -m)
+case "$machine" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  armv7|armv7l) arch=arm ;;
+  *)
+    printf 'unsupported architecture: %s\n' "$machine" >&2
+    exit 1
+    ;;
+esac
+
+asset="qbitctl-$os-$arch"
+base="${QBITCTL_DOWNLOAD_BASE:-https://github.com/naterator/qbitctl/releases/latest/download}"
+base=${base%/}
+target="${QBITCTL_INSTALL_PATH:-/usr/local/bin/qbitctl}"
+checksum_asset="$asset.sha256"
+
+tmp_parent=${TMPDIR:-/tmp}
+tmp_dir=$(mktemp -d "$tmp_parent/qbitctl-install.XXXXXX")
+trap 'rm -rf "$tmp_dir"' EXIT
+
+binary_path="$tmp_dir/$asset"
+checksum_path="$tmp_dir/$checksum_asset"
+curl --fail --location --retry 3 --retry-delay 1 --silent --show-error \
+  --output "$binary_path" "$base/$asset"
+curl --fail --location --retry 3 --retry-delay 1 --silent --show-error \
+  --output "$checksum_path" "$base/$checksum_asset"
+
+# Check that the downloaded checksum names this exact asset before invoking
+# the platform checksum tool, so a malformed file cannot name another path.
+if ! LC_ALL=C awk -v asset="$asset" '
+  NF == 0 { next }
+  {
+    records++
+    if (NF == 2 && length($1) == 64 && $1 !~ /[^[:xdigit:]]/ && $2 == asset) {
+      matching++
+    }
+  }
+  END { exit records == 1 && matching == 1 ? 0 : 1 }
+' "$checksum_path"; then
+  printf 'checksum file does not name %s\n' "$asset" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  (cd "$tmp_dir" && sha256sum -c "$checksum_asset")
+elif command -v shasum >/dev/null 2>&1; then
+  (cd "$tmp_dir" && shasum -a 256 -c "$checksum_asset")
+else
+  printf 'neither sha256sum nor shasum is available\n' >&2
+  exit 1
+fi
+
+chmod 0755 "$binary_path"
+target_dir=$(dirname "$target")
+if [[ -d "$target_dir" && -w "$target_dir" ]]; then
+  install -m 0755 "$binary_path" "$target"
+else
+  sudo install -m 0755 "$binary_path" "$target"
+fi
+printf 'installed %s to %s\n' "$asset" "$target"
+QBITCTL_INSTALL
 ```
+
+The same installer is kept in [scripts/install-snippet.sh](scripts/install-snippet.sh)
+and checked by CI with ShellCheck.
+
+ARMv7 (`armv7l`) is the minimum for the prebuilt 32-bit Linux asset. ARMv6
+devices such as the original Pi Zero and Pi 1 need a build for their CPU.
+Use a newer release or build from source if the selected release lacks
+`qbitctl-linux-arm`. GitHub CLI users can verify the installed release asset
+with `gh release verify-asset <release-tag> /usr/local/bin/qbitctl --repo naterator/qbitctl`.
+[GitHub CLI reference](https://cli.github.com/manual/gh_release_verify-asset)
 
 Once installed, keep it up to date with:
 

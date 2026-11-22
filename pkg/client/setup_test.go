@@ -63,6 +63,7 @@ func TestReadSetupSelectsExplicitMissingPathAndDefault(t *testing.T) {
 
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	defaultPath := filepath.Join(home, ".config", defaultAuthDir, defaultAuthFile)
 	if err := os.MkdirAll(filepath.Dir(defaultPath), 0o700); err != nil {

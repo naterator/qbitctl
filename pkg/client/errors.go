@@ -115,7 +115,7 @@ func sanitizeLoginHTTPBody(resp *http.Response, body []byte, password string) st
 		collapseServerWhitespace(SanitizeServerText(password)),
 		password,
 	}
-	replacements := make([]string, 0, len(candidates)*2)
+	var replacements []string
 	for _, candidate := range candidates {
 		if candidate != "" {
 			replacements = append(replacements, candidate, "[redacted]")

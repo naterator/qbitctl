@@ -308,5 +308,5 @@ func readRepositoryREADME(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(data)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }

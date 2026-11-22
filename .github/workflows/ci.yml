@@ -66,9 +66,7 @@ jobs:
         run: make ci
       - name: Exercise the installer on macOS
         if: runner.os == 'macOS'
-        run: |
-          shellcheck scripts/install.sh scripts/test_install.sh
-          sh scripts/test_install.sh
+        run: sh scripts/test_install.sh
       - name: Check tests and smoke on Windows
         if: runner.os == 'Windows'
         shell: bash

@@ -79,6 +79,7 @@ func TestTUIClientAddExpandsHomeAndRejectsUnknownAction(t *testing.T) {
 	backend, server := newBackendFixture(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	if err := os.WriteFile(filepath.Join(home, "demo.torrent"), []byte("torrent"), 0o600); err != nil {
 		t.Fatal(err)
 	}

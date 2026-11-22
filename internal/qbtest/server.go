@@ -42,6 +42,7 @@ type Server struct {
 
 	LoginCalls        int
 	InfoCalls         int
+	InfoHashQueries   []string
 	StatusQueue       map[string][]int
 	BodyQueue         map[string][]string
 	ContentTypeQueue  map[string][]string
@@ -261,6 +262,7 @@ func (s *Server) handleTorrentInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hashes := r.URL.Query().Get("hashes")
+	s.InfoHashQueries = append(s.InfoHashQueries, hashes)
 	if hashes == "" {
 		_ = json.NewEncoder(w).Encode(s.Torrents)
 		return
@@ -276,11 +278,24 @@ func filterByHash(torrents any, hash string) reflect.Value {
 		return reflect.MakeSlice(reflect.TypeOf([]any{}), 0, 0)
 	}
 
-	filtered := reflect.MakeSlice(value.Type(), 0, 1)
+	filtered := reflect.MakeSlice(value.Type(), 0, value.Len())
+	wanted := make(map[string]struct{})
+	for _, part := range strings.Split(hash, "|") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			wanted[strings.ToLower(part)] = struct{}{}
+		}
+	}
+	if strings.TrimSpace(hash) == "all" {
+		return value
+	}
 	for i := 0; i < value.Len(); i++ {
 		item := value.Index(i)
 		field := item.FieldByName("Hash")
-		if field.IsValid() && field.Kind() == reflect.String && strings.EqualFold(field.String(), hash) {
+		if field.IsValid() && field.Kind() == reflect.String {
+			if _, ok := wanted[strings.ToLower(field.String())]; !ok {
+				continue
+			}
 			filtered = reflect.Append(filtered, item)
 		}
 	}
@@ -292,11 +307,23 @@ func (s *Server) toggleSequentialDownload(hash string) {
 	if !value.IsValid() || value.Kind() != reflect.Slice {
 		return
 	}
+	wanted := make(map[string]struct{})
+	for _, part := range strings.Split(hash, "|") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			wanted[strings.ToLower(part)] = struct{}{}
+		}
+	}
+	all := strings.TrimSpace(hash) == "all"
 	for i := 0; i < value.Len(); i++ {
 		item := value.Index(i)
 		hashField := item.FieldByName("Hash")
 		seqField := item.FieldByName("SequentialDL")
-		if hashField.IsValid() && seqField.IsValid() && seqField.CanSet() && hashField.Kind() == reflect.String && seqField.Kind() == reflect.Bool && strings.EqualFold(hashField.String(), hash) {
+		if !hashField.IsValid() || !seqField.IsValid() || !seqField.CanSet() || hashField.Kind() != reflect.String || seqField.Kind() != reflect.Bool {
+			continue
+		}
+		_, selected := wanted[strings.ToLower(hashField.String())]
+		if all || selected {
 			seqField.SetBool(!seqField.Bool())
 		}
 	}

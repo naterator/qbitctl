@@ -561,6 +561,28 @@ func TestBatchStartMultipleHashes(t *testing.T) {
 	}
 }
 
+func TestUnknownFullHashRejectedBeforeMutation(t *testing.T) {
+	known := "0123456789abcdef0123456789abcdef01234567"
+	unknown := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Known", Hash: known}}
+	withQBServerClientFactory(t, server)
+
+	for _, args := range [][]string{{"start", unknown}, {"start", known[:8], unknown}} {
+		cmd := newRootCmd()
+		cmd.SetArgs(append([]string{"--url", server.creds().URL, "--user", "admin", "--pass", "secret"}, args...))
+		captureOutput(t, func() {
+			var exit exitError
+			if err := cmd.Execute(); !errors.As(err, &exit) || exit.code != exitBadArgs {
+				t.Fatalf("start %q = %v, want exit %d", args, err, exitBadArgs)
+			}
+		})
+	}
+	if len(server.Forms["/api/v2/torrents/start"]) != 0 {
+		t.Fatal("unknown full hash sent a start request")
+	}
+}
+
 func TestBatchRemoveMultipleHashes(t *testing.T) {
 	hash1 := "0123456789abcdef0123456789abcdef01234567"
 	hash2 := "fedcba9876543210fedcba9876543210fedcba98"

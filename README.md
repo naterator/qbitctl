@@ -457,7 +457,7 @@ These flags apply to `info`, `list`, `show`, and `get` as indicated.
 
 ## Torrent hashes
 
-Single-torrent commands accept the hash as a positional argument. Short hash prefixes (8+ characters recommended) are resolved automatically as long as they are unambiguous:
+Single-torrent commands accept the hash as a positional argument. Full and short hashes must match a torrent on the server. Short hash prefixes (8+ characters recommended) are resolved automatically as long as they are unambiguous:
 
 ```bash
 qbitctl show 9c328901

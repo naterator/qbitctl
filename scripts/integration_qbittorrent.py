@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
@@ -388,6 +389,24 @@ def run(args: argparse.Namespace) -> None:
             torrent_hash = str(torrent["hash"])
             if torrent.get("category") != category or str(torrent.get("save_path")).rstrip("/") != destination:
                 raise RuntimeError("qBittorrent did not apply the add category and save path")
+
+            unknown_hash = secrets.token_hex(20)
+            rejected_hash = run_cli(
+                binary,
+                url,
+                password,
+                root,
+                config_home,
+                "start",
+                unknown_hash,
+                check=False,
+            )
+            if rejected_hash.returncode != 4:
+                output = redact(rejected_hash.stdout + rejected_hash.stderr, password).strip()
+                raise RuntimeError(
+                    "qbitctl accepted an unknown full hash for start: "
+                    f"exit {rejected_hash.returncode}: {output}"
+                )
 
             if args.version == "5.0.0":
                 duplicate = run_cli(

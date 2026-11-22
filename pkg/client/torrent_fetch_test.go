@@ -3,7 +3,9 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +54,9 @@ func TestResolveHashScenarios(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newQBTestServer(t)
 			server.Torrents = tt.torrents
+			if tt.name == "full hash" {
+				server.Torrents = []TorrentInfo{{Hash: uniqueHash}}
+			}
 			app := server.newApp()
 
 			gotHash, err := app.ResolveHash(tt.input)
@@ -94,6 +99,7 @@ func TestResolveHashes(t *testing.T) {
 
 	t.Run("multiple full hashes", func(t *testing.T) {
 		server := newQBTestServer(t)
+		server.Torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
 		app := server.newApp()
 
 		got, err := app.ResolveHashes([]string{hash1, hash2})
@@ -187,6 +193,67 @@ func TestResolveHashEmpty(t *testing.T) {
 	var coded *CodedError
 	if !errors.As(err, &coded) || coded.Code != ExitBadArgs {
 		t.Fatalf("ResolveHash err = %v, want ExitBadArgs", err)
+	}
+}
+
+func TestResolveHashesChecksFullHashesAndDeduplicates(t *testing.T) {
+	hash1 := "0123456789abcdef0123456789abcdef01234567"
+	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: hash1}, {Hash: hash2}}
+	app := server.newApp()
+
+	got, err := app.ResolveHashes([]string{strings.ToUpper(hash1), hash2, hash1})
+	if err != nil || !reflect.DeepEqual(got, []string{hash1, hash2}) {
+		t.Fatalf("ResolveHashes = %v, %v, want [%s %s]", got, err, hash1, hash2)
+	}
+	if server.InfoCalls != 1 || server.InfoHashQueries[0] != strings.ToLower(hash1)+"|"+hash2 {
+		t.Fatalf("filtered info queries = %#v, want one joined query", server.InfoHashQueries)
+	}
+
+	_, err = app.ResolveHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err == nil || !strings.Contains(err.Error(), "No torrent matches hash") {
+		t.Fatalf("unknown full hash error = %v", err)
+	}
+	if server.InfoCalls != 2 {
+		t.Fatalf("unknown full hash did not make one filtered request: %d", server.InfoCalls)
+	}
+}
+
+func TestResolveHashesValidatesOfflineAndUsesFullListOverCap(t *testing.T) {
+	server := newQBTestServer(t)
+	for i := 0; i < 51; i++ {
+		server.Torrents = append(server.Torrents, TorrentInfo{Hash: fmt.Sprintf("%040x", i)})
+	}
+	app := server.newApp()
+	inputs := make([]string, 51)
+	for i := range inputs {
+		inputs[i] = server.Torrents[i].Hash
+	}
+	got, err := app.ResolveHashes(inputs)
+	if err != nil || len(got) != 51 || server.InfoHashQueries[0] != "" {
+		t.Fatalf("51 full hashes = %d, %v, queries=%#v", len(got), err, server.InfoHashQueries)
+	}
+	before := server.InfoCalls
+	_, err = app.ResolveHashes([]string{"zz12"})
+	if err == nil || !strings.Contains(err.Error(), "Invalid hash or prefix") || server.InfoCalls != before {
+		t.Fatalf("invalid prefix = %v, info calls %d -> %d", err, before, server.InfoCalls)
+	}
+
+	filteredServer := newQBTestServer(t)
+	for i := 0; i < 50; i++ {
+		filteredServer.Torrents = append(filteredServer.Torrents, TorrentInfo{Hash: fmt.Sprintf("%040x", i)})
+	}
+	filteredApp := filteredServer.newApp()
+	filteredInputs := make([]string, 50)
+	for i := range filteredInputs {
+		filteredInputs[i] = filteredServer.Torrents[i].Hash
+	}
+	if _, err := filteredApp.ResolveHashes(filteredInputs); err != nil {
+		t.Fatalf("50 full hashes = %v", err)
+	}
+	if len(filteredServer.InfoHashQueries) != 1 || filteredServer.InfoHashQueries[0] == "" {
+		t.Fatalf("50 full hashes used unfiltered query: %#v", filteredServer.InfoHashQueries)
 	}
 }
 

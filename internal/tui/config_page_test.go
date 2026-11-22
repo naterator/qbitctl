@@ -123,8 +123,11 @@ func TestConfigSelectionMovesAndActivatesSettings(t *testing.T) {
 }
 
 func TestConfigSettingsScrollAndHighlightSelection(t *testing.T) {
+	cacheRoot := filepath.Join(goldenConfigRoot(), "cache")
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	configPath := filepath.Join(goldenConfigRoot(), "config.json")
 	m := newModel(t.Context(), nil)
-	m.setup = setupState{path: "/tmp/config.json"}
+	m.setup = setupState{path: configPath}
 	// The provider is the last editable setting; file paths should appear
 	// below it whenever the compact viewport can retain the selection.
 	m.configSelection = int(configSettingSearchProvider)
@@ -137,7 +140,7 @@ func TestConfigSettingsScrollAndHighlightSelection(t *testing.T) {
 	if !strings.Contains(plain, "Default provider") {
 		t.Fatalf("selected setting was scrolled out:\n%s", plain)
 	}
-	if !strings.Contains(plain, "/tmp/config.json") {
+	if !strings.Contains(plain, configPath) || !strings.Contains(plain, filepath.Join(cacheRoot, "qbitctl", "search-results.json")) {
 		t.Fatalf("trailing config metadata was unnecessarily scrolled out:\n%s", plain)
 	}
 	if !strings.Contains(plain, "›") {

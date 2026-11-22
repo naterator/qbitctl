@@ -118,7 +118,7 @@ jobs:
           go tool covdata merge -i=coverage/unit,coverage/smoke,coverage/compat -o=coverage/merged
           go tool covdata textfmt -i=coverage/merged -o=cover.out
           go tool cover -func=cover.out | tee coverage-summary.txt
-          sh scripts/check_coverage.sh cover.out .coverage-floor | tee -a coverage-summary.txt
+          bash scripts/check_coverage.sh cover.out .coverage-floor | tee -a coverage-summary.txt
           {
             echo '### Unit coverage'
             go tool covdata percent -i=coverage/unit

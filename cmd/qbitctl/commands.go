@@ -339,9 +339,16 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 
 func newSetCmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:       "set <field> <value> <hash>",
-		Aliases:   []string{"se"},
-		Short:     "Update one torrent property",
+		Use:     "set <field> <value> <hash>",
+		Aliases: []string{"se"},
+		Short:   "Update one torrent property",
+		Long: "Update one torrent property.\n\nAvailable fields:\n" +
+			wrapFields(setFieldNames, "  ", 72) + "\n\nInput formats:\n\n" +
+			"  up-limit / dl-limit         Bytes/sec, or a k suffix for KiB\n" +
+			"  ratio-limit                 Floating point value (>= 0)\n" +
+			"  seedtime-limit              90m, 2h, 3d, 7d12h, or seconds\n" +
+			"                              -1 unlimited, -2 global limit\n" +
+			"  seqdl / autotmm / superseed true or false",
 		GroupID:   "change",
 		Args:      cobra.ExactArgs(3),
 		ValidArgs: setFieldNames,

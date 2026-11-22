@@ -3,9 +3,11 @@ package client
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -81,12 +83,70 @@ func parseSeedtimeLimit(value string) (int64, error) {
 	if value == "" {
 		return 0, fmt.Errorf("invalid numeric seedtime")
 	}
+	allDigits := true
 	for _, r := range value {
 		if !unicode.IsDigit(r) {
-			return 0, fmt.Errorf("invalid numeric seedtime")
+			allDigits = false
+			break
 		}
 	}
-	return strconv.ParseInt(value, 10, 64)
+	if allDigits {
+		return strconv.ParseInt(value, 10, 64)
+	}
+	if strings.HasPrefix(value, "+") && len(value) > 1 {
+		for _, r := range value[1:] {
+			if !unicode.IsDigit(r) {
+				return 0, fmt.Errorf("invalid numeric seedtime")
+			}
+		}
+		return strconv.ParseInt(value, 10, 64)
+	}
+
+	if dayIndex := strings.IndexAny(value, "dD"); dayIndex >= 0 {
+		dayText := value[:dayIndex]
+		if dayText == "" {
+			return 0, fmt.Errorf("invalid seedtime duration")
+		}
+		for _, r := range dayText {
+			if !unicode.IsDigit(r) {
+				return 0, fmt.Errorf("invalid seedtime duration")
+			}
+		}
+		days, err := strconv.ParseInt(dayText, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid seedtime duration")
+		}
+
+		dayDuration := 24 * time.Hour
+		if days > math.MaxInt64/int64(dayDuration) {
+			return 0, fmt.Errorf("seedtime duration overflows")
+		}
+		total := time.Duration(days) * dayDuration
+		remainderText := value[dayIndex+1:]
+		if remainderText != "" {
+			remainder, parseErr := time.ParseDuration(remainderText)
+			if parseErr != nil || remainder < 0 {
+				return 0, fmt.Errorf("invalid seedtime duration")
+			}
+			if remainder > time.Duration(math.MaxInt64)-total {
+				return 0, fmt.Errorf("seedtime duration overflows")
+			}
+			total += remainder
+		}
+		if total%time.Second != 0 {
+			return 0, fmt.Errorf("seedtime duration must resolve to whole seconds")
+		}
+		return int64(total / time.Second), nil
+	}
+
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < 0 {
+		return 0, fmt.Errorf("invalid seedtime duration")
+	}
+	if duration%time.Second != 0 {
+		return 0, fmt.Errorf("seedtime duration must resolve to whole seconds")
+	}
+	return int64(duration / time.Second), nil
 }
 
 // seedtimeLimitSecondsToMinutes converts the CLI's documented seconds to the
@@ -110,9 +170,56 @@ func seedtimeLimitSecondsToMinutes(seconds int64) (int64, error) {
 	return seconds / 60, nil
 }
 
+// FormatSeedtimeLimitInput formats an API seed-time limit for an editable CLI
+// or TUI field. qBittorrent reports ordinary limits in minutes, while qbitctl's
+// user-facing setter accepts durations; the API sentinels remain unchanged.
+func FormatSeedtimeLimitInput(minutes int64) string {
+	if minutes == -1 || minutes == -2 {
+		return strconv.FormatInt(minutes, 10)
+	}
+	if minutes < 0 {
+		return ""
+	}
+	if minutes == 0 {
+		return "0"
+	}
+
+	const minutesPerDay = 24 * 60
+	const minutesPerHour = 60
+	maxInt64 := int64(^uint64(0) >> 1)
+	maxDurationMinutes := maxInt64 / int64(time.Minute)
+	if minutes > maxDurationMinutes {
+		if minutes > maxInt64/60 {
+			return ""
+		}
+		return strconv.FormatInt(minutes*60, 10)
+	}
+	days := minutes / minutesPerDay
+	remaining := minutes % minutesPerDay
+	hours := remaining / minutesPerHour
+	remaining %= minutesPerHour
+
+	var builder strings.Builder
+	if days > 0 {
+		builder.WriteString(strconv.FormatInt(days, 10))
+		builder.WriteByte('d')
+	}
+	if hours > 0 {
+		builder.WriteString(strconv.FormatInt(hours, 10))
+		builder.WriteByte('h')
+	}
+	if remaining > 0 {
+		builder.WriteString(strconv.FormatInt(remaining, 10))
+		builder.WriteByte('m')
+	}
+	return builder.String()
+}
+
 // SeedtimeLimitInputValue formats an API seed-time limit for an editable CLI
 // or TUI field. qBittorrent reports ordinary limits in minutes, while qbitctl's
 // user-facing setter accepts seconds; the API sentinels remain unchanged.
+//
+// Deprecated: use FormatSeedtimeLimitInput.
 func SeedtimeLimitInputValue(minutes int64) string {
 	if minutes == -1 || minutes == -2 {
 		return strconv.FormatInt(minutes, 10)

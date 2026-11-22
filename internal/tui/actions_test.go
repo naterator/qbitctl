@@ -267,13 +267,13 @@ func TestEditFocusedSeedtimePrefillsAndKeepsSingleNotice(t *testing.T) {
 		t.Fatalf("selected field = %q", m.dialog.items[m.dialog.selected].action)
 	}
 	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.dialog == nil || m.dialog.value(0) != client.SeedtimeLimitInputValue(90) {
+	if m.dialog == nil || m.dialog.value(0) != client.FormatSeedtimeLimitInput(90) {
 		t.Fatalf("seed time prefill = %#v", m.dialog)
 	}
 	runTUIWork(t, m, m.update(tea.KeyPressMsg{Code: tea.KeyEnter}))
 	actions := service.recordedActions()
 	if len(actions) != 1 || actions[0].kind != "set" || actions[0].hashes != "a" ||
-		actions[0].field != "seedtime-limit" || actions[0].value != client.SeedtimeLimitInputValue(90) {
+		actions[0].field != "seedtime-limit" || actions[0].value != client.FormatSeedtimeLimitInput(90) {
 		t.Fatalf("focused edit action = %#v", actions)
 	}
 	if m.notice != "Saved torrent property" {

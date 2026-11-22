@@ -1140,7 +1140,7 @@ func setFieldValue(torrent client.TorrentInfo, field string) string {
 	case "ratio-limit":
 		return strconv.FormatFloat(torrent.RatioLimit, 'f', -1, 64)
 	case "seedtime-limit":
-		return client.SeedtimeLimitInputValue(torrent.SeedingTimeLimit)
+		return client.FormatSeedtimeLimitInput(torrent.SeedingTimeLimit)
 	case "seqdl":
 		return strconv.FormatBool(torrent.SequentialDL)
 	case "autotmm":

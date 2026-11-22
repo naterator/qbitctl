@@ -35,6 +35,7 @@ func TestParseSeedtimeLimit(t *testing.T) {
 		want  int64
 	}{
 		{input: "3600", want: 3600},
+		{input: "+3600", want: 3600},
 		{input: "-1", want: -1},
 		{input: "-2", want: -2},
 	} {
@@ -52,6 +53,42 @@ func TestParseSeedtimeLimit(t *testing.T) {
 	}
 	if _, err := parseSeedtimeLimit("-3"); err == nil {
 		t.Fatal("parseSeedtimeLimit unexpectedly accepted an unsupported sentinel")
+	}
+}
+
+func TestParseSeedtimeDurationInputs(t *testing.T) {
+	tests := map[string]int64{
+		"3600":  60,
+		"90m":   90,
+		"2h":    120,
+		"3d":    4320,
+		"7d12h": 10800,
+		"1D":    1440,
+		"-1":    -1,
+		"-2":    -2,
+	}
+	for input, want := range tests {
+		seconds, err := parseSeedtimeLimit(input)
+		if err != nil {
+			t.Fatalf("parseSeedtimeLimit(%q) returned error: %v", input, err)
+		}
+		got, err := seedtimeLimitSecondsToMinutes(seconds)
+		if err != nil {
+			t.Fatalf("seedtimeLimitSecondsToMinutes(parseSeedtimeLimit(%q)) returned error: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("seedtime limit %q = %d minutes, want %d", input, got, want)
+		}
+	}
+
+	for _, input := range []string{"30s", "90s", "-1s", "-2s", "-5m", "1.5d", "d", "3dd", "1w", "999999999999d"} {
+		seconds, parseErr := parseSeedtimeLimit(input)
+		if parseErr == nil {
+			_, parseErr = seedtimeLimitSecondsToMinutes(seconds)
+		}
+		if parseErr == nil {
+			t.Errorf("seedtime limit %q was unexpectedly accepted", input)
+		}
 	}
 }
 
@@ -94,6 +131,41 @@ func TestSeedtimeLimitInputValue(t *testing.T) {
 	for minutes, want := range tests {
 		if got := SeedtimeLimitInputValue(minutes); got != want {
 			t.Fatalf("SeedtimeLimitInputValue(%d) = %q, want %q", minutes, got, want)
+		}
+	}
+}
+
+func TestFormatSeedtimeLimitInput(t *testing.T) {
+	tests := map[int64]string{
+		0:     "0",
+		-1:    "-1",
+		-2:    "-2",
+		45:    "45m",
+		90:    "1h30m",
+		1440:  "1d",
+		4320:  "3d",
+		10800: "7d12h",
+	}
+	for minutes, want := range tests {
+		if got := FormatSeedtimeLimitInput(minutes); got != want {
+			t.Fatalf("FormatSeedtimeLimitInput(%d) = %q, want %q", minutes, got, want)
+		}
+	}
+}
+
+func TestFormatSeedtimeLimitInputRoundTrip(t *testing.T) {
+	for _, minutes := range []int64{0, 1, 45, 60, 90, 1439, 1440, 4320, 10800, 525599} {
+		input := FormatSeedtimeLimitInput(minutes)
+		seconds, err := parseSeedtimeLimit(input)
+		if err != nil {
+			t.Fatalf("parseSeedtimeLimit(FormatSeedtimeLimitInput(%d)) returned error: %v", minutes, err)
+		}
+		got, err := seedtimeLimitSecondsToMinutes(seconds)
+		if err != nil {
+			t.Fatalf("seedtimeLimitSecondsToMinutes(%q) returned error: %v", input, err)
+		}
+		if got != minutes {
+			t.Fatalf("round trip for %d minutes = %d", minutes, got)
 		}
 	}
 }

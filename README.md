@@ -390,7 +390,7 @@ Input formats:
 ```text
 up-limit / dl-limit                Bytes/sec, or "k" suffix for KiB (e.g. 512k)
 ratio-limit                        Floating point (e.g. 2.0)
-seedtime-limit                     Whole minutes expressed in seconds (e.g. 3600), -1 for unlimited, -2 for the global limit
+seedtime-limit                     Duration (90m, 2h, 3d, 7d12h) or seconds; -1 unlimited, -2 global limit
 seqdl / autotmm / superseed        true or false
 ```
 

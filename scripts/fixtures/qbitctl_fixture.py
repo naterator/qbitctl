@@ -17,7 +17,7 @@ from novaprinter import prettyPrinter
 class qbitctl_fixture:
     """Return one magnet and one torrent URL for the compatibility suite."""
 
-    name = "qbitctl_fixture"
+    name = "Qbitctl Fixture"
     supported_categories = {"all": None}
     url = os.environ.get("QBITCTL_FIXTURE_BASE", "http://127.0.0.1:9").rstrip("/")
 
@@ -53,4 +53,6 @@ class qbitctl_fixture:
         if download_url.startswith("magnet:"):
             print(f"{download_url} {download_url}")
             return
+        if not download_url.endswith("/qbitctl-search.torrent"):
+            raise ValueError("qbitctl fixture received a torrent URL from another provider")
         print(helpers.download_file(download_url))

@@ -207,9 +207,9 @@ def stale_credential_recovery(session: Session):
 
 def cancel_search_and_confirm_delete(session: Session, fixture):
     session.key("2")
-    session.key("/", "Search Jackett")
+    session.key("/", "Search Enabled search plugins")
     session.type_text("cancel me")
-    session.key("enter", "Searching jackett")
+    session.key("enter", "Searching Enabled search plugins")
     session.key("ctrl+c", "Search canceled")
     if fixture.deleted_jobs != [1]:
         raise RuntimeError(f"canceled search cleanup = {fixture.deleted_jobs!r}, want [1]")

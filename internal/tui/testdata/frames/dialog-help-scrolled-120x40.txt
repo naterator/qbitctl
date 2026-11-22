@@ -13,11 +13,11 @@
 
   Torrent actions                        Search                                 Dialogs
   s   Start                              /      New search                      tab/⇧tab  Change field
-  p   Pause                              s      Sort results                    enter     Submit
-  f   Force start                        f      Filter results                  esc       Cancel
-  m   Move                               enter  Add result
-  t   Trackers                           esc    Cancel / clear filter
-  e   Edit focused / marked
+  p   Pause                              p      Choose provider                 enter     Submit
+  f   Force start                        s      Sort results                    esc       Cancel
+  m   Move                               f      Filter results
+  t   Trackers                           enter  Add result
+  e   Edit focused / marked              esc    Cancel / clear filter
   x   Remove
   ⇧d  Delete files
 

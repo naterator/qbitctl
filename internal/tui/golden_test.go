@@ -100,6 +100,15 @@ func goldenCases() []goldenCase {
 			m.page = searchPage
 			m.openSortDialog(dialogResultSort)
 		}},
+		{name: "search-provider-picker", setup: func(m *model) {
+			m.page = searchPage
+			m.searchPlugins = []searchPluginInfo{
+				{Name: "prowlarr", FullName: "Prowlarr", Enabled: true},
+				{Name: "jackett", FullName: "Jackett", Enabled: false},
+			}
+			m.searchPluginsAttempted = true
+			m.openSearchPluginPicker()
+		}},
 		{name: "server-populated", setup: func(m *model) {
 			m.page = serverPage
 			m.serverRows = []detailRow{{label: "Connection", value: "connected"}, {label: "Download speed", value: "1.2 MiB/s"}, {label: "DHT nodes", value: "42"}}

@@ -78,7 +78,7 @@ def redact(value: str, password: str | None = None) -> str:
 
 
 class FixtureHandler(BaseHTTPRequestHandler):
-    """Serve the checked-in search plugin and the deterministic torrent."""
+    """Serve the checked-in search plugins and deterministic torrents."""
 
     def log_message(self, *_args):
         pass
@@ -87,11 +87,20 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if self.path == "/qbitctl_fixture.py":
             body = self.server.plugin.read_bytes()
             content_type = "text/x-python; charset=utf-8"
+        elif self.path == "/qbitctl_fixture_alt.py":
+            body = self.server.alt_plugin.read_bytes()
+            content_type = "text/x-python; charset=utf-8"
         elif self.path == "/qbitctl-search.torrent":
             body = self.server.torrent.read_bytes()
             content_type = "application/x-bittorrent"
+        elif self.path == "/alt/qbitctl-search-alt.torrent":
+            body = self.server.alt_torrent.read_bytes()
+            content_type = "application/x-bittorrent"
         elif self.path == "/qbitctl-search-description":
             body = b"qbitctl compatibility fixture"
+            content_type = "text/plain; charset=utf-8"
+        elif self.path == "/alt/qbitctl-search-alt-description":
+            body = b"qbitctl alternate compatibility fixture"
             content_type = "text/plain; charset=utf-8"
         else:
             self.send_error(404)
@@ -118,7 +127,48 @@ def authenticated_opener(url: str, password: str):
     return opener
 
 
-def install_search_plugin(url: str, password: str, plugin_url: str) -> None:
+def search_plugins(opener, url: str) -> list[dict[str, object]]:
+    with opener.open(url.rstrip("/") + "/api/v2/search/plugins", timeout=30) as response:
+        try:
+            plugins = json.loads(response.read())
+        except json.JSONDecodeError as error:
+            raise RuntimeError("qBittorrent returned invalid search plugin JSON") from error
+    if not isinstance(plugins, list) or not all(isinstance(plugin, dict) for plugin in plugins):
+        raise RuntimeError("qBittorrent returned invalid search plugin entries")
+    return plugins
+
+
+def wait_for_search_plugin(
+    opener,
+    url: str,
+    short_name: str,
+    full_name: str,
+    enabled: bool = True,
+) -> None:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        plugins = search_plugins(opener, url)
+        for plugin in plugins:
+            if (
+                str(plugin.get("name", "")).casefold() == short_name.casefold()
+                and str(plugin.get("fullName", "")).casefold() == full_name.casefold()
+                and bool(plugin.get("enabled")) == enabled
+            ):
+                return
+        time.sleep(0.5)
+    state = search_plugins(opener, url)
+    raise RuntimeError(
+        f"qBittorrent search plugin {short_name!r} did not reach enabled={enabled}: {state!r}"
+    )
+
+
+def install_search_plugin(
+    url: str,
+    password: str,
+    plugin_url: str,
+    short_name: str,
+    full_name: str,
+) -> None:
     opener = authenticated_opener(url, password)
     payload = urlparse.urlencode({"sources": plugin_url}).encode()
     request = urlrequest.Request(
@@ -129,22 +179,23 @@ def install_search_plugin(url: str, password: str, plugin_url: str) -> None:
         body = response.read().strip()
         if response.status != 200 or body not in (b"", b"Ok."):
             raise RuntimeError("qBittorrent rejected the fixture search plugin")
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        with opener.open(url.rstrip("/") + "/api/v2/search/plugins", timeout=30) as response:
-            try:
-                plugins = json.loads(response.read())
-            except json.JSONDecodeError as error:
-                raise RuntimeError("qBittorrent returned invalid search plugin JSON") from error
-        if any(
-            isinstance(plugin, dict)
-            and str(plugin.get("name", "")).lower() == "qbitctl_fixture"
-            and plugin.get("enabled", True)
-            for plugin in plugins
-        ):
-            return
-        time.sleep(0.5)
-    raise RuntimeError("qBittorrent did not load the fixture search plugin")
+    wait_for_search_plugin(opener, url, short_name, full_name)
+
+
+def set_search_plugin_enabled(
+    url: str, password: str, name: str, full_name: str, enabled: bool
+) -> None:
+    opener = authenticated_opener(url, password)
+    payload = urlparse.urlencode({"names": name, "enable": str(enabled).lower()}).encode()
+    request = urlrequest.Request(
+        url.rstrip("/") + "/api/v2/search/enablePlugin", data=payload
+    )
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with opener.open(request, timeout=30) as response:
+        body = response.read().strip()
+        if response.status != 200 or body not in (b"", b"Ok."):
+            raise RuntimeError(f"qBittorrent rejected the plugin enabled={enabled} request")
+    wait_for_search_plugin(opener, url, name, full_name, enabled)
 
 
 def docker_logs(container: str) -> str:
@@ -435,6 +486,54 @@ def list_torrents(
     return value
 
 
+def list_search_plugins(
+    binary: Path, url: str, password: str, workdir: Path, config_home: Path
+) -> list[dict[str, object]]:
+    result = run_cli(
+        binary, url, password, workdir, config_home, "search", "--list-plugins", "--json"
+    )
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "qbitctl search --list-plugins returned invalid JSON: "
+            + redact(result.stdout, password)
+        ) from error
+    if not isinstance(value, list) or not all(isinstance(plugin, dict) for plugin in value):
+        raise RuntimeError("qbitctl search --list-plugins returned invalid plugin entries")
+    return value
+
+
+def search_results(
+    binary: Path,
+    url: str,
+    password: str,
+    workdir: Path,
+    config_home: Path,
+    plugin: str | None = None,
+) -> list[dict[str, object]]:
+    args = ["search", "fixture"]
+    if plugin is not None:
+        args.extend(("--plugin", plugin))
+    args.extend(("--json", "--timeout", "60s"))
+    result = run_cli(binary, url, password, workdir, config_home, *args)
+    try:
+        value = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("qbitctl search returned invalid JSON") from error
+    if not isinstance(value, list) or not all(isinstance(row, dict) for row in value):
+        raise RuntimeError("qbitctl search returned invalid result entries")
+    return value
+
+
+def search_result_named(results: list[dict[str, object]], name: str) -> dict[str, object]:
+    result = next((row for row in results if row.get("name") == name), None)
+    if result is None:
+        names = sorted(str(row.get("name")) for row in results)
+        raise RuntimeError(f"qbitctl search result {name!r} was not returned: {names!r}")
+    return result
+
+
 def wait_for_ready(
     binary: Path,
     url: str,
@@ -630,14 +729,19 @@ def run(args: argparse.Namespace) -> None:
         (root / "cache-home").mkdir()
         fixture = root / "qbitctl-compat.torrent"
         search_fixture = root / "qbitctl-search.torrent"
+        alt_search_fixture = root / "qbitctl-search-alt.torrent"
         invalid_fixture = root / "qbitctl-invalid.torrent"
         write_fixture(fixture)
         write_fixture(search_fixture, "qbitctl-search-fixture.bin")
+        write_fixture(alt_search_fixture, "qbitctl-alt-search-fixture.bin")
         invalid_fixture.write_bytes(b"not a bencoded torrent")
         plugin = Path(__file__).with_name("fixtures") / "qbitctl_fixture.py"
+        alt_plugin = Path(__file__).with_name("fixtures") / "qbitctl_fixture_alt.py"
         fixture_server = ThreadingHTTPServer(("0.0.0.0", 0), FixtureHandler)
         fixture_server.plugin = plugin
+        fixture_server.alt_plugin = alt_plugin
         fixture_server.torrent = search_fixture
+        fixture_server.alt_torrent = alt_search_fixture
         fixture_thread = threading.Thread(target=fixture_server.serve_forever, daemon=True)
         fixture_thread.start()
         fixture_base = f"http://host.docker.internal:{fixture_server.server_port}"
@@ -676,7 +780,20 @@ def run(args: argparse.Namespace) -> None:
             # Completion reads the saved setup because Cobra's hidden
             # __complete command skips the normal pre-run password handling.
             run_cli(binary, url, password, root, config_home, "config", "write")
-            install_search_plugin(url, password, fixture_base + "/qbitctl_fixture.py")
+            install_search_plugin(
+                url,
+                password,
+                fixture_base + "/qbitctl_fixture.py",
+                "qbitctl_fixture",
+                "Qbitctl Fixture",
+            )
+            install_search_plugin(
+                url,
+                password,
+                fixture_base + "/qbitctl_fixture_alt.py",
+                "qbitctl_fixture_alt",
+                "Qbitctl Fixture Alt",
+            )
 
             category = "qbitctl-compat"
             destination = "/downloads/compat"
@@ -701,36 +818,81 @@ def run(args: argparse.Namespace) -> None:
                 raise RuntimeError("qBittorrent did not apply the add category and save path")
             verify_main_data(url, password)
 
-            search_output = run_cli(
+            plugins = list_search_plugins(binary, url, password, root, config_home)
+            expected_plugins = {
+                "qbitctl_fixture": "Qbitctl Fixture",
+                "qbitctl_fixture_alt": "Qbitctl Fixture Alt",
+            }
+            for short_name, full_name in expected_plugins.items():
+                plugin = next(
+                    (item for item in plugins if item.get("name") == short_name), None
+                )
+                if plugin is None or plugin.get("fullName") != full_name:
+                    raise RuntimeError(
+                        "qbitctl search plugin listing did not expose "
+                        f"{short_name!r} as {full_name!r}"
+                    )
+                if plugin.get("enabled") is not True:
+                    raise RuntimeError(f"qbitctl search plugin {short_name!r} was not enabled")
+
+            # The default provider selection is enabled plugins only.  Disable the
+            # alternate fixture to prove a disabled provider is not searched, then
+            # restore it before testing explicit full-name and multi-provider input.
+            set_search_plugin_enabled(
+                url,
+                password,
+                "qbitctl_fixture_alt",
+                "Qbitctl Fixture Alt",
+                False,
+            )
+            disabled_alt = next(
+                (item for item in list_search_plugins(binary, url, password, root, config_home)
+                 if item.get("name") == "qbitctl_fixture_alt"),
+                None,
+            )
+            if disabled_alt is None or disabled_alt.get("enabled") is not False:
+                raise RuntimeError("qbitctl search fixture alternate plugin was not disabled")
+            default_results = search_results(binary, url, password, root, config_home)
+            search_result_named(default_results, "qbitctl search torrent")
+            if any(
+                str(row.get("name", "")).startswith("qbitctl alt search")
+                for row in default_results
+            ):
+                raise RuntimeError("qbitctl default search included a disabled provider")
+            all_results = search_results(binary, url, password, root, config_home, "all")
+            search_result_named(all_results, "qbitctl search torrent")
+            search_result_named(all_results, "qbitctl alt search torrent")
+
+            explicit_short_results = search_results(
+                binary, url, password, root, config_home, "qbitctl_fixture"
+            )
+            search_result_named(explicit_short_results, "qbitctl search torrent")
+
+            set_search_plugin_enabled(
+                url,
+                password,
+                "qbitctl_fixture_alt",
+                "Qbitctl Fixture Alt",
+                True,
+            )
+            explicit_full_results = search_results(
+                binary, url, password, root, config_home, "Qbitctl Fixture Alt"
+            )
+            search_result_named(explicit_full_results, "qbitctl alt search torrent")
+
+            multi_results = search_results(
                 binary,
                 url,
                 password,
                 root,
                 config_home,
-                "search",
-                "fixture",
-                "--plugin",
-                "qbitctl_fixture",
-                "--json",
-                "--timeout",
-                "60s",
+                "qbitctl_fixture|qbitctl_fixture_alt",
             )
-            try:
-                search_results = json.loads(search_output.stdout)
-            except json.JSONDecodeError as error:
-                raise RuntimeError("qbitctl search returned invalid JSON") from error
-            if not isinstance(search_results, list) or len(search_results) != 2:
-                raise RuntimeError("qbitctl search fixture did not return two results")
-            torrent_result = next(
-                (
-                    row
-                    for row in search_results
-                    if isinstance(row, dict) and row.get("name") == "qbitctl search torrent"
-                ),
-                None,
-            )
-            if not isinstance(torrent_result, dict) or not torrent_result.get("id"):
-                raise RuntimeError("qbitctl search fixture torrent result was not cached")
+            torrent_result = search_result_named(multi_results, "qbitctl search torrent")
+            alt_result = search_result_named(multi_results, "qbitctl alt search torrent")
+            if not torrent_result.get("id") or not alt_result.get("id"):
+                raise RuntimeError("qbitctl did not cache both providers' search results")
+
             search_id = str(torrent_result["id"])
             run_cli(binary, url, password, root, config_home, "add", "--search-id", search_id)
             search_torrent = wait_for_torrent(
@@ -744,6 +906,32 @@ def run(args: argparse.Namespace) -> None:
             if search_torrent is None or not search_torrent.get("hash"):
                 raise RuntimeError("qbitctl did not add the .torrent search result")
             search_hash = str(search_torrent["hash"])
+
+            # Both cached results came from one search. The alternate plugin
+            # rejects URLs from the primary plugin, so the adds check that
+            # each result retains its own downloader.
+            alt_search_id = str(alt_result["id"])
+            run_cli(
+                binary,
+                url,
+                password,
+                root,
+                config_home,
+                "add",
+                "--search-id",
+                alt_search_id,
+            )
+            alt_search_torrent = wait_for_torrent(
+                binary,
+                url,
+                password,
+                root,
+                config_home,
+                "qbitctl-alt-search-fixture.bin",
+            )
+            if alt_search_torrent is None or not alt_search_torrent.get("hash"):
+                raise RuntimeError("qbitctl did not add the alternate search result")
+            alt_search_hash = str(alt_search_torrent["hash"])
 
             completions = complete_show(binary, url, password, root, config_home)
             expected_completion = f"{torrent_hash}\tqbitctl-compat-fixture.bin"
@@ -905,16 +1093,20 @@ def run(args: argparse.Namespace) -> None:
                 present=False,
             )
 
-            run_cli(binary, url, password, root, config_home, "delete", search_hash)
-            wait_for_torrent(
-                binary,
-                url,
-                password,
-                root,
-                config_home,
-                "qbitctl-search-fixture.bin",
-                present=False,
-            )
+            for search_hash_value, search_name in (
+                (search_hash, "qbitctl-search-fixture.bin"),
+                (alt_search_hash, "qbitctl-alt-search-fixture.bin"),
+            ):
+                run_cli(binary, url, password, root, config_home, "delete", search_hash_value)
+                wait_for_torrent(
+                    binary,
+                    url,
+                    password,
+                    root,
+                    config_home,
+                    search_name,
+                    present=False,
+                )
             print(f"qBittorrent {args.version}: compatibility checks passed")
         except Exception:
             logs = redact(docker_logs(container), password).strip()

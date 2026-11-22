@@ -2,10 +2,10 @@
     1 Queue    ▸ 2 Search      3 Server      4 Config
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    Search results                                                              │ Selected result
-   0 results  ·  Search order                                                  │ Select a result to inspect it.
-      Title                          Size      Seeds ID         Source         │
-   Press / to search Jackett.                                                  │ Enter adds the selected result.
-                                                                               │
+   Provider: Enabled search plugins                                            │ Select a result to inspect it.
+   0 results  ·  Search order                                                  │
+      Title                          Size      Seeds ID         Source         │ Enter adds the selected result.
+   Press / to search Enabled search plugins.                                   │
                                                                                │
                                                                                │
                                                                                │
@@ -37,4 +37,4 @@
                                                                                │
                                                                                │
   ● Ready
-  / search   s sort   f filter   enter add   q quit
+  / search   p Providers   s sort   f filter   enter add   q quit

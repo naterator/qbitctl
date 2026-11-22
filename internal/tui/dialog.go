@@ -4,6 +4,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,22 +24,23 @@ import (
 type dialogKind string
 
 const (
-	dialogPalette    dialogKind = "palette"
-	dialogSearch     dialogKind = "search"
-	dialogFilter     dialogKind = "filter"
-	dialogAdd        dialogKind = "add"
-	dialogAddResult  dialogKind = "add-result"
-	dialogEditSelect dialogKind = "edit-select"
-	dialogResultSort dialogKind = "result-sort"
-	dialogQueueSort  dialogKind = "queue-sort"
-	dialogEditValue  dialogKind = "edit-value"
-	dialogMove       dialogKind = "move"
-	dialogConfirm    dialogKind = "confirm"
-	dialogDelete     dialogKind = "delete"
-	dialogDetails    dialogKind = "details"
-	dialogHelp       dialogKind = "help"
-	dialogConfig     dialogKind = "config"
-	dialogTheme      dialogKind = "theme"
+	dialogPalette       dialogKind = "palette"
+	dialogSearch        dialogKind = "search"
+	dialogFilter        dialogKind = "filter"
+	dialogAdd           dialogKind = "add"
+	dialogAddResult     dialogKind = "add-result"
+	dialogEditSelect    dialogKind = "edit-select"
+	dialogResultSort    dialogKind = "result-sort"
+	dialogQueueSort     dialogKind = "queue-sort"
+	dialogEditValue     dialogKind = "edit-value"
+	dialogMove          dialogKind = "move"
+	dialogConfirm       dialogKind = "confirm"
+	dialogDelete        dialogKind = "delete"
+	dialogDetails       dialogKind = "details"
+	dialogHelp          dialogKind = "help"
+	dialogConfig        dialogKind = "config"
+	dialogTheme         dialogKind = "theme"
+	dialogSearchPlugins dialogKind = "search-plugins"
 )
 
 type dialogField struct {
@@ -208,8 +210,12 @@ func (m *model) openAction(action string) tea.Cmd {
 		m.dialog = nil
 		return m.goTo(configPage)
 	case "search":
-		m.openSearchDialog()
-		return nil
+		return m.openSearchDialog()
+	case "providers", "search-providers", "search plugins":
+		if m.page != searchPage {
+			return nil
+		}
+		return m.openSearchPluginPicker()
 	case "filter":
 		m.openFilterDialog()
 		return nil
@@ -284,10 +290,10 @@ func (m *model) openAction(action string) tea.Cmd {
 	}
 }
 
-func (m *model) openSearchDialog() {
+func (m *model) openSearchDialog() tea.Cmd {
 	plugin := strings.TrimSpace(m.searchPlugin)
 	if plugin == "" {
-		plugin = "jackett"
+		plugin = defaultSearchPluginSelection
 	}
 	timeout := m.searchTimeout
 	if timeout <= 0 {
@@ -295,15 +301,96 @@ func (m *model) openSearchDialog() {
 	}
 	d := &dialog{
 		kind:  dialogSearch,
-		title: "Search " + searchPluginLabel(plugin),
+		title: "Search " + m.searchPluginLabel(plugin),
 		fields: []dialogField{
 			newDialogField("Query", m.query, "Ubuntu 24.04", "The torrent search phrase"),
-			newDialogField("Plugin", plugin, plugin, "qBittorrent search plugin"),
+			newDialogField("Plugin", viewSafe(plugin), defaultSearchPluginSelection, m.searchPluginHelp()),
 			newDialogField("Timeout", timeout.String(), "30s", "Go duration, for example 45s or 2m"),
 		},
 	}
 	m.dialog = d
 	d.focusField(0)
+	return m.ensureSearchPlugins()
+}
+
+// openSearchPluginPicker presents the provider catalog without starting a
+// search. The selected value is applied to the next search and the current
+// result set remains untouched.
+func (m *model) openSearchPluginPicker() tea.Cmd {
+	items := m.searchPluginPickerItems()
+	selected := 0
+	current := m.searchPluginSelection(m.searchPlugin)
+	for i, item := range items {
+		if item.action == current {
+			selected = i
+			break
+		}
+	}
+	m.dialog = &dialog{
+		kind:     dialogSearchPlugins,
+		title:    "Choose search provider",
+		items:    items,
+		selected: selected,
+	}
+	// Keep the current catalog visible while refreshing it. This also makes
+	// reopening the picker useful when another qBittorrent client changed the
+	// installed plugins after the first Search-page visit.
+	return m.ensureSearchPlugins(true)
+}
+
+func (m *model) searchPluginPickerItems() []dialogItem {
+	items := []dialogItem{
+		{label: "Enabled search plugins", action: defaultSearchPluginSelection, description: "server-enabled providers"},
+		{label: "All search plugins", action: "all", description: "every installed provider"},
+	}
+	plugins := append([]searchPluginInfo(nil), m.searchPlugins...)
+	sort.SliceStable(plugins, func(i, j int) bool {
+		left := strings.ToLower(searchPluginFullName(plugins[i]))
+		right := strings.ToLower(searchPluginFullName(plugins[j]))
+		if left == right {
+			return strings.ToLower(plugins[i].Name) < strings.ToLower(plugins[j].Name)
+		}
+		return left < right
+	})
+	for _, plugin := range plugins {
+		name := strings.TrimSpace(plugin.Name)
+		if name == "" {
+			continue
+		}
+		description := viewSafe(name)
+		if plugin.Enabled {
+			description += " · enabled"
+		} else {
+			description += " · disabled"
+		}
+		items = append(items, dialogItem{
+			label:       searchPluginFullName(plugin),
+			action:      name,
+			description: description,
+		})
+	}
+	return items
+}
+
+func (m *model) refreshSearchPluginPicker() {
+	if m.dialog == nil || m.dialog.kind != dialogSearchPlugins {
+		return
+	}
+	selectedAction := ""
+	if m.dialog.selected >= 0 && m.dialog.selected < len(m.dialog.items) {
+		selectedAction = m.dialog.items[m.dialog.selected].action
+	}
+	if selectedAction == "" {
+		selectedAction = m.searchPluginSelection(m.searchPlugin)
+	}
+	m.dialog.items = m.searchPluginPickerItems()
+	m.dialog.selected = 0
+	for i, item := range m.dialog.items {
+		if item.action == selectedAction {
+			m.dialog.selected = i
+			break
+		}
+	}
 }
 
 func searchPluginLabel(plugin string) string {
@@ -312,7 +399,131 @@ func searchPluginLabel(plugin string) string {
 		return "search plugin"
 	}
 	runes := []rune(plugin)
-	return strings.ToUpper(string(runes[0])) + string(runes[1:])
+	return viewSafe(strings.ToUpper(string(runes[0])) + string(runes[1:]))
+}
+
+func (m *model) searchPluginLabel(plugin string) string {
+	selection := m.searchPluginSelection(plugin)
+	if selection == "" {
+		selection = defaultSearchPluginSelection
+	}
+	if selection == defaultSearchPluginSelection {
+		enabled := m.enabledSearchPlugins()
+		if len(enabled) == 1 {
+			return searchPluginFullName(enabled[0])
+		}
+		return "Enabled search plugins"
+	}
+	if strings.EqualFold(selection, "all") {
+		return "All search plugins"
+	}
+	parts := strings.Split(selection, "|")
+	labels := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		labels = append(labels, m.searchPluginName(part))
+	}
+	if len(labels) == 0 {
+		return "Enabled search plugins"
+	}
+	return strings.Join(labels, " | ")
+}
+
+func (m *model) searchPluginName(name string) string {
+	for _, plugin := range m.searchPlugins {
+		if plugin.Name == name {
+			return searchPluginFullName(plugin)
+		}
+	}
+	for _, plugin := range m.searchPlugins {
+		if strings.EqualFold(plugin.Name, name) {
+			return searchPluginFullName(plugin)
+		}
+	}
+	return searchPluginLabel(name)
+}
+
+func (m *model) enabledSearchPlugins() []searchPluginInfo {
+	plugins := make([]searchPluginInfo, 0, len(m.searchPlugins))
+	for _, plugin := range m.searchPlugins {
+		if plugin.Enabled && strings.TrimSpace(plugin.Name) != "" {
+			plugins = append(plugins, plugin)
+		}
+	}
+	return plugins
+}
+
+func searchPluginFullName(plugin searchPluginInfo) string {
+	if full := strings.TrimSpace(plugin.FullName); full != "" {
+		return viewSafe(full)
+	}
+	return searchPluginLabel(plugin.Name)
+}
+
+func (m *model) searchPluginSelection(value string) string {
+	selection := strings.TrimSpace(value)
+	if resolved, err := client.ResolveSearchPluginSelection(selection, m.searchPlugins); err == nil {
+		if resolved == "multi" {
+			return defaultSearchPluginSelection
+		}
+		return resolved
+	}
+	// The backend can resolve this against a newer catalog or report an
+	// invalid selector. Keep the user's input intact until then.
+	return selection
+}
+
+func (m *model) searchPluginHelp() string {
+	const choices = "Use enabled, all, a plugin name, or plugin|plugin"
+	if m.searchPluginsLoading {
+		return "Loading installed plugins… " + choices
+	}
+	if !m.searchPluginsAttempted && m.searchPluginsError == "" {
+		return "Installed plugin list pending. " + choices
+	}
+	if len(m.searchPlugins) == 0 {
+		if m.searchPluginsError != "" {
+			return "Installed plugin list unavailable. " + choices
+		}
+		return "No installed plugins reported. " + choices
+	}
+	names := make([]string, 0, len(m.searchPlugins))
+	for _, plugin := range m.searchPlugins {
+		if strings.TrimSpace(plugin.Name) == "" {
+			continue
+		}
+		name := searchPluginFullName(plugin)
+		if !strings.EqualFold(name, plugin.Name) {
+			name += " (" + viewSafe(plugin.Name) + ")"
+		}
+		if plugin.Enabled {
+			name += " ✓"
+		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "No installed plugins reported. " + choices
+	}
+	prefix := "Installed: "
+	if m.searchPluginsStale {
+		prefix = "Installed (stale): "
+	}
+	return prefix + strings.Join(names, ", ") + ". " + choices
+}
+
+func (m *model) refreshSearchDialogPlugin() {
+	if m.dialog == nil || m.dialog.kind != dialogSearch || len(m.dialog.fields) < 2 {
+		return
+	}
+	selection := m.searchPluginSelection(m.dialog.value(1))
+	if selection == "" {
+		selection = defaultSearchPluginSelection
+	}
+	m.dialog.title = "Search " + m.searchPluginLabel(selection)
+	m.dialog.fields[1].help = m.searchPluginHelp()
 }
 
 func (m *model) openFilterDialog() {
@@ -576,6 +787,9 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 	// cancellation policy for in-flight requests and for the interactive UI.
 	if name == "esc" || name == "escape" || (name == "?" && d.kind == dialogHelp) ||
 		(name == "ctrl+p" && d.kind == dialogPalette) {
+		if d.kind == dialogSearchPlugins && m.searchPluginsLoading {
+			m.cancelSearchPlugins()
+		}
 		if d.kind == dialogTheme {
 			m.themePreview = ""
 		}
@@ -615,7 +829,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		d.refreshPalette()
 		return cmd
 
-	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme:
+	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins:
 		switch name {
 		case "up", "ctrl+k", "k":
 			d.stepSelection(-1)
@@ -668,6 +882,11 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				} else {
 					m.setResultSort(resultSort(action))
 				}
+				return nil
+			}
+			if d.kind == dialogSearchPlugins {
+				m.searchPlugin = d.items[d.selected].action
+				m.dialog = nil
 				return nil
 			}
 			field := client.CanonicalSetField(d.items[d.selected].action)
@@ -788,7 +1007,7 @@ func (m *model) submitDialog() tea.Cmd {
 			return nil
 		}
 		query := strings.TrimSpace(d.value(0))
-		plugin := strings.TrimSpace(d.value(1))
+		plugin := m.searchPluginSelection(d.value(1))
 		timeout, err := time.ParseDuration(strings.TrimSpace(d.value(2)))
 		if query == "" || plugin == "" {
 			d.status = "Query and plugin are required"
@@ -997,7 +1216,7 @@ func (m *model) dialogView(width, height int) string {
 		body = m.dialogPaletteLines(innerWidth, visible)
 		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "run")
 
-	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme:
+	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins:
 		start := min(max(0, d.selected-visible/2), max(0, len(d.items)-visible))
 		for i := start; i < min(len(d.items), start+visible); i++ {
 			item := d.items[i]

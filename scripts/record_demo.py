@@ -37,6 +37,10 @@ HEIGHT = 32
 GIB = 1 << 30
 ALPHA = "a" * 40
 BRAVO = "b" * 40
+SEARCH_PLUGINS = [
+    {"name": "distroarchive", "fullName": "Distro Archive", "enabled": True},
+    {"name": "linuxreleases", "fullName": "Linux Releases", "enabled": True},
+]
 KEYS = {
     "enter": b"\r",
     "escape": b"\x1b",
@@ -143,6 +147,8 @@ class Fixture(BaseHTTPRequestHandler):
             })
         elif parsed.path == "/api/v2/torrents/trackers":
             self.reply(body=[{"url": "https://tracker.example/announce", "status": 2, "tier": 0}])
+        elif parsed.path == "/api/v2/search/plugins":
+            self.reply(body=SEARCH_PLUGINS)
         elif parsed.path == "/api/v2/search/status":
             job_id = int(query["id"][0])
             status = "Running" if self.fixture.search_running else "Stopped"
@@ -176,7 +182,7 @@ class Fixture(BaseHTTPRequestHandler):
             return
         if path == "/api/v2/search/start":
             job_id = len(self.fixture.search_jobs) + 1
-            self.fixture.search_jobs[job_id] = form["pattern"][0]
+            self.fixture.search_jobs[job_id] = (form["pattern"][0], form["plugins"][0])
             self.reply(body={"id": job_id})
         elif path == "/api/v2/search/delete":
             self.fixture.deleted_jobs.append(int(form.get("id", [0])[0]))
@@ -198,8 +204,17 @@ class Fixture(BaseHTTPRequestHandler):
             self.reply(404)
 
     def search_results(self, job_id):
-        pattern = self.fixture.search_jobs.get(job_id, "")
-        return self.fixture.search_results.get(pattern, [])
+        pattern, selector = self.fixture.search_jobs.get(job_id, ("", "enabled"))
+        if selector == "enabled":
+            selected = {p["name"] for p in SEARCH_PLUGINS if p["enabled"]}
+        elif selector == "all":
+            selected = {p["name"] for p in SEARCH_PLUGINS}
+        else:
+            selected = set(selector.split("|"))
+        return [
+            result for result in self.fixture.search_results.get(pattern, [])
+            if result["engineName"] in selected
+        ]
 
 
 class Recording:
@@ -382,30 +397,30 @@ def main():
             "fileSize": 2 * GIB,
             "nbSeeders": 19,
             "nbLeechers": 5,
-            "fileUrl": "https://jackett.example/download/ubuntu-server?token=demo",
-            "siteUrl": "https://jackett.example",
-            "descrLink": "https://indexer.example/ubuntu-server",
-            "engineName": "jackett",
+            "fileUrl": "https://releases.example/download/ubuntu-server",
+            "siteUrl": "https://releases.example",
+            "descrLink": "https://releases.example/ubuntu-server",
+            "engineName": "linuxreleases",
         },
         {
             "fileName": "Ubuntu 24.04.3 Desktop arm64",
             "fileSize": 6 * GIB,
             "nbSeeders": 62,
             "nbLeechers": 7,
-            "fileUrl": "https://jackett.example/download/ubuntu-arm?token=demo",
-            "siteUrl": "https://jackett.example",
-            "descrLink": "https://indexer.example/ubuntu-arm",
-            "engineName": "jackett",
+            "fileUrl": "https://archive.example/download/ubuntu-arm",
+            "siteUrl": "https://archive.example",
+            "descrLink": "https://archive.example/ubuntu-arm",
+            "engineName": "distroarchive",
         },
         {
             "fileName": "Ubuntu 24.04.3 Desktop amd64",
             "fileSize": 4 * GIB,
             "nbSeeders": 84,
             "nbLeechers": 12,
-            "fileUrl": "https://jackett.example/download/ubuntu-amd64?token=demo",
-            "siteUrl": "https://jackett.example",
-            "descrLink": "https://indexer.example/ubuntu",
-            "engineName": "jackett",
+            "fileUrl": "https://releases.example/download/ubuntu-amd64",
+            "siteUrl": "https://releases.example",
+            "descrLink": "https://releases.example/ubuntu",
+            "engineName": "linuxreleases",
         },
     ]
     fixture.search_results = {
@@ -415,10 +430,10 @@ def main():
             "fileSize": 4 * GIB,
             "nbSeeders": 68,
             "nbLeechers": 4,
-            "fileUrl": "https://jackett.example/download/debian?token=demo",
-            "siteUrl": "https://jackett.example",
-            "descrLink": "https://indexer.example/debian",
-            "engineName": "jackett",
+            "fileUrl": "https://archive.example/download/debian",
+            "siteUrl": "https://archive.example",
+            "descrLink": "https://archive.example/debian",
+            "engineName": "distroarchive",
         }],
     }
     fixture.search_jobs = {}
@@ -469,10 +484,10 @@ def main():
             recording.key(b"escape")
             recording.hold(0.5)
 
-            # Search Jackett for Ubuntu, sort locally, then filter the loaded
-            # rows without issuing another search.
+            # Search enabled providers for Ubuntu, then sort and filter the
+            # loaded rows without issuing another search.
             recording.key(b"2", "Search results")
-            recording.key(b"/", "Search Jackett")
+            recording.key(b"/", "Timeout")
             recording.type_text("Ubuntu 24.04")
             recording.key(b"enter", "Ready")
             recording.hold(1.2)
@@ -500,7 +515,14 @@ def main():
             recording.hold(1.4)
             recording.key(b"escape")
             recording.key(b"escape")
-            recording.key(b"/", "Search Jackett")
+            picker_start = len(recording.output)
+            recording.key(b"p", "Choose search provider")
+            recording.wait("Distro Archive", picker_start)
+            recording.hold(0.7)
+            recording.key(b"down")
+            recording.key(b"down")
+            recording.key(b"enter", "Distro Archive")
+            recording.key(b"/", "Search Distro Archive")
             recording.key(b"\x15")  # Ctrl+U clears the previous query.
             recording.type_text("Debian")
             recording.key(b"enter", "Debian 12.9 DVD amd64")
@@ -525,10 +547,10 @@ def main():
                 raise RuntimeError(f"qbitctl tui exited with status {recording.proc.returncode}")
             expected_download = {
                 "urls": [ubuntu_results[-1]["fileUrl"]],
-                "downloader": ["jackett"],
+                "downloader": [ubuntu_results[-1]["engineName"]],
             }
             if (
-                fixture.search_jobs != {1: "Ubuntu 24.04", 2: "Debian"}
+                fixture.search_jobs != {1: ("Ubuntu 24.04", "enabled"), 2: ("Debian", "distroarchive")}
                 or fixture.logouts != 1
                 or fixture.deleted_jobs != [1, 2]
                 or fixture.downloads != [expected_download]

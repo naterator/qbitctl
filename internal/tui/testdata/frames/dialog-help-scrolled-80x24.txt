@@ -14,11 +14,11 @@
 
   Search                                 Dialogs
   /      New search                      tab/⇧tab  Change field
-  s      Sort results                    enter     Submit
-  f      Filter results                  esc       Cancel
+  p      Choose provider                 enter     Submit
+  s      Sort results                    esc       Cancel
+  f      Filter results
   enter  Add result
   esc    Cancel / clear filter
 
-  Session
   ────────────────────────────────────────────────────────────────────────────
   esc back   ↑/↓ scroll   pgup/pgdn page

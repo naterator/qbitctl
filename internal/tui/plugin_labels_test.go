@@ -5,6 +5,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/naterator/qbitctl/pkg/client"
 )
 
 func TestSelectedSearchPluginAppearsInTUILabels(t *testing.T) {
@@ -15,8 +17,8 @@ func TestSelectedSearchPluginAppearsInTUILabels(t *testing.T) {
 	if m.dialog == nil || m.dialog.title != "Search Prowlarr" {
 		t.Fatalf("search dialog title = %#v, want Search Prowlarr", m.dialog)
 	}
-	if got := m.dialog.fields[1].input.Placeholder; got != "prowlarr" {
-		t.Fatalf("plugin placeholder = %q, want prowlarr", got)
+	if got := m.dialog.fields[1].input.Placeholder; got != client.DefaultSearchPlugins {
+		t.Fatalf("plugin placeholder = %q, want %s", got, client.DefaultSearchPlugins)
 	}
 
 	m.dialog = nil

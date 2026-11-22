@@ -124,6 +124,10 @@ func (m *model) saveConfig(values client.Credentials, tuiDefault bool) tea.Cmd {
 }
 
 func (m *model) resetRemoteState() {
+	if m.searchPluginCancel != nil {
+		m.searchPluginCancel()
+	}
+	m.searchPluginGeneration++
 	m.allTorrents = nil
 	m.queue = nil
 	m.allResults = nil
@@ -137,6 +141,13 @@ func (m *model) resetRemoteState() {
 	m.stateFilter = "all"
 	m.resultFilter = resultFilter{}
 	m.resultEditor = nil
+	m.searchPlugin = defaultSearchPluginSelection
+	m.searchPlugins = nil
+	m.searchPluginsAttempted = false
+	m.searchPluginsLoading = false
+	m.searchPluginCancel = nil
+	m.searchPluginsStale = false
+	m.searchPluginsError = ""
 	m.dialog = nil
 }
 

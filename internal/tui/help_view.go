@@ -133,6 +133,7 @@ var helpGroups = []helpGroup{
 		title: "Search",
 		items: []helpShortcut{
 			{key: "/", label: "New search"},
+			{key: "p", label: "Choose provider"},
 			{key: "s", label: "Sort results"},
 			{key: "f", label: "Filter results"},
 			{key: "enter", label: "Add result"},

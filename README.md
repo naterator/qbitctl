@@ -39,7 +39,11 @@ shortcuts or `Ctrl+P` for the command palette. Mark torrents with `Space` to
 edit them together. Set `qbitctl tui-default on` to open the TUI when you run
 `qbitctl` by itself.
 
-![qbitctl TUI showing setup, search, and torrent controls](assets/demo.gif)
+On the Search tab, press `p` (**Providers**) to pick an installed plugin or
+search all enabled plugins. The current selection stays visible above the
+results. Press `/` to start a search.
+
+![qbitctl TUI showing setup, the search provider picker, and torrent controls](assets/demo.gif)
 
 [Terminal recording](assets/demo.cast) · [Recording script](scripts/record_demo.py)
 
@@ -69,9 +73,14 @@ qbitctl pause 9c328901 fedcba98
 qbitctl completion bash
 ```
 
-Search uses Jackett and waits up to 30 seconds by default. Use `--plugin` or
-`--timeout` to change those. Copy the ID from a search result into
-`add --search-id`. IDs last up to 24 hours for the same server and user.
+Search uses the plugins enabled in qBittorrent and waits up to 30 seconds by
+default. Run `qbitctl search --list-plugins` to see what your server has
+installed. Use `--plugin` with a name or ID, join several with `|` in a quoted
+value, or use `--plugin all` to include disabled plugins. Change the wait with
+`--timeout`.
+
+Copy the ID from a search result into `add --search-id`. IDs last up to 24
+hours for the same server and user.
 
 Use `--json` for structured output or `--server-json` for the raw API response
 where offered. `list` and `show` also support `--fields` and `--template`.

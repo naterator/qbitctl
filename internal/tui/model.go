@@ -31,6 +31,7 @@ type workKind uint8
 const (
 	queueWork workKind = iota
 	searchWork
+	searchPluginsWork
 	serverWork
 	detailWork
 	actionWork
@@ -46,17 +47,27 @@ type service interface {
 	action(context.Context, actionRequest) error
 }
 
+const defaultSearchPluginSelection = client.DefaultSearchPlugins
+
+type searchPluginInfo = client.SearchPlugin
+
+type searchPluginService interface {
+	searchPlugins(context.Context) ([]searchPluginInfo, error)
+}
+
 type workDone struct {
-	kind       workKind
-	queue      []client.TorrentInfo
-	results    []client.SearchResult
-	rows       []detailRow
-	title      string
-	notice     string
-	app        *client.App
-	setup      setupState
-	setDefault *bool
-	err        error
+	kind             workKind
+	queue            []client.TorrentInfo
+	results          []client.SearchResult
+	rows             []detailRow
+	title            string
+	notice           string
+	app              *client.App
+	setup            setupState
+	setDefault       *bool
+	plugins          []searchPluginInfo
+	pluginGeneration uint64
+	err              error
 }
 
 type refreshTick struct{}
@@ -85,28 +96,35 @@ type model struct {
 	theme           themeID
 	themePreview    themeID
 
-	page          page
-	width, height int
-	allTorrents   []client.TorrentInfo
-	queue         []client.TorrentInfo
-	allResults    []client.SearchResult
-	results       []client.SearchResult
-	serverRows    []detailRow
-	queueIndex    int
-	resultIndex   int
-	marked        map[string]bool
-	filter        string
-	stateFilter   string
-	queueSort     queueSort
-	resultFilter  resultFilter
-	resultSort    resultSort
-	resultEditor  *resultFilterEditor
-	query         string
-	searchPlugin  string
-	searchTimeout time.Duration
-	dialog        *dialog
-	busy, notice  string
-	failed        bool
+	page                   page
+	width, height          int
+	allTorrents            []client.TorrentInfo
+	queue                  []client.TorrentInfo
+	allResults             []client.SearchResult
+	results                []client.SearchResult
+	serverRows             []detailRow
+	queueIndex             int
+	resultIndex            int
+	marked                 map[string]bool
+	filter                 string
+	stateFilter            string
+	queueSort              queueSort
+	resultFilter           resultFilter
+	resultSort             resultSort
+	resultEditor           *resultFilterEditor
+	query                  string
+	searchPlugin           string
+	searchTimeout          time.Duration
+	searchPlugins          []searchPluginInfo
+	searchPluginsAttempted bool
+	searchPluginsLoading   bool
+	searchPluginCancel     context.CancelFunc
+	searchPluginsStale     bool
+	searchPluginsError     string
+	searchPluginGeneration uint64
+	dialog                 *dialog
+	busy, notice           string
+	failed                 bool
 
 	noticeID uint64
 }
@@ -120,7 +138,7 @@ func newModel(ctx context.Context, backend service) *model {
 		ctx: ctx, backend: backend, width: 80, height: 24,
 		marked: make(map[string]bool), stateFilter: "all",
 		queueSort: queueActiveFirst, resultSort: resultOriginal,
-		searchPlugin: "jackett", searchTimeout: 30 * time.Second,
+		searchPlugin: defaultSearchPluginSelection, searchTimeout: 30 * time.Second,
 		theme: defaultThemeID,
 	}
 }
@@ -190,8 +208,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return nextTick()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			if m.busy != "" && m.work == searchWork && !m.quitting {
+			if !m.quitting && m.busy != "" && m.work == searchWork {
 				m.cancelSearch()
+				return nil
+			}
+			if !m.quitting && m.searchPluginsLoading && m.dialog != nil && m.dialog.kind == dialogSearchPlugins {
+				m.cancelSearchPlugins()
 				return nil
 			}
 			return m.requestQuit()
@@ -248,6 +270,8 @@ func (m *model) handleKey(key string) tea.Cmd {
 			m.busy = "Canceling connection"
 		} else if m.busy != "" && m.work == searchWork {
 			m.cancelSearch()
+		} else if m.searchPluginsLoading && m.dialog != nil && m.dialog.kind == dialogSearchPlugins {
+			m.cancelSearchPlugins()
 		} else if m.page == searchPage && m.resultFilter.active() {
 			m.clearResultFilter()
 		} else if m.page == queuePage && len(m.marked) > 0 {
@@ -300,6 +324,8 @@ func (m *model) handleKey(key string) tea.Cmd {
 			return m.openAction("sort-results")
 		case "f":
 			return m.openAction("filter-results")
+		case "p":
+			return m.openAction("providers")
 		}
 	}
 	if m.page != queuePage {
@@ -354,6 +380,36 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 }
 
 func (m *model) finishWork(done workDone) tea.Cmd {
+	if done.kind == searchPluginsWork {
+		if done.pluginGeneration != m.searchPluginGeneration {
+			if m.quitting {
+				return tea.Quit
+			}
+			return nil
+		}
+		m.searchPluginCancel = nil
+		m.searchPluginsLoading = false
+		if m.quitting {
+			return tea.Quit
+		}
+		if errors.Is(done.err, context.Canceled) {
+			m.searchPluginsStale = len(m.searchPlugins) > 0
+			return nil
+		}
+		if done.err != nil {
+			m.searchPluginsStale = len(m.searchPlugins) > 0
+			m.searchPluginsError = done.err.Error()
+			m.refreshSearchDialogPlugin()
+			return nil
+		}
+		m.searchPlugins = normalizeSearchPlugins(done.plugins)
+		m.searchPluginsAttempted = true
+		m.searchPluginsStale = false
+		m.searchPluginsError = ""
+		m.refreshSearchDialogPlugin()
+		m.refreshSearchPluginPicker()
+		return nil
+	}
 	m.cancel, m.busy = nil, ""
 	if m.quitting {
 		m.releasePendingApp(done.app)
@@ -533,10 +589,46 @@ func (m *model) refresh() tea.Cmd {
 
 func (m *model) goTo(next page) tea.Cmd {
 	m.page = next
-	if next == searchPage || next == configPage || m.backend == nil {
+	if next == searchPage {
+		return m.ensureSearchPlugins()
+	}
+	if next == configPage || m.backend == nil {
 		return nil
 	}
 	return m.refresh()
+}
+
+func (m *model) ensureSearchPlugins(force ...bool) tea.Cmd {
+	refresh := len(force) > 0 && force[0]
+	if m.backend == nil || m.searchPluginsLoading || (!refresh && m.searchPluginsAttempted) {
+		return nil
+	}
+	provider, ok := m.backend.(searchPluginService)
+	if !ok {
+		m.searchPluginsAttempted = true
+		return nil
+	}
+	if refresh {
+		m.searchPluginsAttempted = false
+		m.searchPluginsError = ""
+	}
+	generation := m.searchPluginGeneration
+	parent := m.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	m.searchPluginCancel = cancel
+	m.searchPluginsLoading = true
+	done := make(chan workDone, 1)
+	m.workers.Add(1)
+	go func() {
+		defer m.workers.Done()
+		defer cancel()
+		plugins, err := provider.searchPlugins(ctx)
+		done <- workDone{kind: searchPluginsWork, plugins: plugins, pluginGeneration: generation, err: err}
+	}()
+	return func() tea.Msg { return <-done }
 }
 
 func (m *model) launchSearch(query, plugin string, timeout time.Duration) tea.Cmd {
@@ -550,7 +642,7 @@ func (m *model) launchSearch(query, plugin string, timeout time.Duration) tea.Cm
 	m.page, m.query, m.searchPlugin, m.searchTimeout = searchPage, query, plugin, timeout
 	m.replaceSearchResults(nil)
 	m.setNotice("", false)
-	return m.startWork(searchWork, "Searching "+plugin, func(ctx context.Context) workDone {
+	return m.startWork(searchWork, "Searching "+m.searchPluginLabel(plugin), func(ctx context.Context) workDone {
 		results, notice, err := m.backend.search(ctx, query, plugin, timeout)
 		if ctx.Err() != nil {
 			if notice != "" {
@@ -572,12 +664,42 @@ func (m *model) cancelSearch() {
 	m.busy = "Canceling search"
 }
 
+func (m *model) cancelSearchPlugins() {
+	if m.searchPluginCancel != nil {
+		m.searchPluginCancel()
+	}
+}
+
+func normalizeSearchPlugins(input []searchPluginInfo) []searchPluginInfo {
+	plugins := make([]searchPluginInfo, 0, len(input))
+	seen := make(map[string]struct{}, len(input))
+	for _, plugin := range input {
+		plugin.Name = strings.TrimSpace(plugin.Name)
+		plugin.FullName = strings.TrimSpace(plugin.FullName)
+		if plugin.Name == "" {
+			continue
+		}
+		key := plugin.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		plugins = append(plugins, plugin)
+	}
+	return plugins
+}
+
 func (m *model) requestQuit() tea.Cmd {
-	if m.busy == "" {
+	if m.busy == "" && !m.searchPluginsLoading {
 		return tea.Quit
 	}
 	m.quitting = true
-	m.cancel()
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.searchPluginCancel != nil {
+		m.searchPluginCancel()
+	}
 	m.busy = "Closing session"
 	return nil
 }

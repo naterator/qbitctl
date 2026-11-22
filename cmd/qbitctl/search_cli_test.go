@@ -55,6 +55,23 @@ func TestRenderSearchResultsUsesHumanSizeAndTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestRenderSearchPluginsUsesFullNameFallbackAndSanitizesRemoteText(t *testing.T) {
+	plugins := []qbt.SearchPlugin{
+		{Name: "jackett", Enabled: true},
+		{Name: "id\twith-control", FullName: "Name\nwith-control", Enabled: false},
+	}
+	var output bytes.Buffer
+	if err := renderSearchPlugins(&output, plugins, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "Name\tID\tEnabled\n" +
+		"jackett\tjackett\ttrue\n" +
+		"Name with-control\tid with-control\tfalse\n"
+	if output.String() != want {
+		t.Fatalf("plugin table = %q, want %q", output.String(), want)
+	}
+}
+
 func TestParseSearchCommandOptions(t *testing.T) {
 	options, err := parseSearchCommandOptions("seeders-desc", 10, true, "500MB", true, "2GiB", true, "ubuntu tracker", 5)
 	if err != nil {

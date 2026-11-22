@@ -56,6 +56,14 @@ type tuiClient struct {
 	queueState queueSync
 }
 
+func (c *tuiClient) searchPlugins(ctx context.Context) ([]searchPluginInfo, error) {
+	if c == nil || c.app == nil {
+		return nil, fmt.Errorf("qBittorrent client is not configured")
+	}
+	app := c.withContext(ctx, io.Discard, io.Discard)
+	return app.SearchPlugins()
+}
+
 func (c *tuiClient) withContext(ctx context.Context, stdout, stderr io.Writer) *client.App {
 	if ctx == nil {
 		ctx = context.Background()
@@ -287,7 +295,11 @@ func (c *tuiClient) search(ctx context.Context, query, plugin string, timeout ti
 
 	var stdout, stderr bytes.Buffer
 	app := c.withContext(ctx, &stdout, &stderr)
-	results, err := app.Search(query, plugin, timeout)
+	resolved, err := app.ResolveSearchPlugins(plugin)
+	if err != nil {
+		return nil, joinDiagnostics(stderr.String(), stdout.String()), err
+	}
+	results, err := app.Search(query, resolved, timeout)
 	warning := joinDiagnostics(stderr.String(), stdout.String())
 	if err != nil {
 		return nil, warning, err

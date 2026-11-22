@@ -23,10 +23,26 @@ func TestSearchCommandDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{"plugin": "jackett", "timeout": "30s", "json": "false"} {
+	if search.Use != "search <pattern> | --list-plugins" {
+		t.Fatalf("search usage = %q, want list mode in usage", search.Use)
+	}
+	for name, want := range map[string]string{"plugin": qbt.DefaultSearchPlugins, "timeout": "30s", "json": "false", "list-plugins": "false"} {
 		flag := search.Flags().Lookup(name)
 		if flag == nil || flag.DefValue != want {
 			t.Errorf("default %s flag = %v, want %s", name, flag, want)
+		}
+	}
+	for name, want := range map[string]string{
+		"plugin": "ID or full name",
+		"json":   "plugin listing",
+	} {
+		flag := search.Flags().Lookup(name)
+		if flag == nil {
+			t.Errorf("help flag --%s is missing", name)
+			continue
+		}
+		if !strings.Contains(flag.Usage, want) {
+			t.Errorf("help for --%s = %q, want %q", name, flag.Usage, want)
 		}
 	}
 	root.SetArgs([]string{"search", "Ubuntu", "--timeout", "0s"})
@@ -34,6 +50,108 @@ func TestSearchCommandDefaultsAndValidation(t *testing.T) {
 	var coded *qbt.CodedError
 	if !errors.As(err, &coded) || coded.Code != exitBadArgs {
 		t.Fatalf("invalid timeout error = %v, want argument error", err)
+	}
+}
+
+func TestSearchListPlugins(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		json     bool
+		wantText string
+	}{
+		{
+			name: "table",
+			wantText: "Name\tID\tEnabled\n" +
+				"Jackett\tjackett\ttrue\n" +
+				"Enabled search\tenabled\tfalse\n",
+		},
+		{
+			name:     "json",
+			json:     true,
+			wantText: `[{"name":"jackett","fullName":"Jackett","enabled":true},{"name":"enabled","fullName":"Enabled search","enabled":false}]` + "\n",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests []string
+			restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+				return &http.Client{Jar: jar, Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+					path := req.URL.Path
+					requests = append(requests, path)
+					resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody, Request: req}
+					var body string
+					switch path {
+					case "/api/v2/auth/login":
+						resp.StatusCode = http.StatusNoContent
+						resp.Header.Set("Set-Cookie", "QBT_SID_8080=plugin-session; Path=/")
+					case "/api/v2/app/version":
+						body = "v5.3.0"
+					case "/api/v2/app/webapiVersion":
+						body = "2.16.2"
+					case "/api/v2/search/plugins":
+						body = `[{"name":"jackett","fullName":"Jackett","enabled":true},{"name":"enabled","fullName":"Enabled search","enabled":false}]`
+					case "/api/v2/auth/logout":
+						resp.StatusCode = http.StatusNoContent
+					default:
+						t.Fatalf("unexpected path: %s", path)
+					}
+					resp.Body = io.NopCloser(strings.NewReader(body))
+					return resp, nil
+				})}
+			})
+			t.Cleanup(restore)
+
+			root := newRootCmd()
+			args := []string{"--url", "http://qbt.test", "--user", "admin", "--pass", "secret", "search", "--list-plugins"}
+			if tt.json {
+				args = append(args, "--json")
+			}
+			root.SetArgs(args)
+			var commandErr error
+			stdout, stderr := captureOutput(t, func() { commandErr = root.ExecuteContext(t.Context()) })
+			if commandErr != nil || stderr != "" || stdout != tt.wantText {
+				t.Fatalf("plugin listing returned %v, stdout %q, stderr %q", commandErr, stdout, stderr)
+			}
+			wantPaths := []string{"/api/v2/auth/login", "/api/v2/app/version", "/api/v2/app/webapiVersion", "/api/v2/search/plugins", "/api/v2/auth/logout"}
+			if !slices.Equal(requests, wantPaths) {
+				t.Fatalf("plugin listing requests = %v, want %v", requests, wantPaths)
+			}
+		})
+	}
+}
+
+func TestSearchListPluginsRejectsPatternAndSearchFlagsBeforeAuth(t *testing.T) {
+	var loginCalls int
+	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+		return &http.Client{Jar: jar, Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/api/v2/auth/login" {
+				loginCalls++
+			}
+			return nil, errors.New("list validation should prevent authentication")
+		})}
+	})
+	t.Cleanup(restore)
+
+	for _, args := range [][]string{
+		{"search", "--list-plugins", "plugins"},
+		{"search", "--list-plugins", "--plugin", "jackett"},
+		{"search", "--list-plugins", "--timeout", "1s"},
+		{"search", "--list-plugins", "--sort", "seeders-desc"},
+		{"search", "--list-plugins", "--min-seeders", "1"},
+		{"search", "--list-plugins", "--min-size", "1MB"},
+		{"search", "--list-plugins", "--max-size", "1GB"},
+		{"search", "--list-plugins", "--filter", "foo"},
+		{"search", "--list-plugins", "--limit", "1"},
+	} {
+		root := newRootCmd()
+		root.SetArgs(args)
+		err := root.ExecuteContext(t.Context())
+		var coded *qbt.CodedError
+		if !errors.As(err, &coded) || coded.Code != exitBadArgs {
+			t.Fatalf("args %v returned %v, want ExitBadArgs", args, err)
+		}
+	}
+	if loginCalls != 0 {
+		t.Fatalf("list validation attempted %d logins", loginCalls)
 	}
 }
 
@@ -48,6 +166,7 @@ func TestSearchCommandLifecycle(t *testing.T) {
 	)
 	for _, tt := range []struct {
 		name         string
+		pattern      string
 		flags        []string
 		afterStart   []string
 		cancelAt     string
@@ -69,6 +188,18 @@ func TestSearchCommandLifecycle(t *testing.T) {
 		},
 		{
 			name: "no results", flags: []string{"--plugin", "enabled"}, afterStart: []string{statusPath, resultsPath},
+			resultBody: `{"results":[],"status":"Stopped","total":0}`, wantOut: "[]", deleteStatus: http.StatusNotFound,
+		},
+		{
+			name: "literal plugins pattern", pattern: "plugins", afterStart: []string{statusPath, resultsPath},
+			resultBody: `{"results":[],"status":"Stopped","total":0}`, wantOut: "[]", deleteStatus: http.StatusNotFound,
+		},
+		{
+			name: "multiple plugin selection", flags: []string{"--plugin", "jackett|enabled"}, afterStart: []string{statusPath, resultsPath},
+			resultBody: `{"results":[],"status":"Stopped","total":0}`, wantOut: "[]", deleteStatus: http.StatusNotFound,
+		},
+		{
+			name: "full plugin name", flags: []string{"--plugin", "Jackett"}, afterStart: []string{statusPath, resultsPath},
 			resultBody: `{"results":[],"status":"Stopped","total":0}`, wantOut: "[]", deleteStatus: http.StatusNotFound,
 		},
 		{
@@ -152,12 +283,24 @@ func TestSearchCommandLifecycle(t *testing.T) {
 						body = "v5.3.0"
 					case "/api/v2/app/webapiVersion":
 						body = "2.16.2"
+					case "/api/v2/search/plugins":
+						body = `[{"name":"jackett","fullName":"Jackett","enabled":true},{"name":"enabled","fullName":"Enabled","enabled":true}]`
 					case startPath:
-						plugin := "jackett"
+						plugin := qbt.DefaultSearchPlugins
 						if tt.name == "no results" {
 							plugin = "enabled"
 						}
-						want := url.Values{"pattern": {"Ubuntu 24.04"}, "plugins": {plugin}, "category": {"all"}}
+						if tt.name == "multiple plugin selection" {
+							plugin = "jackett|enabled"
+						}
+						if tt.name == "full plugin name" {
+							plugin = "jackett"
+						}
+						pattern := "Ubuntu 24.04"
+						if tt.pattern != "" {
+							pattern = tt.pattern
+						}
+						want := url.Values{"pattern": {pattern}, "plugins": {plugin}, "category": {"all"}}
 						if !reflect.DeepEqual(req.Form, want) {
 							t.Errorf("start form = %v, want %v", req.Form, want)
 						}
@@ -198,7 +341,12 @@ func TestSearchCommandLifecycle(t *testing.T) {
 			t.Cleanup(restore)
 
 			root := newRootCmd()
-			args := []string{"--url", "http://qbt.test", "--user", "admin", "--pass", "secret", "search", "Ubuntu", "24.04", "--json"}
+			patternArgs := []string{"Ubuntu", "24.04"}
+			if tt.pattern != "" {
+				patternArgs = []string{tt.pattern}
+			}
+			args := append([]string{"--url", "http://qbt.test", "--user", "admin", "--pass", "secret", "search"}, patternArgs...)
+			args = append(args, "--json")
 			root.SetArgs(append(args, tt.flags...))
 			var commandErr error
 			stdout, stderr := captureOutput(t, func() { commandErr = root.ExecuteContext(ctx) })
@@ -213,6 +361,9 @@ func TestSearchCommandLifecycle(t *testing.T) {
 				}
 			}
 			wantPaths := []string{"/api/v2/auth/login", "/api/v2/app/version", "/api/v2/app/webapiVersion", startPath}
+			if tt.name == "multiple plugin selection" || tt.name == "full plugin name" {
+				wantPaths = append(wantPaths[:3], "/api/v2/search/plugins", startPath)
+			}
 			wantPaths = append(wantPaths, tt.afterStart...)
 			wantPaths = append(wantPaths, deletePath, "/api/v2/auth/logout")
 			if !slices.Equal(requests, wantPaths) {

@@ -1,0 +1,40 @@
+  ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
+    1 Queue    ▸ 2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Search results                                                              │ Selected result
+   Provider: Prowlarr                                                          │ Select a result to inspect it.
+   0 results  ·  Search order                                                  │
+      Title                          Size      Seeds ID         Source         │ Enter adds the selected result.
+   Press / to search Prowlarr.                                                 │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+
+                      Choose search provider
+
+                      › Enabled search plugins · server-enabled providers
+                        All search plugins · every installed provider
+                        Jackett · jackett · disabled
+                        Prowlarr · prowlarr · enabled
+
+                      ↑/↓ move   enter select   esc close
+
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+  ● Ready
+  / search   p Providers   s sort   f filter   enter add   q quit

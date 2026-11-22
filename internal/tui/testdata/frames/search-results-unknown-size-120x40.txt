@@ -2,11 +2,11 @@
     1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    Search results                                                              │ Selected result
-   2 results  ·  Search order                                                  │ Ubuntu ISO
-      Title                          Size      Seeds ID         Source         │ ?  ·  jackett
-   ›  Ubuntu ISO                     ?         12    101        jackett        │
-      Unknown size result            ?         0     —          fixture        │ Seeders   12
-                                                                               │ Leechers  3
+   Provider: Enabled search plugins                                            │ Ubuntu ISO
+   2 results  ·  Search order                                                  │ ?  ·  jackett
+      Title                          Size      Seeds ID         Source         │
+   ›  Ubuntu ISO                     ?         12    101        jackett        │ Seeders   12
+      Unknown size result            ?         0     —          fixture        │ Leechers  3
                                                                                │ Result ID 101
                                                                                │
                                                                                │
@@ -37,4 +37,4 @@
                                                                                │
                                                                                │
   ● Ready
-  / search   s sort   f filter   enter add   q quit
+  / search   p Providers   s sort   f filter   enter add   q quit

@@ -208,19 +208,31 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 }
 
 func newSearchCmd(opts *CLIOptions) *cobra.Command {
-	plugin := "jackett"
+	plugin := qbt.DefaultSearchPlugins
 	searchTimeout := 30 * time.Second
 	jsonOutput := false
+	listPlugins := false
 	sortValue := "original"
 	minSeeders := int64(0)
 	minSize, maxSize, filterValue := "", "", ""
 	limit := 0
 	var searchOptions searchCommandOptions
 	cmd := &cobra.Command{
-		Use:     "search <pattern>",
-		Short:   "Search torrents with a qBittorrent search plugin",
+		Use:     "search <pattern> | --list-plugins",
+		Short:   "Search torrents or list qBittorrent search plugins",
 		GroupID: "view",
 		Args: func(cmd *cobra.Command, args []string) error {
+			if listPlugins {
+				if len(args) != 0 {
+					return codedErr(exitBadArgs, "--list-plugins cannot be combined with a search pattern")
+				}
+				for _, name := range []string{"plugin", "timeout", "sort", "min-seeders", "min-size", "max-size", "filter", "limit"} {
+					if cmd.Flags().Changed(name) {
+						return codedErr(exitBadArgs, fmt.Sprintf("--list-plugins cannot be combined with --%s", name))
+					}
+				}
+				return nil
+			}
 			if len(args) == 0 {
 				return codedErr(exitBadArgs, "search pattern is required")
 			}
@@ -251,7 +263,18 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 			return nil
 		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			results, err := app.Search(strings.Join(args, " "), plugin, searchTimeout)
+			if listPlugins {
+				plugins, err := app.SearchPlugins()
+				if err != nil {
+					return err
+				}
+				return renderSearchPlugins(app.Stdout, plugins, jsonOutput)
+			}
+			resolvedPlugins, err := app.ResolveSearchPlugins(plugin)
+			if err != nil {
+				return err
+			}
+			results, err := app.Search(strings.Join(args, " "), resolvedPlugins, searchTimeout)
 			if err != nil {
 				return err
 			}
@@ -268,9 +291,10 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 			return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout))
 		}),
 	}
-	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin to use")
+	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin ID or full name; use | to combine, or enabled/all")
+	cmd.Flags().BoolVar(&listPlugins, "list-plugins", false, "List available search plugins (use --json for JSON)")
 	cmd.Flags().DurationVar(&searchTimeout, "timeout", searchTimeout, "Time to wait before returning available results, for example 30s or 2m")
-	cmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output search results as JSON")
+	cmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output search results or plugin listing as JSON")
 	cmd.Flags().StringVar(&sortValue, "sort", sortValue, "Sort results: original, seeders-desc, seeders-asc, size-desc, or size-asc")
 	cmd.Flags().Int64Var(&minSeeders, "min-seeders", minSeeders, "Only include results with at least this many seeders")
 	cmd.Flags().StringVar(&minSize, "min-size", minSize, "Only include results at least this size, for example 500MB or 2GiB")

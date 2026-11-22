@@ -2,6 +2,7 @@
     1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
   ────────────────────────────────────────────────────────────────────────────
    Search results
+   Provider: Enabled search plugins
    2 results  ·  Search order
       Title                         Size      Seeds ID         Source
    ›  Ubuntu ISO                    ?         12    101        jackett
@@ -19,6 +20,5 @@
 
 
 
-
   ● Ready
-  / search   s sort   f filter   enter add   q quit
+  / search   p Providers   s sort   f filter   enter add   q quit

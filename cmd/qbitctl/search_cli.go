@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/charmbracelet/x/ansi"
@@ -10,6 +12,33 @@ import (
 	"github.com/naterator/qbitctl/internal/searchresults"
 	qbt "github.com/naterator/qbitctl/pkg/client"
 )
+
+func renderSearchPlugins(w io.Writer, plugins []qbt.SearchPlugin, asJSON bool) error {
+	if asJSON {
+		if plugins == nil {
+			plugins = []qbt.SearchPlugin{}
+		}
+		return json.NewEncoder(w).Encode(plugins)
+	}
+
+	if _, err := fmt.Fprintln(w, "Name\tID\tEnabled"); err != nil {
+		return err
+	}
+	for _, plugin := range plugins {
+		name := plugin.FullName
+		if strings.TrimSpace(name) == "" {
+			name = plugin.Name
+		}
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%t\n",
+			sanitizeSearchText(name),
+			sanitizeSearchText(plugin.Name),
+			plugin.Enabled,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 type searchCommandOptions struct {
 	sort   searchresults.Sort

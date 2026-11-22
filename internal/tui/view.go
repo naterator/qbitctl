@@ -91,6 +91,8 @@ func (m *model) tableHeight() int {
 	// The panel title and table headings each take one row.
 	rows := height - viewHeaderLines - viewFooterLines - 2
 	if m.page == searchPage {
+		// The search page always reserves one line for the selected provider.
+		rows--
 		// Search results always have a filter and sort summary. While the
 		// result filter editor is open that summary grows by one line for the
 		// field tabs and the focused input.
@@ -335,13 +337,16 @@ func (m *model) viewSearch(width, height int) []string {
 
 func (m *model) viewSearchList(width, height int) []string {
 	width = max(1, width)
-	rows := []string{m.viewResultControls()}
+	rows := []string{
+		viewAccentStyle.Render(viewFit("Provider: "+m.searchPluginLabel(m.searchPlugin), width)),
+		m.viewResultControls(),
+	}
 	if m.resultEditor != nil {
 		rows = append(rows, m.viewResultFilterEditor(width)...)
 	}
 	rows = append(rows, m.viewSearchHeader(width))
 	if len(m.results) == 0 {
-		message := "Press / to search " + searchPluginLabel(m.searchPlugin) + "."
+		message := "Press / to search " + m.searchPluginLabel(m.searchPlugin) + "."
 		if m.busy != "" && m.work == searchWork {
 			message = "Waiting for results…"
 		} else if len(m.allResults) > 0 {
@@ -588,13 +593,13 @@ func (m *model) viewFooter(width int) []string {
 	var keys []string
 	switch m.page {
 	case searchPage:
-		keys = []string{"/", "search", "s", "sort", "f", "filter", "enter", "add", "q", "quit"}
+		keys = []string{"/", "search", "p", "Providers", "s", "sort", "f", "filter", "enter", "add", "q", "quit"}
 		if m.resultEditor != nil {
 			keys = []string{"tab", "field", "enter", "apply", "esc", "cancel", "↑/↓", "move"}
 		} else if m.busy != "" && m.work == searchWork {
-			keys = []string{"esc", "cancel search", "q", "quit"}
+			keys = []string{"p", "Providers", "esc", "cancel search", "q", "quit"}
 		} else if m.resultFilter.active() {
-			keys = []string{"/", "search", "s", "sort", "f", "filter", "esc", "clear", "enter", "add", "q", "quit"}
+			keys = []string{"p", "Providers", "/", "search", "s", "sort", "f", "filter", "esc", "clear", "enter", "add", "q", "quit"}
 		}
 	case serverPage:
 		keys = []string{"enter", "details", "r", "refresh", "q", "quit"}

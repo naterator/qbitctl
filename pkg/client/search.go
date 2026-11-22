@@ -179,7 +179,8 @@ func (a *App) searchResults(ctx context.Context, params url.Values, plugin strin
 			}
 		}
 		download := strings.TrimSpace(item.DownloadURL)
-		// Jackett uses its own home URL in diagnostic rows.
+		// A plugin may report its own home URL in diagnostic rows instead of a
+		// downloadable result URL.
 		if strings.TrimRight(download, "/") == strings.TrimRight(item.SiteURL, "/") || !isSearchDownloadURL(download) {
 			download = ""
 		}

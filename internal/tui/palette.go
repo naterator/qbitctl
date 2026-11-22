@@ -9,7 +9,7 @@ import (
 )
 
 func (m *model) openPaletteDialog() {
-	search := dialogItem{label: "New search", action: "search", description: "Find torrents with " + searchPluginLabel(m.searchPlugin)}
+	search := dialogItem{label: "New search", action: "search", description: "Find torrents with " + m.searchPluginLabel(m.searchPlugin)}
 	if m.page != queuePage {
 		search.keys = "/"
 	}
@@ -44,6 +44,7 @@ func (m *model) openPaletteDialog() {
 		)
 	case searchPage:
 		items = paletteGroup(items, "Current results",
+			dialogItem{label: "Choose search provider", action: "providers", description: "Set the provider for the next search", keys: "p"},
 			dialogItem{label: "Filter results", action: "filter-results", description: "Narrow loaded results by text, seeders, or size", keys: "f"},
 			dialogItem{label: "Sort results", action: "sort-results", description: "Sort the current results by seeders or size", keys: "s"},
 			dialogItem{label: "Add selected result", action: "add-result", description: "Submit a cached search result", keys: "enter"},

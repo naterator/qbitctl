@@ -2,12 +2,12 @@
     1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
   ────────────────────────────────────────────────────────────────────────────
    Search results
+   Provider: Enabled search plugins
    1 results  ·  Search order
    › Text    Min seeders    Min size    Max size
    Filter Text title, source, or ID
       Title                         Size      Seeds ID         Source
    ›  Ubuntu ISO                    4.0 MiB   12    101        jackett
-
 
 
 

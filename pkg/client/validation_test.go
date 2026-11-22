@@ -47,6 +47,9 @@ func TestValidateSetValue(t *testing.T) {
 			t.Errorf("ValidateSetValue(%q, %q) returned error: %v", field, value, err)
 		}
 	}
+	if err := ValidateSetValue("ratio-limit", "0"); err != nil {
+		t.Errorf("ValidateSetValue(%q, %q) returned error: %v", "ratio-limit", "0", err)
+	}
 
 	invalid := map[string]string{
 		"up-limit":       "12q",

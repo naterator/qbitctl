@@ -83,6 +83,20 @@ func TestVerifierAcceptsSyntheticBundle(t *testing.T) {
 	}
 }
 
+func TestVerifierAcceptsMaximumTimestampCount(t *testing.T) {
+	fixture := newTestFixture(t)
+	doc := decodeTestBundle(t, fixture.bundle(t, fixture.chain, fixture.tsa))
+	timestamps := doc.VerificationMaterial.TimestampVerificationData.Timestamps
+	for len(timestamps) < 32 {
+		timestamps = append(timestamps, timestamps[0])
+	}
+	doc.VerificationMaterial.TimestampVerificationData.Timestamps = timestamps
+
+	if _, err := (&Verifier{trusted: fixture.trusted}).Verify(context.Background(), encodeTestBundle(t, doc)); err != nil {
+		t.Fatalf("verify bundle with maximum timestamp count: %v", err)
+	}
+}
+
 func TestVerifierRejectsMalformedBundle(t *testing.T) {
 	fixture := newTestFixture(t)
 	verifier := &Verifier{trusted: fixture.trusted}

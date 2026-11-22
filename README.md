@@ -148,6 +148,19 @@ On macOS, you can also test the login Keychain directly.
 QBITCTL_TEST_KEYCHAIN=1 go test ./pkg/client -run '^TestMacMasterSecretKeychain$' -count=1
 ```
 
+Mutation testing is a manual quarterly check because it edits a disposable
+copy and can take substantially longer than the normal test suite. Run it
+from a committed checkout with:
+
+```bash
+bash scripts/run_mutation_testing.sh
+```
+
+The pinned Gremlins v0.6.0 run covers the client setters, validation, and
+release-attestation verifier. Its JSON report and log are written under
+`mutation-results/`; inspect every `LIVED` mutant before changing tests or
+production code.
+
 ### Cut a release
 
 Tag the exact commit that passed CI on `main` with a signed, annotated tag.

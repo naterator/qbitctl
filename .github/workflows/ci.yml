@@ -8,8 +8,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '17 6 * * *'
 
 permissions:
   contents: read
@@ -149,7 +147,7 @@ jobs:
         run: bash scripts/check_cross_targets.sh
       - name: Check and exercise the installer
         run: |
-          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh scripts/lint_actions.sh scripts/check_commit_hygiene.sh scripts/test_commit_hygiene.sh scripts/check_go_toolchain.sh scripts/hooks/commit-msg
+          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh scripts/lint_actions.sh scripts/check_commit_hygiene.sh scripts/test_commit_hygiene.sh scripts/check_go_toolchain.sh scripts/hooks/commit-msg scripts/report_qbittorrent_compatibility.sh scripts/test_qbittorrent_compatibility.sh
           sh scripts/test_install.sh
           bash scripts/test_commit_hygiene.sh
       - name: Save Go cache
@@ -199,6 +197,10 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
       - name: Validate composite action shell
         run: scripts/lint_actions.sh
+      - name: Test scheduled vulnerability reporting
+        run: bash scripts/test_govulncheck.sh
+      - name: Test qBittorrent compatibility reporting
+        run: bash scripts/test_qbittorrent_compatibility.sh
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -210,15 +212,18 @@ jobs:
   commit-hygiene:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Check commit messages
+      - name: Check commit messages and signatures
         env:
+          GH_TOKEN: ${{ github.token }}
           GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_BEFORE: ${{ github.event.before }}
-          REQUIRE_VERIFIED_COMMITS: ${{ vars.REQUIRE_VERIFIED_COMMITS || '0' }}
         run: bash scripts/check_commit_hygiene.sh
 
   ci-summary:

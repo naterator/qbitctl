@@ -12,6 +12,7 @@ from urllib import parse, request
 
 
 TAG_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def version_key(tag: str) -> tuple[int, int, int, int]:
@@ -67,7 +68,7 @@ def main() -> int:
                 print("newer=false")
             return 0
         key, tag, digest = max(candidates)
-        if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
             raise RuntimeError(f"Docker Hub did not return a digest for {tag}")
         image = f"{args.repository}:{tag}@{digest}"
         print(f"New qBittorrent release: {tag}")

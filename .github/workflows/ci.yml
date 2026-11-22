@@ -117,7 +117,7 @@ jobs:
         with:
           cache-name: windows-updater
       - name: Exercise Windows updater replacement and rollback
-        run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|Windows.*)|TestRemovePreviousExecutable' -count=1
+        run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|InstallsCompressedAsset|Windows.*)|TestRemovePreviousExecutable|TestExtractZipBinary|TestExtractReleaseBinaryReadsReleaseToolArchives' -count=1
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
         continue-on-error: true

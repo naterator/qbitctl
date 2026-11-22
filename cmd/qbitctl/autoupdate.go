@@ -118,7 +118,7 @@ func (u *githubReleaseUpdater) Run(ctx context.Context, currentVersion string, d
 		}
 	}
 
-	binaryAsset, checksumAsset, err := release.assetsForRuntime(u.goos, u.goarch)
+	binaryAsset, checksumAsset, err := release.downloadForRuntime(u.goos, u.goarch)
 	if err != nil {
 		return err
 	}
@@ -259,11 +259,18 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 		return fmt.Errorf("verify release asset attestation: %w", verificationErr)
 	}
 
+	// Decompress only after the downloaded archive passed both the checksum
+	// and the attestation, so no unverified bytes are ever unpacked.
+	installPath, err := extractReleaseBinary(tempPath, assetName, u.goos)
+	if err != nil {
+		return fmt.Errorf("extract release asset %q: %w", assetName, err)
+	}
+
 	mode := info.Mode().Perm()
 	if mode == 0 {
 		mode = 0o755
 	}
-	if err := os.Chmod(tempPath, mode); err != nil {
+	if err := os.Chmod(installPath, mode); err != nil {
 		return fmt.Errorf("mark downloaded binary executable: %w", err)
 	}
 	if cause := context.Cause(ctx); cause != nil {
@@ -282,13 +289,13 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 		if err := renameFile(exePath, oldPath); err != nil {
 			return fmt.Errorf("rename current executable out of the way: %w", err)
 		}
-		if err := renameFile(tempPath, exePath); err != nil {
+		if err := renameFile(installPath, exePath); err != nil {
 			if rollbackErr := renameFile(oldPath, exePath); rollbackErr != nil {
 				return fmt.Errorf("replace current executable %q: %w (rollback failed: %w)", exePath, err, rollbackErr)
 			}
 			return fmt.Errorf("replace current executable %q: %w (previous executable restored)", exePath, err)
 		}
-	} else if err := renameFile(tempPath, exePath); err != nil {
+	} else if err := renameFile(installPath, exePath); err != nil {
 		return fmt.Errorf("replace current executable %q: %w", exePath, err)
 	}
 	_ = os.RemoveAll(tempDir)

@@ -42,7 +42,9 @@ curl -fsSL https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/inst
 ```
 
 The [installer](scripts/install.sh) downloads the latest release for your
-platform, verifies its published SHA-256 checksum, and installs `qbitctl`:
+platform in the smallest format it can unpack (`.xz` if `xz` is installed,
+then `.gz`, then the plain binary). It verifies the SHA-256 checksum of the
+downloaded file before unpacking it, then installs `qbitctl`:
 
 - **Regular user:** `~/.local/bin/qbitctl`. If that directory isn't on your
   `PATH`, the installer adds it in your shell's startup file (`~/.zshrc`,
@@ -66,6 +68,7 @@ install updates without `sudo`.
 | `QBITCTL_VERSION` | Install a specific release, such as `1.3.1`, instead of the latest |
 | `QBITCTL_INSTALL_DIR` | Install into this directory instead of the default |
 | `QBITCTL_NO_MODIFY_PATH=1` | Leave shell startup files unchanged |
+| `QBITCTL_DOWNLOAD_FORMAT` | Download `xz`, `gz`, or `raw` instead of choosing automatically |
 
 Set variables on `bash`, not `curl`:
 
@@ -83,6 +86,19 @@ on the architectures that `uname -m` reports as `x86_64`/`amd64`,
 NetBSD on ARM (which reports `evbarm`), download the matching asset and its
 `.sha256` file from the [releases page](https://github.com/naterator/qbitctl/releases/latest).
 
+Each release publishes these assets, each with its own `.sha256` file.
+Compressed assets are published starting with the release after 1.3.1.
+
+| Asset | Platforms | Unpack with |
+|---|---|---|
+| `qbitctl-<os>-<arch>.xz` | Linux, FreeBSD, NetBSD, DragonFly, illumos, Solaris | `xz -d` |
+| `qbitctl-<os>-<arch>.gz` | Every platform except Windows | `gzip -d` |
+| `qbitctl-windows-<arch>.zip` | Windows (contains `qbitctl.exe`) | File Explorer or `Expand-Archive` |
+| `qbitctl-<os>-<arch>` (`.exe` on Windows) | Every platform | Uncompressed |
+
+Compression shrinks a download from about 15 MB to about 5.5 MB (`.gz` and
+`.zip`) or 4.3 MB (`.xz`).
+
 ARMv7 (`armv7l`) is the minimum for the prebuilt 32-bit Linux asset. ARMv6
 devices such as the original Pi Zero and Pi 1 need a build for their CPU.
 GitHub CLI users can also verify the installed binary against its release with
@@ -95,7 +111,7 @@ Once installed, keep it up to date with:
 qbitctl update
 ```
 
-qbitctl checks the SHA-256 checksum and verifies GitHub's signed release attestation before replacing the executable. Self-update works without a separate CLI or sign-in. The release must be immutable and published with all assets already attached. On Windows, the replaced executable is kept as `qbitctl.exe.old` until the next launch removes it.
+qbitctl downloads the compressed asset (`.gz`, or `.zip` on Windows) when the release has one, and the plain binary otherwise. It checks the SHA-256 checksum and verifies GitHub's signed release attestation of the downloaded file before unpacking it and replacing the executable. Self-update works without a separate CLI or sign-in. The release must be immutable and published with all assets already attached. On Windows, the replaced executable is kept as `qbitctl.exe.old` until the next launch removes it.
 
 ## Build from source
 
@@ -128,7 +144,7 @@ Build the release targets declared in [scripts/build.sh](scripts/build.sh):
 VERSION=v1.2.3 bash scripts/build.sh
 ```
 
-Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The release target list is checked against the installed Go toolchain before building.
+Binaries, their compressed copies, and a SHA-256 file for each are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The script writes a reproducible `.gz` for every non-Windows target, a `.xz` where `xz` ships by default, and a `.zip` for Windows, and checks that each one unpacks to the exact binary. It needs `gzip`, `xz`, `zip`, and `unzip`. The release target list is checked against the installed Go toolchain before building.
 
 CI and release packaging run on `ubuntu-26.04`, with a focused `windows-2025` job for self-update recovery. CI runs on pushes to `main`, pull requests, and manual dispatch. It runs formatting, vet, race tests, CLI and terminal smoke tests, a qBittorrent API compatibility matrix, a vulnerability scan, the installer tests, and a type-check of every release operating system (`scripts/check_cross_targets.sh`). Only the release workflow builds the release binaries.
 

@@ -12,6 +12,7 @@
 #   QBITCTL_VERSION         Release tag to install, such as 1.3.1 (default: latest)
 #   QBITCTL_INSTALL_DIR     Directory for the binary (overrides the default)
 #   QBITCTL_NO_MODIFY_PATH  Set to 1 to leave shell startup files unchanged
+#   QBITCTL_DOWNLOAD_FORMAT Force xz, gz, or raw (default: smallest available)
 #   QBITCTL_RELEASES_URL    Release base URL, for mirrors and tests
 #
 # Everything runs inside main, called on the last line, so a truncated
@@ -76,6 +77,39 @@ choose_install_dir() {
     [[ -n "${HOME:-}" ]] || die "HOME is not set; set QBITCTL_INSTALL_DIR"
     printf '%s/.local/bin\n' "$HOME"
   fi
+}
+
+# Print the download formats to try, smallest first. Releases publish .xz only
+# for systems whose base install ships xz, .gz for every non-Windows system,
+# and the raw binary always.
+download_formats() {
+  local os=$1
+  case "${QBITCTL_DOWNLOAD_FORMAT:-}" in
+    "") ;;
+    xz|gz|raw)
+      local tool=${QBITCTL_DOWNLOAD_FORMAT/gz/gzip}
+      if [[ "$tool" != raw ]] && ! command -v "$tool" >/dev/null 2>&1; then
+        die "QBITCTL_DOWNLOAD_FORMAT=$QBITCTL_DOWNLOAD_FORMAT needs $tool, which is not installed"
+      fi
+      printf '%s\n' "$QBITCTL_DOWNLOAD_FORMAT"
+      return
+      ;;
+    *) die "QBITCTL_DOWNLOAD_FORMAT must be xz, gz, or raw, got: $QBITCTL_DOWNLOAD_FORMAT" ;;
+  esac
+  case "$os" in
+    linux|freebsd|netbsd|dragonfly)
+      if command -v xz >/dev/null 2>&1; then printf 'xz\n'; fi
+      ;;
+  esac
+  if command -v gzip >/dev/null 2>&1; then printf 'gz\n'; fi
+  printf 'raw\n'
+}
+
+# Quiet on purpose: a missing compressed asset is expected for older
+# releases, and the caller reports what happened.
+fetch() {
+  curl --fail --location --retry 3 --retry-delay 1 --silent \
+    --output "$2" "$1"
 }
 
 verify_checksum() {
@@ -186,11 +220,10 @@ warn_if_shadowed() {
 main() {
   command -v curl >/dev/null 2>&1 || die "curl is required"
 
-  local os arch asset checksum_asset base dir
+  local os arch asset base dir
   os=$(detect_os)
   arch=$(detect_arch)
   asset="qbitctl-$os-$arch"
-  checksum_asset="$asset.sha256"
   base=$(release_download_url)
   dir=$(choose_install_dir)
 
@@ -199,14 +232,37 @@ main() {
   # shellcheck disable=SC2064 # Expand now: tmp_dir is local to main.
   trap "rm -rf '$tmp_dir'" EXIT
 
-  say "downloading $asset"
-  curl --fail --location --retry 3 --retry-delay 1 --silent --show-error \
-    --output "$tmp_dir/$asset" "$base/$asset" || die "could not download $base/$asset"
-  curl --fail --location --retry 3 --retry-delay 1 --silent --show-error \
-    --output "$tmp_dir/$checksum_asset" "$base/$checksum_asset" || die "could not download $base/$checksum_asset"
-  verify_checksum "$tmp_dir" "$asset" "$checksum_asset"
+  # Try the smallest format this machine can unpack first. A release from
+  # before compressed assets falls through to the raw binary.
+  local formats format download="" last_error=""
+  # A separate assignment lets set -e stop on an invalid forced format.
+  formats=$(download_formats "$os")
+  for format in $formats; do
+    download=$asset
+    [[ "$format" == raw ]] || download="$asset.$format"
+    say "downloading $download"
+    if fetch "$base/$download" "$tmp_dir/$download" &&
+      fetch "$base/$download.sha256" "$tmp_dir/$download.sha256"; then
+      break
+    fi
+    last_error="could not download $base/$download"
+    [[ "$format" == raw ]] || say "$download is not available; trying the next format"
+    rm -f "$tmp_dir/$download" "$tmp_dir/$download.sha256"
+    download=""
+  done
+  [[ -n "$download" ]] || die "$last_error"
+  verify_checksum "$tmp_dir" "$download" "$download.sha256"
 
-  install_binary "$tmp_dir/$asset" "$dir"
+  # Unpack only after the checksum of the downloaded file has been verified.
+  local binary="$tmp_dir/qbitctl.unpacked"
+  case "$format" in
+    xz) xz -dc "$tmp_dir/$download" > "$binary" || die "could not decompress $download" ;;
+    gz) gzip -dc "$tmp_dir/$download" > "$binary" || die "could not decompress $download" ;;
+    raw) binary="$tmp_dir/$download" ;;
+  esac
+  [[ -s "$binary" ]] || die "$download unpacked to an empty file"
+
+  install_binary "$binary" "$dir"
   say "installed $asset to $dir/qbitctl"
   ensure_on_path "$dir"
   warn_if_shadowed "$dir/qbitctl"

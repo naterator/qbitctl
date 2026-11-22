@@ -51,17 +51,30 @@ sha256() {
 	fi
 }
 
-# Publish one asset under a release download directory.
+checksum_for() {
+	printf '%s  %s\n' "$(sha256 "$1/$2")" "$2" > "$1/$2.sha256"
+}
+
+# Publish the raw asset, plus the compressed copies a release provides when
+# "compressed" is given: .gz always, and .xz on Linux when xz is available.
 publish() {
 	release_dir=$1
 	content=$2
 	mkdir -p "$release_dir"
 	printf '%s\n' "$content" > "$release_dir/$asset"
-	printf '%s  %s\n' "$(sha256 "$release_dir/$asset")" "$asset" > "$release_dir/$asset.sha256"
+	checksum_for "$release_dir" "$asset"
+	[ "${3:-}" = compressed ] || return 0
+	gzip -9 -n -c "$release_dir/$asset" > "$release_dir/$asset.gz"
+	checksum_for "$release_dir" "$asset.gz"
+	if [ "$os" = linux ] && command -v xz >/dev/null 2>&1; then
+		xz -c "$release_dir/$asset" > "$release_dir/$asset.xz"
+		checksum_for "$release_dir" "$asset.xz"
+	fi
 }
 
 server="$tmp_dir/server"
-publish "$server/latest/download" "latest fixture"
+publish "$server/latest/download" "latest fixture" compressed
+# Releases before compressed assets publish only the raw binary.
 publish "$server/download/1.2.3" "pinned fixture"
 
 port=$(python3 -c '
@@ -145,6 +158,10 @@ custom="$tmp_dir/custom bin"
 run_installer "$home" SHELL=/bin/zsh QBITCTL_VERSION=1.2.3 QBITCTL_INSTALL_DIR="$custom" QBITCTL_NO_MODIFY_PATH=1 \
 	> "$tmp_dir/out" 2>&1 || { cat "$tmp_dir/out"; fail "pinned install failed"; }
 assert_installed "$custom/qbitctl" "pinned fixture"
+# The last download attempt must be the raw binary: the 1.2.3 fixture has no
+# compressed assets, so any compressed attempt has to fall through.
+grep -F "downloading" "$tmp_dir/out" | tail -1 | grep -qxF "qbitctl-install: downloading $asset" ||
+	fail "an older release without compressed assets did not fall back to the raw binary"
 if run_installer "$home" QBITCTL_VERSION='../../etc' > "$tmp_dir/out" 2>&1; then
 	fail "installer accepted a malformed QBITCTL_VERSION"
 fi
@@ -154,24 +171,62 @@ home="$tmp_dir/home-zsh"
 target="$home/.local/bin/qbitctl"
 cp "$target" "$tmp_dir/verified"
 latest="$server/latest/download"
-good_sum=$(cat "$latest/$asset.sha256")
+gz="$asset.gz"
+good_sum=$(cat "$latest/$gz.sha256")
 
-printf '%064d  %s\n' 0 "$asset" > "$latest/$asset.sha256"
-if run_installer "$home" SHELL=/bin/zsh > "$tmp_dir/out" 2>&1; then
+printf '%064d  %s\n' 0 "$gz" > "$latest/$gz.sha256"
+if run_installer "$home" SHELL=/bin/zsh QBITCTL_DOWNLOAD_FORMAT=gz > "$tmp_dir/out" 2>&1; then
 	fail "installer accepted a checksum mismatch"
 fi
 cmp -s "$tmp_dir/verified" "$target" || fail "a checksum mismatch replaced the installed binary"
 
-printf '%s\n%064d  extra\n' "$good_sum" 0 > "$latest/$asset.sha256"
-if run_installer "$home" SHELL=/bin/zsh > "$tmp_dir/out" 2>&1; then
+printf '%s\n%064d  extra\n' "$good_sum" 0 > "$latest/$gz.sha256"
+if run_installer "$home" SHELL=/bin/zsh QBITCTL_DOWNLOAD_FORMAT=gz > "$tmp_dir/out" 2>&1; then
 	fail "installer accepted extra checksum records"
 fi
 cmp -s "$tmp_dir/verified" "$target" || fail "extra checksum records replaced the installed binary"
 
-rm "$latest/$asset.sha256"
-if run_installer "$home" SHELL=/bin/zsh > "$tmp_dir/out" 2>&1; then
+mv "$latest/$gz.sha256" "$tmp_dir/gz.sha256"
+if run_installer "$home" SHELL=/bin/zsh QBITCTL_DOWNLOAD_FORMAT=gz > "$tmp_dir/out" 2>&1; then
 	fail "installer succeeded without a checksum file"
 fi
 cmp -s "$tmp_dir/verified" "$target" || fail "a missing checksum replaced the installed binary"
+mv "$tmp_dir/gz.sha256" "$latest/$gz.sha256"
+
+# A corrupt archive whose checksum matches is rejected when it fails to unpack.
+cp "$latest/$gz" "$tmp_dir/good.gz"
+printf 'not gzip data\n' > "$latest/$gz"
+checksum_for "$latest" "$gz"
+if run_installer "$home" SHELL=/bin/zsh QBITCTL_DOWNLOAD_FORMAT=gz > "$tmp_dir/out" 2>&1; then
+	fail "installer accepted an archive that does not decompress"
+fi
+grep -qF "could not decompress" "$tmp_dir/out" || fail "installer did not report the decompression failure"
+cmp -s "$tmp_dir/verified" "$target" || fail "a corrupt archive replaced the installed binary"
+cp "$tmp_dir/good.gz" "$latest/$gz"
+checksum_for "$latest" "$gz"
+
+# 8. Format selection: the smallest available format by default, or a forced one.
+home="$tmp_dir/home-formats"
+run_installer "$home" SHELL=/bin/zsh QBITCTL_NO_MODIFY_PATH=1 > "$tmp_dir/out" 2>&1 || fail "default-format install failed"
+assert_installed "$home/.local/bin/qbitctl" "latest fixture"
+expected=$gz
+if [ "$os" = linux ] && [ -e "$latest/$asset.xz" ] && env -i PATH="/usr/bin:/bin:/usr/sbin:/sbin" sh -c 'command -v xz' >/dev/null; then
+	expected="$asset.xz"
+fi
+grep -qxF "qbitctl-install: downloading $expected" "$tmp_dir/out" || fail "default install did not download $expected"
+for format in raw gz; do
+	run_installer "$home" SHELL=/bin/zsh QBITCTL_NO_MODIFY_PATH=1 QBITCTL_DOWNLOAD_FORMAT=$format \
+		> "$tmp_dir/out" 2>&1 || fail "QBITCTL_DOWNLOAD_FORMAT=$format install failed"
+	assert_installed "$home/.local/bin/qbitctl" "latest fixture"
+done
+if [ -e "$latest/$asset.xz" ]; then
+	run_installer "$home" SHELL=/bin/zsh QBITCTL_NO_MODIFY_PATH=1 QBITCTL_DOWNLOAD_FORMAT=xz \
+		> "$tmp_dir/out" 2>&1 || fail "QBITCTL_DOWNLOAD_FORMAT=xz install failed"
+	assert_installed "$home/.local/bin/qbitctl" "latest fixture"
+fi
+if run_installer "$home" QBITCTL_DOWNLOAD_FORMAT=bz2 > "$tmp_dir/out" 2>&1; then
+	fail "installer accepted an unknown QBITCTL_DOWNLOAD_FORMAT"
+fi
+grep -qF "must be xz, gz, or raw" "$tmp_dir/out" || fail "installer did not explain the invalid format"
 
 echo "installer tests passed"

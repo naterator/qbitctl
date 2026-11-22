@@ -21,10 +21,59 @@ release_targets=(
   windows/arm64
 )
 
+# Operating systems whose base install ships xz. They get a .xz asset in
+# addition to .gz; every non-Windows target gets .gz, and Windows gets .zip.
+xz_operating_systems=" linux freebsd netbsd dragonfly illumos solaris "
+
 if [[ "${1:-}" == "--list-targets" ]]; then
   printf '%s\n' "${release_targets[@]}"
   exit 0
 fi
+
+for tool in gzip xz zip unzip; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    printf 'release builds need %s to write compressed assets\n' "$tool" >&2
+    exit 1
+  fi
+done
+
+write_checksum() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1"
+  else
+    shasum -a 256 "$1"
+  fi > "$1.sha256"
+}
+
+# Write compressed copies of one built binary, each with its own checksum,
+# and confirm every archive unpacks to the exact binary that was built.
+# gzip -n, xz -T1, and a fixed zip timestamp keep the archives reproducible.
+compress_asset() {
+  local goos=$1 goarch=$2 asset=$3
+  if [[ "$goos" == windows ]]; then
+    local archive="qbitctl-$goos-$goarch.zip" stage
+    stage=$(mktemp -d)
+    cp "$asset" "$stage/qbitctl.exe"
+    TZ=UTC touch -t 198001010000 "$stage/qbitctl.exe"
+    rm -f "$archive"
+    (cd "$stage" && TZ=UTC zip -q -X -9 "$OLDPWD/$archive" qbitctl.exe)
+    rm -rf "$stage"
+    unzip -p "$archive" qbitctl.exe | cmp -s - "$asset" ||
+      { printf 'zip round trip failed for %s\n' "$archive" >&2; exit 1; }
+    write_checksum "$archive"
+    return
+  fi
+  gzip -9 -n -c "$asset" > "$asset.gz"
+  gzip -dc "$asset.gz" | cmp -s - "$asset" ||
+    { printf 'gzip round trip failed for %s\n' "$asset.gz" >&2; exit 1; }
+  write_checksum "$asset.gz"
+  if [[ "$xz_operating_systems" == *" $goos "* ]]; then
+    xz -9 -T1 -c "$asset" > "$asset.xz"
+    xz -dc "$asset.xz" | cmp -s - "$asset" ||
+      { printf 'xz round trip failed for %s\n' "$asset.xz" >&2; exit 1; }
+    write_checksum "$asset.xz"
+  fi
+}
 
 output_dir="${1:-dist}"
 version="${VERSION:-dev}"
@@ -56,10 +105,7 @@ while IFS=/ read -r goos goarch; do
     -o "$output_dir/$asset" ./cmd/qbitctl
   (
     cd "$output_dir"
-    if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum "$asset"
-    else
-      shasum -a 256 "$asset"
-    fi > "$asset.sha256"
+    write_checksum "$asset"
+    compress_asset "$goos" "$goarch" "$asset"
   )
 done <<< "$targets"

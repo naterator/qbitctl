@@ -153,6 +153,7 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 			}
 			return app.AddTorrentWithOptions(args[0], addOptions)
 		}),
+		ValidArgsFunction: completeAddArgs,
 	}
 	cmd.Flags().Int64Var(&searchID, "search-id", 0, "Add this ID from the local search history")
 	cmd.Flags().StringVar(&addOptions.Category, "category", "", "Assign the torrent to this category")
@@ -287,6 +288,7 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 			}
 			return validateOutputArgs(cmd, tmpl, fieldsValue, noHeader)
 		},
+		ValidArgsFunction: completeSingleTorrentHashArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[0])
 			if err != nil {
@@ -327,9 +329,9 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 		Short:   "Read one torrent property",
 		Long: "Read one torrent property.\n\nAvailable fields:\n" +
 			wrapFields(getFieldNames, "  ", 72),
-		GroupID:   "view",
-		Args:      validateOutputModeFlags,
-		ValidArgs: getFieldNames,
+		GroupID:           "view",
+		Args:              validateOutputModeFlags,
+		ValidArgsFunction: completeGetArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[1])
 			if err != nil {
@@ -363,9 +365,9 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 			"  seedtime-limit              90m, 2h, 3d, 7d12h, or seconds\n" +
 			"                              -1 unlimited, -2 global limit\n" +
 			"  seqdl / autotmm / superseed true or false",
-		GroupID:   "change",
-		Args:      validateSetArgs,
-		ValidArgs: setFieldNames,
+		GroupID:           "change",
+		Args:              validateSetArgs,
+		ValidArgsFunction: completeSetArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[2])
 			if err != nil {
@@ -379,11 +381,12 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 
 func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*App, string) error) *cobra.Command {
 	return &cobra.Command{
-		Use:     use,
-		Aliases: aliases,
-		Short:   short,
-		GroupID: "control",
-		Args:    cobra.MinimumNArgs(1),
+		Use:               use,
+		Aliases:           aliases,
+		Short:             short,
+		GroupID:           "control",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeTorrentHashArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hashes, err := app.ResolveHashes(args)
 			if err != nil {
@@ -396,11 +399,12 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 
 func newMoveCmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:     "move <path> <hash>",
-		Aliases: []string{"m", "mo"},
-		Short:   "Move torrent data on the server",
-		GroupID: "change",
-		Args:    cobra.ExactArgs(2),
+		Use:               "move <path> <hash>",
+		Aliases:           []string{"m", "mo"},
+		Short:             "Move torrent data on the server",
+		GroupID:           "change",
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: completeMoveArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[1])
 			if err != nil {
@@ -421,11 +425,12 @@ func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
 		aliases = []string{"d", "de"}
 	}
 	return &cobra.Command{
-		Use:     use,
-		Aliases: aliases,
-		Short:   short,
-		GroupID: "change",
-		Args:    cobra.MinimumNArgs(1),
+		Use:               use,
+		Aliases:           aliases,
+		Short:             short,
+		GroupID:           "change",
+		Args:              cobra.MinimumNArgs(1),
+		ValidArgsFunction: completeTorrentHashArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hashes, err := app.ResolveHashes(args)
 			if err != nil {

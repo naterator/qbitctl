@@ -439,6 +439,25 @@ qbitctl completion bash        # generate shell completions (alias: com)
 qbitctl help                   # help (aliases: h, he)
 ```
 
+### Shell completion
+
+Install the generated completion script for your shell:
+
+```bash
+# bash
+qbitctl completion bash > ~/.local/share/bash-completion/completions/qbitctl
+
+# zsh
+qbitctl completion zsh > "${fpath[1]}/_qbitctl"
+
+# fish
+qbitctl completion fish > ~/.config/fish/completions/qbitctl.fish
+```
+
+Hash completion uses the saved qBittorrent configuration to query the server
+and gives up after three seconds. Other command and field completions are
+available without a server connection.
+
 The help view groups commands and flags by section. In a color-capable terminal,
 section headings, command names, and descriptions use separate colors. Set
 `NO_COLOR=1` for the same help content without styling.

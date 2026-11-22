@@ -171,7 +171,14 @@ def run_cli(
         *args,
     ]
     env = dict(os.environ)
-    env.update({"XDG_CONFIG_HOME": str(config_home), "NO_COLOR": "1"})
+    env.update(
+        {
+            "XDG_CONFIG_HOME": str(config_home),
+            "NO_COLOR": "1",
+            # Keep the compatibility container independent of host keyrings.
+            "QBITCTL_MASTER_KEY": "qbitctl-compat-master",
+        }
+    )
     try:
         result = subprocess.run(
             command,
@@ -190,6 +197,21 @@ def run_cli(
             f"qbitctl {' '.join(args)} failed with exit {result.returncode}: {output}"
         )
     return result
+
+
+def complete_show(
+    binary: Path, url: str, password: str, workdir: Path, config_home: Path
+) -> list[str]:
+    """Run Cobra's completion protocol and return the suggested hashes."""
+
+    result = run_cli(binary, url, password, workdir, config_home, "__complete", "show", "")
+    lines = result.stdout.splitlines()
+    if not lines or lines[-1] != ":4":
+        raise RuntimeError(
+            "qbitctl hash completion returned an unexpected directive: "
+            + redact(result.stdout, password)
+        )
+    return lines[:-1]
 
 
 def list_torrents(
@@ -362,6 +384,9 @@ def run(args: argparse.Namespace) -> None:
             url = f"http://127.0.0.1:{web_port}"
             print(f"qBittorrent {args.version}: authenticating")
             wait_for_ready(binary, url, password, root, config_home)
+            # Completion reads the saved setup because Cobra's hidden
+            # __complete command skips the normal pre-run password handling.
+            run_cli(binary, url, password, root, config_home, "config", "write")
 
             fixture = root / "qbitctl-compat.torrent"
             invalid_fixture = root / "qbitctl-invalid.torrent"
@@ -389,6 +414,14 @@ def run(args: argparse.Namespace) -> None:
             torrent_hash = str(torrent["hash"])
             if torrent.get("category") != category or str(torrent.get("save_path")).rstrip("/") != destination:
                 raise RuntimeError("qBittorrent did not apply the add category and save path")
+
+            completions = complete_show(binary, url, password, root, config_home)
+            expected_completion = f"{torrent_hash}\tqbitctl-compat-fixture.bin"
+            if expected_completion not in completions:
+                raise RuntimeError(
+                    "qbitctl hash completion did not return the added torrent: "
+                    + redact("; ".join(completions), password)
+                )
 
             unknown_hash = secrets.token_hex(20)
             rejected_hash = run_cli(

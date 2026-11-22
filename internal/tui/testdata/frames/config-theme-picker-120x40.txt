@@ -3,21 +3,21 @@
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    Configuration
    Connection
-    Server address         │ Not configured
-    Username               │ Not configured
-    Password               │ Not configured
+   ›  Server address         │ Not configured
+      Username               │ Not configured
+      Password               │ Not configured
 
-   Startup            Color scheme
-    TUI by default
-    Color scheme      › Default · qbitctl's original palette
-                        Ocean · Deep blue with bright cyan accents
-   Config file          Forest · Calm green terminal garden
-                        Amber · Warm gold on dark brown
-                        Rose · Soft rose and plum
+   View               Color scheme
+      TUI by default
+      Color scheme    › Default · qbitctl's original palette
+      Data units        Ocean · Deep blue with bright cyan accents
+                        Forest · Calm green terminal garden
+   Search               Amber · Warm gold on dark brown
+      Default provid    Rose · Soft rose and plum
                         Violet · Purple surfaces with cool highlights
-                        Monochrome · Quiet grayscale with clear hierarchy
-                        Nord · Arctic blue-gray
-                        Dracula · High-contrast purple night
+   Files                Monochrome · Quiet grayscale with clear hierarchy
+      Config file  │    Nord · Arctic blue-gray
+      Search cache │    Dracula · High-contrast purple night
                         Solarized · Classic teal and gold
                         Gruvbox · Earthy retro terminal colors
                         Catppuccin · Pastel accents on mocha
@@ -37,4 +37,4 @@
 
 
   ● Ready
-  enter edit   d toggle default   c colors   q quit
+  ↑/↓ · j/k move   enter change   q quit

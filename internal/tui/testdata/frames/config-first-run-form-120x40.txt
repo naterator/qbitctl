@@ -3,21 +3,21 @@
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
    Configuration
    Connection
-    Server address         │ Not configured
-    Username               │ Not configured
-    Password               │ Not configured
+   ›  Server address         │ Not configured
+      Username               │ Not configured
+      Password               │ Not configured
 
-   Startup
-    TUI by default         │ Disabled
-    Color scheme           │ Default
+   View
+      TUI by default         │ Disabled
+      Color scheme           │ Default
+      Data units             │ Human-readable
 
-   Config file
-                      Configure qBittorrent
-
+   Search             Configure qBittorrent
+      Default provid
                       › Server: http://localhost:8080
-                        qBittorrent Web API address
-                        Username: admin
-                        Web API username
+   Files                qBittorrent Web API address
+      Config file  │    Username: admin
+      Search cache │    Web API username
                         Password: Password required for first connection
                         Typed characters are hidden; a password is required
                         TUI default: no
@@ -37,4 +37,4 @@
 
 
   ● Ready
-  enter edit   d toggle default   c colors   q quit
+  ↑/↓ · j/k move   enter change   q quit

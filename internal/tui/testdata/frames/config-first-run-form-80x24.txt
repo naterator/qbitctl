@@ -17,8 +17,8 @@
 
     tab next   enter submit   esc cancel
 
-
+      Search cache │ /t/cache/qbitctl/search-results.json
 
 
   ● Ready
-  enter edit   d toggle default   c colors   q quit
+  ↑/↓ · j/k move   enter change   q quit

@@ -100,9 +100,8 @@ var helpGroups = []helpGroup{
 	{
 		title: "Config",
 		items: []helpShortcut{
-			{key: "enter", label: "Edit connection"},
-			{key: "d", label: "Toggle TUI default"},
-			{key: "c", label: "Choose color scheme"},
+			{key: "↑/↓ · j/k", label: "Move between settings"},
+			{key: "enter", label: "Change the selected setting"},
 		},
 	},
 	{

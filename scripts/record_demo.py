@@ -464,19 +464,48 @@ def main():
             recording.hold(0.8)
             recording.key(b"escape")
 
-            # Show the masked credential metadata and startup preference, then
-            # let the saved-preference confirmation expire in the footer.
+            # Walk through the grouped settings with arrows and j/k.
             recording.key(b"4", "Configuration")
             recording.hold(1.4)
-            recording.key(b"d", "TUI startup preference saved")
+            recording.key("down")
+            recording.key(b"j")
+            recording.key("down")
+            recording.key(b"enter", "TUI startup preference saved")
             recording.hold(1.0)
-            recording.hold(4.3)
 
-            # Open Config and preview a color scheme without saving it.
-            recording.key(b"c", "Color scheme")
-            recording.key(b"down")
+            # Preview a color scheme without saving it.
+            recording.key("down")
+            recording.key(b"enter", "Color scheme")
+            recording.key("down")
             recording.hold(1.2)
             recording.key(b"escape")
+
+            # Show the saved bytes mode on the queue, then restore human units.
+            recording.key(b"j")
+            recording.key(b"enter", "Bytes")
+            saved_config = json.loads((base / "config.json").read_text())
+            if saved_config.get("data_units") != "bytes":
+                raise RuntimeError("the TUI did not save the bytes display mode")
+            units_start = len(recording.output)
+            recording.key(b"1")
+            recording.wait("4294967296 B", units_start)
+            recording.hold(1.2)
+            recording.key(b"4", "Configuration")
+            recording.key(b"enter", "Human-readable")
+            recording.hold(0.8)
+
+            # The Search section opens the same default-provider picker.
+            recording.key("down")
+            recording.key(b"enter", "Choose search provider")
+            recording.hold(0.8)
+            recording.key(b"escape")
+            recording.key(b"\x10", "Command palette")
+            palette_start = len(recording.output)
+            recording.type_text("search cache")
+            recording.wait("Show search cache path", palette_start)
+            recording.hold(0.8)
+            recording.key(b"enter", "search-results.json")
+            recording.hold(0.8)
             recording.key(b"1")
 
             # Let the open transfer details show progress from the next poll.

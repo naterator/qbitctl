@@ -145,32 +145,71 @@ func (a *App) ShowServerInfoJSON() error {
 	return nil
 }
 
-func (a *App) serverInfoRows() ([]labeledRow, error) {
+func (a *App) fetchServerInfo() (string, string, TransferInfo, error) {
 	appVersion, err := a.fetchAppVersion()
 	if err != nil {
-		return nil, err
+		return "", "", TransferInfo{}, err
 	}
 	apiVersion, err := a.fetchAPIVersion()
 	if err != nil {
-		return nil, err
+		return "", "", TransferInfo{}, err
 	}
 	transfer, err := a.fetchTransferInfo()
 	if err != nil {
-		return nil, err
+		return "", "", TransferInfo{}, err
 	}
+	return appVersion, apiVersion, transfer, nil
+}
+
+func serverInfoRowsForValues(
+	appVersion, apiVersion string,
+	transfer TransferInfo,
+	size func(int64) string,
+	rate func(int64) string,
+	limit func(int64) string,
+) []labeledRow {
 
 	return []labeledRow{
 		{label: "qBittorrent", value: appVersion},
 		{label: "WebAPI", value: apiVersion},
 		{label: "Connection", value: transfer.ConnectionStatus},
 		{label: "DHT Nodes", value: strconv.FormatInt(transfer.DHTNodes, 10)},
-		{label: "Speed: Download", value: strconv.FormatInt(transfer.DLInfoSpeed, 10)},
-		{label: "Speed: Upload", value: strconv.FormatInt(transfer.UPInfoSpeed, 10)},
-		{label: "Transferred: Down", value: strconv.FormatInt(transfer.DLInfoData, 10)},
-		{label: "Transferred: Up", value: strconv.FormatInt(transfer.UPInfoData, 10)},
-		{label: "Limit: Download", value: strconv.FormatInt(transfer.DLRateLimit, 10)},
-		{label: "Limit: Upload", value: strconv.FormatInt(transfer.UPRateLimit, 10)},
-	}, nil
+		{label: "Speed: Download", value: rate(transfer.DLInfoSpeed)},
+		{label: "Speed: Upload", value: rate(transfer.UPInfoSpeed)},
+		{label: "Transferred: Down", value: size(transfer.DLInfoData)},
+		{label: "Transferred: Up", value: size(transfer.UPInfoData)},
+		{label: "Limit: Download", value: limit(transfer.DLRateLimit)},
+		{label: "Limit: Upload", value: limit(transfer.UPRateLimit)},
+	}
+}
+
+func (a *App) serverInfoRows() ([]labeledRow, error) {
+	appVersion, apiVersion, transfer, err := a.fetchServerInfo()
+	if err != nil {
+		return nil, err
+	}
+	return serverInfoRowsForValues(
+		appVersion,
+		apiVersion,
+		transfer,
+		a.DataUnits.FormatSize,
+		a.DataUnits.FormatRate,
+		func(value int64) string {
+			if value == 0 || value == -1 {
+				return "unlimited"
+			}
+			return a.DataUnits.FormatRate(value)
+		},
+	), nil
+}
+
+func (a *App) serverInfoRawRows() ([]labeledRow, error) {
+	appVersion, apiVersion, transfer, err := a.fetchServerInfo()
+	if err != nil {
+		return nil, err
+	}
+	formatRaw := func(value int64) string { return strconv.FormatInt(value, 10) }
+	return serverInfoRowsForValues(appVersion, apiVersion, transfer, formatRaw, formatRaw, formatRaw), nil
 }
 
 func (a *App) ShowServerInfo() error {
@@ -183,7 +222,7 @@ func (a *App) ShowServerInfo() error {
 }
 
 func (a *App) ShowServerInfoAsJSON() error {
-	rows, err := a.serverInfoRows()
+	rows, err := a.serverInfoRawRows()
 	if err != nil {
 		return err
 	}
@@ -191,4 +230,15 @@ func (a *App) ShowServerInfoAsJSON() error {
 		return codedErrf(ExitFetchFail, "Failed to render JSON: %v", err)
 	}
 	return nil
+}
+
+// ServerDisplayFields returns the human-facing server and transfer fields
+// used by the terminal UI. Raw JSON remains available through
+// ShowServerInfoJSON and ShowServerInfoAsJSON.
+func (a *App) ServerDisplayFields() (map[string]string, error) {
+	rows, err := a.serverInfoRows()
+	if err != nil {
+		return nil, err
+	}
+	return rowsToMap(rows), nil
 }

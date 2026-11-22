@@ -108,6 +108,9 @@ type App struct {
 	Stdout     io.Writer
 	Stderr     io.Writer
 	Ctx        context.Context
+	// DataUnits controls byte and transfer-rate formatting. The zero value is
+	// intentionally equivalent to DataUnitsHuman.
+	DataUnits DataUnits
 }
 
 // ConfigPath returns the config file selected for this authenticated app.
@@ -126,6 +129,9 @@ type Options struct {
 	User       string
 	Pass       string
 	Hash       string
+	// DataUnits is an explicit command-line override. Empty means use the
+	// optional config preference, or DataUnitsHuman when it is absent/invalid.
+	DataUnits DataUnits
 }
 
 func (a *App) errf(format string, args ...any) {

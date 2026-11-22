@@ -13,7 +13,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/naterator/qbitctl/internal/searchresults"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -176,7 +175,7 @@ func (m *model) viewBody(width, height int) []string {
 	case serverPage:
 		return m.viewServer(width, height)
 	case configPage:
-		return m.viewConfig(width, height)
+		return m.viewConfigSettings(width, height)
 	default:
 		return m.viewQueue(width, height)
 	}
@@ -226,7 +225,7 @@ func (m *model) viewQueueList(width, height int) []string {
 }
 
 func (m *model) viewQueueHeader(width int) string {
-	name, progress, state, speed := viewQueueColumns(width)
+	name, progress, state, speed := m.viewQueueColumns(width)
 	parts := []string{
 		viewColumn("", 2),
 		viewColumn("Name", name),
@@ -242,7 +241,7 @@ func (m *model) viewQueueHeader(width int) string {
 }
 
 func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) string {
-	name, progress, state, speed := viewQueueColumns(width)
+	name, progress, state, speed := m.viewQueueColumns(width)
 	marker := "  "
 	if m.marked != nil && m.marked[t.Hash] {
 		marker = "* "
@@ -268,7 +267,7 @@ func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) str
 		parts = append(parts, viewColumn(stateText, state))
 	}
 	if speed > 0 {
-		parts = append(parts, viewColumn(viewSpeed(t.DLSpeed)+" / "+viewSpeed(t.UpSpeed), speed))
+		parts = append(parts, viewColumn(m.viewRate(t.DLSpeed)+" / "+m.viewRate(t.UpSpeed), speed))
 	}
 	line := viewFit(strings.Join(parts, " "), width)
 	if selected {
@@ -299,12 +298,12 @@ func (m *model) viewTorrentDetail(width int) []string {
 	}
 	return []string{
 		viewTitleStyle.Render(viewFit(viewSafe(t.Name), width)),
-		viewTorrentState(t.State) + viewMutedStyle.Render("  ·  "+viewBytes(t.TotalSize)),
+		viewTorrentState(t.State) + viewMutedStyle.Render("  ·  "+m.viewSize(t.TotalSize)),
 		"",
 		viewAccentStyle.Render(viewProgress(t.Progress, min(24, width))),
 		"",
-		viewKeyValue("Down", viewSpeed(t.DLSpeed)),
-		viewKeyValue("Up", viewSpeed(t.UpSpeed)),
+		viewKeyValue("Down", m.viewRate(t.DLSpeed)),
+		viewKeyValue("Up", m.viewRate(t.UpSpeed)),
 		viewKeyValue("Ratio", fmt.Sprintf("%.2f", t.Ratio)),
 		viewKeyValue("Tracker", viewSafe(t.Tracker)),
 		viewKeyValue("Path", viewSafe(t.ContentPath)),
@@ -403,11 +402,11 @@ func (m *model) viewResultControls() string {
 		maxSize := strings.TrimSpace(m.resultFilter.maxSize.text)
 		switch {
 		case minSize != "" && maxSize != "":
-			parts = append(parts, "size "+viewSafe(minSize)+"–"+viewSafe(maxSize))
+			parts = append(parts, "size "+viewSafe(m.viewFilterSize(m.resultFilter.minSize))+"–"+viewSafe(m.viewFilterSize(m.resultFilter.maxSize)))
 		case minSize != "":
-			parts = append(parts, "size ≥ "+viewSafe(minSize))
+			parts = append(parts, "size ≥ "+viewSafe(m.viewFilterSize(m.resultFilter.minSize)))
 		case maxSize != "":
-			parts = append(parts, "size ≤ "+viewSafe(maxSize))
+			parts = append(parts, "size ≤ "+viewSafe(m.viewFilterSize(m.resultFilter.maxSize)))
 		}
 		if query := strings.TrimSpace(m.resultFilter.query); query != "" {
 			parts = append(parts, "text: "+viewSafe(query))
@@ -452,7 +451,7 @@ func (m *model) viewResultFilterEditor(width int) []string {
 }
 
 func (m *model) viewSearchHeader(width int) string {
-	return viewMutedStyle.Render(viewSearchLine(width, "", "Title", "ID", "Size", "Seeds", "Source"))
+	return viewMutedStyle.Render(m.viewSearchLine(width, "", "Title", "ID", "Size", "Seeds", "Source"))
 }
 
 func (m *model) viewSearchRow(r client.SearchResult, selected bool, width int) string {
@@ -464,15 +463,22 @@ func (m *model) viewSearchRow(r client.SearchResult, selected bool, width int) s
 	if selected {
 		marker = "›"
 	}
-	line := viewSearchLine(width, marker, viewSafe(r.Name), id, viewBytes(r.Size), fmt.Sprintf("%d", r.Seeders), viewSafe(r.Source))
+	line := m.viewSearchLine(width, marker, viewSafe(r.Name), id, m.viewSize(r.Size), fmt.Sprintf("%d", r.Seeders), viewSafe(r.Source))
 	if selected {
 		return viewSelectedSty.Width(width).Render(line)
 	}
 	return line
 }
 
-func viewSearchLine(width int, marker, title, id, size, seeds, source string) string {
-	columns := []string{viewColumn(size, 9), viewColumn(seeds, 5)}
+func (m *model) viewSearchLine(width int, marker, title, id, size, seeds, source string) string {
+	sizeWidth := 9
+	if m.dataUnits == client.DataUnitsBytes {
+		// An int64 can be 19 decimal digits. Keep room for the separating
+		// space and the B suffix so byte mode does not silently truncate
+		// large torrents (including values above 1 TiB).
+		sizeWidth = 21
+	}
+	columns := []string{viewColumn(size, sizeWidth), viewColumn(seeds, 5)}
 	if width >= 58 {
 		columns = append(columns, viewColumn(id, 10))
 	}
@@ -495,7 +501,7 @@ func (m *model) viewResultDetail(width int) []string {
 	}
 	return []string{
 		viewTitleStyle.Render(viewFit(viewSafe(r.Name), width)),
-		viewMutedStyle.Render(viewBytes(r.Size) + "  ·  " + viewSafe(r.Source)),
+		viewMutedStyle.Render(m.viewSize(r.Size) + "  ·  " + viewSafe(r.Source)),
 		"",
 		viewKeyValue("Seeders", fmt.Sprintf("%d", r.Seeders)),
 		viewKeyValue("Leechers", fmt.Sprintf("%d", r.Leechers)),
@@ -523,24 +529,6 @@ func (m *model) viewServer(width, height int) []string {
 		}
 	}
 	return viewPanel("Server & transfers", rows, width, height)
-}
-
-func (m *model) viewConfig(width, height int) []string {
-	rowWidth := max(1, width-2)
-	rows := []string{
-		viewAccentStyle.Render("Connection"),
-		viewConfigRow("Server address", m.setup.url, rowWidth),
-		viewConfigRow("Username", m.setup.user, rowWidth),
-		viewConfigRow("Password", configPasswordStatus(m.setup.hasPassword), rowWidth),
-		"",
-		viewAccentStyle.Render("Startup"),
-		viewConfigRow("TUI by default", configToggleStatus(m.setup.tuiDefault), rowWidth),
-		viewConfigRow("Color scheme", configThemeStatus(m), rowWidth),
-		"",
-		viewMutedStyle.Render("Config file"),
-		viewMutedStyle.Render(viewSafe(m.configPath)),
-	}
-	return viewPanel("Configuration", rows, width, height)
 }
 
 func viewConfigRow(label, value string, width int) string {
@@ -605,7 +593,11 @@ func (m *model) viewFooter(width int) []string {
 	case serverPage:
 		keys = []string{"enter", "details", "r", "refresh", "q", "quit"}
 	case configPage:
-		keys = []string{"enter", "edit", "d", "toggle default", "c", "colors", "q", "quit"}
+		keys = []string{"↑/↓ · j/k", "move"}
+		if m.configSelection < int(configSettingConfigFile) {
+			keys = append(keys, "enter", "change")
+		}
+		keys = append(keys, "q", "quit")
 	default:
 		keys = []string{"/", "filter", "o", "sort", "enter", "details", "space", "mark", "a", "add", "q", "quit"}
 	}
@@ -680,6 +672,20 @@ func viewQueueColumns(width int) (name, progress, state, speed int) {
 	return
 }
 
+func (m *model) viewQueueColumns(width int) (name, progress, state, speed int) {
+	name, progress, state, speed = viewQueueColumns(width)
+	if m.dataUnits == client.DataUnitsBytes && speed > 0 {
+		speed = 35
+		fixed := 2 + progress + 2
+		if state > 0 {
+			fixed += state + 1
+		}
+		fixed += speed + 1
+		name = max(1, width-fixed)
+	}
+	return
+}
+
 func viewWindowStart(index, count, visible int) int {
 	if count <= 0 || visible <= 0 {
 		return 0
@@ -718,15 +724,22 @@ func boundedProgress(progress float64) float64 {
 	return min(1, max(0, progress))
 }
 
-func viewBytes(value int64) string {
-	return searchresults.FormatSize(value)
+func (m *model) viewSize(value int64) string {
+	return m.dataUnits.FormatSize(value)
 }
 
-func viewSpeed(value int64) string {
+func (m *model) viewRate(value int64) string {
 	if value <= 0 {
 		return "—"
 	}
-	return viewBytes(value) + "/s"
+	return m.dataUnits.FormatRate(value)
+}
+
+func (m *model) viewFilterSize(bound resultBound) string {
+	if strings.TrimSpace(bound.text) == "" {
+		return ""
+	}
+	return m.viewSize(bound.value)
 }
 
 func viewColumn(value string, width int) string {

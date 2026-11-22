@@ -35,10 +35,18 @@ qbitctl add ./ubuntu.torrent
 ## TUI walkthrough
 
 Use `Tab` to switch between Queue, Search, Server, and Config. Press `?` for
-shortcuts or `Ctrl+P` for the command palette. Mark torrents with `Space` to
-edit them together. Press Enter in the Queue to open live torrent details.
-The details and the queue refresh every five seconds. Set
-`qbitctl tui-default on` to open the TUI when you run `qbitctl` by itself.
+shortcuts or `Ctrl+P` for actions that fit the current tab and selection.
+Mark torrents with `Space` to edit them together. Press Enter in the Queue to
+open live torrent details. The details and the queue refresh every five
+seconds. Set `qbitctl tui-default on` to open the TUI when you run `qbitctl`
+by itself.
+
+Config groups settings under **Connection**, **View**, and **Search**, with a
+**Files** section for the config and search cache paths. Use
+↑/↓ or `j`/`k` to move and Enter to change the selected setting. Under View,
+**Data units** switches between human-readable sizes and speeds (the
+default) and exact bytes and bytes per second. qbitctl saves the choice for
+both the TUI and CLI.
 
 On the Search tab, the query and current provider are just below the tabs.
 Press `p` (**Providers**) to choose **Enabled search plugins** (the default),
@@ -47,7 +55,7 @@ grayed out at the bottom of the picker. The choice is saved in `config.json`
 and used for TUI and CLI searches. If a saved plugin is no longer available or
 enabled, qbitctl uses **Enabled search plugins**. Press `/` to start a search.
 
-![qbitctl TUI showing setup, the search provider picker, and torrent controls](assets/demo.gif)
+![qbitctl TUI showing Config, the search provider picker, and live torrent details](assets/demo.gif)
 
 [Terminal recording](assets/demo.cast) · [Recording script](scripts/record_demo.py)
 
@@ -89,6 +97,14 @@ hours for the same server and user.
 Use `--json` for structured output or `--server-json` for the raw API response
 where offered. `list` and `show` also support `--fields` and `--template`.
 Use one output format at a time.
+
+Use `--units bytes` or `--units human` to override the saved display units
+for one command. JSON and template output keep their original values.
+
+```bash
+qbitctl --units bytes info
+qbitctl --units human search "Ubuntu 24.04"
+```
 
 ## Authentication
 

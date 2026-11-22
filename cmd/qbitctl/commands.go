@@ -289,7 +289,7 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 				}
 				return nil
 			}
-			return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout))
+			return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout), app.DataUnits)
 		}),
 	}
 	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin ID or full name; omit to use the saved default; use | to combine, or enabled/all")

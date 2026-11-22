@@ -63,7 +63,7 @@ type searchCacheResult struct {
 // CacheSearchResults records a bounded history for the current server and user.
 // Only rows with a usable download URL receive an ID.
 func (a *App) CacheSearchResults(results []SearchResult) error {
-	path, err := a.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		return fmt.Errorf("%w: %w", errSearchCacheWrite, err)
 	}
@@ -126,7 +126,7 @@ func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {
 	if id <= 0 {
 		return cachedSearchTarget{}, errSearchCacheUnavailable
 	}
-	path, err := a.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		return cachedSearchTarget{}, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
 	}
@@ -198,7 +198,8 @@ func retainSearches(searches []searchSnapshot, now time.Time) []searchSnapshot {
 	return retained
 }
 
-func (a *App) searchCachePath() (string, error) {
+// SearchResultsCachePath returns the local path shared by CLI and TUI search.
+func SearchResultsCachePath() (string, error) {
 	base := strings.TrimSpace(os.Getenv("XDG_CACHE_HOME"))
 	if base == "" || !filepath.IsAbs(base) {
 		var err error

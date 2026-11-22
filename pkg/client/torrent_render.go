@@ -66,7 +66,7 @@ func (a *App) ShowAllTorrentsFields(fields []string, header bool) error {
 	if err != nil {
 		return err
 	}
-	if err := writeTorrentFieldRows(a.Stdout, torrents, fields, header); err != nil {
+	if err := writeTorrentFieldRows(a.Stdout, torrents, fields, header, a.DataUnits); err != nil {
 		return codedErrf(ExitFetchFail, "Failed to render field output: %v", err)
 	}
 	return nil
@@ -77,7 +77,7 @@ func (a *App) ShowSingleTorrentFields(hash string, fields []string, header bool)
 	if err != nil {
 		return err
 	}
-	if err := writeTorrentFieldRows(a.Stdout, []TorrentInfo{torrent}, fields, header); err != nil {
+	if err := writeTorrentFieldRows(a.Stdout, []TorrentInfo{torrent}, fields, header, a.DataUnits); err != nil {
 		return codedErrf(ExitFetchFail, "Failed to render field output: %v", err)
 	}
 	return nil
@@ -169,13 +169,32 @@ func torrentBlurbRows(torrent TorrentInfo, fields []fieldSpec) []labeledRow {
 	return rows
 }
 
+func torrentDisplayBlurbRows(torrent TorrentInfo, fields []fieldSpec, units DataUnits) []labeledRow {
+	rows := make([]labeledRow, len(fields))
+	for i, f := range fields {
+		rows[i] = labeledRow{label: f.label, value: torrentDisplayFieldValue(units, torrent, f.field)}
+	}
+	return rows
+}
+
 func (a *App) ShowSingleTorrentInfo(hash string) error {
 	torrent, err := a.GetTorrentInfo(hash)
 	if err != nil {
 		return err
 	}
-	renderBlurb(a.Stdout, torrentBlurbRows(torrent, detailedTorrentFields))
+	renderBlurb(a.Stdout, torrentDisplayBlurbRows(torrent, detailedTorrentFields, a.DataUnits))
 	return nil
+}
+
+// TorrentDisplayFields returns the human-facing fields used by the terminal
+// UI's torrent detail view. It intentionally shares the CLI renderer so unit
+// selection and sentinel handling stay consistent across both interfaces.
+func (a *App) TorrentDisplayFields(hash string) (map[string]string, error) {
+	torrent, err := a.GetTorrentInfo(hash)
+	if err != nil {
+		return nil, err
+	}
+	return rowsToMap(torrentDisplayBlurbRows(torrent, detailedTorrentFields, a.DataUnits)), nil
 }
 
 func (a *App) ShowSingleTorrentInfoAsJSON(hash string) error {
@@ -203,7 +222,7 @@ func (a *App) ShowAllTorrentsInfo() error {
 		if i > 0 {
 			fmt.Fprintln(a.Stdout)
 		}
-		renderBlurb(a.Stdout, torrentBlurbRows(torrent, summaryTorrentFields))
+		renderBlurb(a.Stdout, torrentDisplayBlurbRows(torrent, summaryTorrentFields, a.DataUnits))
 	}
 
 	return nil
@@ -276,7 +295,7 @@ func (a *App) GetField(hash, field string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(a.Stdout, torrentFieldValue(torrent, field))
+	fmt.Fprintln(a.Stdout, torrentDisplayFieldValue(a.DataUnits, torrent, field))
 	return nil
 }
 

@@ -29,7 +29,7 @@ func TestWriteTorrentFieldRowsAndTemplate(t *testing.T) {
 	}}
 
 	var rows strings.Builder
-	if err := writeTorrentFieldRows(&rows, torrents, []string{"hash", "name", "progress"}, true); err != nil {
+	if err := writeTorrentFieldRows(&rows, torrents, []string{"hash", "name", "progress"}, true, DataUnitsHuman); err != nil {
 		t.Fatalf("writeTorrentFieldRows returned error: %v", err)
 	}
 	text := rows.String()

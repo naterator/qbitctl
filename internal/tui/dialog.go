@@ -246,8 +246,32 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "config", "config-page", "settings":
 		m.dialog = nil
 		return m.goTo(configPage)
+	case "previous-item":
+		return m.handleKey("up")
+	case "next-item":
+		return m.handleKey("down")
+	case "previous-page":
+		return m.handleKey("pgup")
+	case "next-page":
+		return m.handleKey("pgdown")
+	case "first-item":
+		return m.handleKey("home")
+	case "last-item":
+		return m.handleKey("end")
 	case "search":
 		return m.openSearchDialog()
+	case "cancel-search":
+		if m.busy != "" && m.work == searchWork && m.cancel != nil {
+			m.cancelSearch()
+		}
+		return nil
+	case "cancel-connection":
+		if m.busy != "" && m.work == connectWork && m.cancel != nil {
+			m.connectCanceled = true
+			m.cancel()
+			m.busy = "Canceling connection"
+		}
+		return nil
 	case "providers", "search-providers", "search plugins":
 		if m.page != searchPage {
 			return nil
@@ -255,6 +279,16 @@ func (m *model) openAction(action string) tea.Cmd {
 		return m.openSearchPluginPicker()
 	case "filter":
 		m.openFilterDialog()
+		return nil
+	case "clear-queue-filter":
+		if m.page == queuePage {
+			m.setFilter("", "all")
+		}
+		return nil
+	case "clear-result-filter":
+		if m.page == searchPage {
+			m.clearResultFilter()
+		}
 		return nil
 	case "filter-results":
 		if m.page != searchPage {
@@ -274,6 +308,11 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "details":
 		m.dialog = nil
 		return m.loadDetails(false)
+	case "server-details":
+		if m.page == serverPage && len(m.serverRows) > 0 {
+			m.openDetailDialog("Server & transfers", m.serverRows)
+		}
+		return nil
 	case "trackers":
 		m.dialog = nil
 		return m.loadDetails(true)
@@ -312,6 +351,11 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "refresh":
 		m.dialog = nil
 		return m.refresh()
+	case "toggle-mark":
+		if m.page == queuePage {
+			m.toggleMark()
+		}
+		return nil
 	case "clear-marks", "clear marks":
 		m.clearMarks()
 		m.dialog = nil
@@ -319,6 +363,24 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "help":
 		m.openHelpDialog()
 		return nil
+	case "config-server":
+		return m.openConfigSetting(configSettingServer)
+	case "config-username":
+		return m.openConfigSetting(configSettingUsername)
+	case "config-password":
+		return m.openConfigSetting(configSettingPassword)
+	case "config-default":
+		return m.openConfigSetting(configSettingTUIDefault)
+	case "config-theme":
+		return m.openConfigSetting(configSettingTheme)
+	case "config-units":
+		return m.openConfigSetting(configSettingDataUnits)
+	case "config-provider":
+		return m.openConfigSetting(configSettingSearchProvider)
+	case "config-file":
+		return m.openConfigSetting(configSettingConfigFile)
+	case "config-cache":
+		return m.openConfigSetting(configSettingSearchCache)
 	case "quit", "exit":
 		m.dialog = nil
 		return m.requestQuit()
@@ -412,7 +474,11 @@ func (m *model) refreshSearchPluginPicker() {
 		selectedAction = m.dialog.items[m.dialog.selected].action
 	}
 	if selectedAction == "" {
-		selectedAction = m.searchPluginSelection(m.searchPlugin)
+		current := m.searchPlugin
+		if m.page == configPage {
+			current = m.savedSearchPlugin
+		}
+		selectedAction = m.searchPluginSelection(current)
 	}
 	m.dialog.items = m.searchPluginPickerItems()
 	m.dialog.selected = 0
@@ -759,6 +825,10 @@ func (m *model) openHelpDialog() {
 }
 
 func (m *model) openConfigDialog() {
+	m.openConnectionEditor(true)
+}
+
+func (m *model) openConnectionEditor(includeStartup bool) {
 	// ReadSetup exposes only HasPassword metadata. Keep this field empty even
 	// when a password is saved so the secret can never be rendered or copied
 	// into the TUI.
@@ -768,10 +838,6 @@ func (m *model) openConfigDialog() {
 		passwordPlaceholder = "Password required for first connection"
 		passwordHelp = "Typed characters are hidden; a password is required"
 	}
-	defaultChoice := "no"
-	if m.setup.tuiDefault {
-		defaultChoice = "yes"
-	}
 	d := &dialog{
 		kind:  dialogConfig,
 		title: "Configure qBittorrent",
@@ -779,8 +845,14 @@ func (m *model) openConfigDialog() {
 			newDialogField("Server", m.setup.url, "http://localhost:8080", "qBittorrent Web API address"),
 			newDialogField("Username", m.setup.user, "admin", "Web API username"),
 			newPasswordDialogField("Password", passwordPlaceholder, passwordHelp),
-			newDialogField("TUI default", defaultChoice, "yes or no", "Start qbitctl in the TUI by default"),
 		},
+	}
+	if includeStartup {
+		defaultChoice := "no"
+		if m.setup.tuiDefault {
+			defaultChoice = "yes"
+		}
+		d.fields = append(d.fields, newDialogField("TUI default", defaultChoice, "yes or no", "Start qbitctl in the TUI by default"))
 	}
 	m.dialog = d
 	d.focusField(0)

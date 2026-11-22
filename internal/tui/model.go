@@ -76,6 +76,7 @@ type workDone struct {
 	app                       *client.App
 	setup                     setupState
 	setDefault                *bool
+	setDataUnits              *client.DataUnits
 	plugins                   []searchPluginInfo
 	pluginGeneration          uint64
 	pluginSelectionGeneration uint64
@@ -119,6 +120,7 @@ type model struct {
 	serverRows                      []detailRow
 	queueIndex                      int
 	resultIndex                     int
+	configSelection                 int
 	marked                          map[string]bool
 	filter                          string
 	stateFilter                     string
@@ -139,6 +141,8 @@ type model struct {
 	searchPluginsError              string
 	searchPluginGeneration          uint64
 	searchPluginSelectionGeneration uint64
+	dataUnits                       client.DataUnits
+	dataUnitsExplicit               bool
 	dialog                          *dialog
 	busy, notice                    string
 	failed                          bool
@@ -158,7 +162,8 @@ func newModel(ctx context.Context, backend service) *model {
 		searchPlugin:              defaultSearchPluginSelection,
 		savedSearchPlugin:         defaultSearchPluginSelection,
 		searchPluginDefaultActive: true, searchTimeout: 30 * time.Second,
-		theme: defaultThemeID,
+		dataUnits: client.DataUnitsHuman,
+		theme:     defaultThemeID,
 	}
 }
 
@@ -185,6 +190,10 @@ func nextTick() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	noticeID := m.noticeID
 	cmd := m.update(msg)
+	if _, ok := msg.(workDone); ok && m.dialog != nil && m.dialog.kind == dialogPalette {
+		m.dialog.allItems = m.paletteCommands()
+		m.dialog.refreshPalette()
+	}
 	if m.noticeID != noticeID {
 		cmd = tea.Batch(cmd, m.noticeTimer())
 	}
@@ -289,15 +298,13 @@ func (m *model) handleKey(key string) tea.Cmd {
 		return m.openAction("search")
 	case "esc":
 		if m.busy != "" && m.work == connectWork {
-			m.connectCanceled = true
-			m.cancel()
-			m.busy = "Canceling connection"
+			return m.openAction("cancel-connection")
 		} else if m.busy != "" && m.work == searchWork {
-			m.cancelSearch()
+			return m.openAction("cancel-search")
 		} else if m.searchPluginsLoading && m.dialog != nil && m.dialog.kind == dialogSearchPlugins {
 			m.cancelSearchPlugins()
 		} else if m.page == searchPage && m.resultFilter.active() {
-			m.clearResultFilter()
+			return m.openAction("clear-result-filter")
 		} else if m.page == queuePage && len(m.marked) > 0 {
 			m.clearMarks()
 		}
@@ -312,7 +319,11 @@ func (m *model) handleKey(key string) tea.Cmd {
 	case "home", "g":
 		m.moveCursor(-m.currentIndex())
 	case "end", "shift+g", "G":
-		m.moveCursor(max(len(m.queue), len(m.results)))
+		if m.page == configPage {
+			m.moveConfigSelection(len(m.configSettings()))
+		} else {
+			m.moveCursor(max(len(m.queue), len(m.results)))
+		}
 	case "a":
 		return m.openAction("add")
 	case "enter":
@@ -326,20 +337,11 @@ func (m *model) handleKey(key string) tea.Cmd {
 			return m.openAction("search")
 		}
 		if m.page == configPage {
-			m.openConfigDialog()
-			return nil
+			return m.activateConfigSetting()
 		}
-		if len(m.serverRows) > 0 {
-			m.openDetailDialog("Server & transfers", m.serverRows)
-		}
+		return m.openAction("server-details")
 	}
 	if m.page == configPage {
-		if key == "d" {
-			return m.toggleTUIDefault()
-		}
-		if key == "c" {
-			return m.openThemePicker()
-		}
 		return nil
 	}
 	if m.page == searchPage {
@@ -526,6 +528,16 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 			m.setup.tuiDefault = *done.setDefault
 			m.setNotice("TUI startup preference saved", false)
 		}
+		if done.setDataUnits != nil {
+			m.applyDataUnits(*done.setDataUnits)
+			m.setNotice("Data units saved", false)
+			if m.dialog != nil && m.dialog.torrentDetails != nil {
+				return m.refreshTorrentDetails()
+			}
+			if m.page == serverPage {
+				return m.refresh()
+			}
+		}
 		if done.app != nil {
 			if m.app != nil && m.app != done.app {
 				// No request worker can be active while the config dialog is
@@ -559,6 +571,23 @@ func (m *model) applySearchPluginResult(done workDone) {
 	}
 }
 
+func (m *model) applyDataUnits(mode client.DataUnits) {
+	if mode != client.DataUnitsBytes {
+		mode = client.DataUnitsHuman
+	}
+	m.dataUnits = mode
+	if backend, ok := m.backend.(interface{ setDataUnits(client.DataUnits) }); ok {
+		backend.setDataUnits(mode)
+	}
+}
+
+func (m *model) dataUnitsLabel() string {
+	if m.dataUnits == client.DataUnitsBytes {
+		return "Bytes"
+	}
+	return "Human-readable"
+}
+
 func (m *model) finishCanceledConnection(app *client.App) tea.Cmd {
 	if app != nil {
 		app.Logout()
@@ -575,6 +604,11 @@ func (m *model) finishCanceledConnection(app *client.App) tea.Cmd {
 func (m *model) adoptApp(app *client.App, setup setupState) {
 	m.app, m.ownsApp = app, true
 	m.backend = &tuiClient{app: app}
+	if m.dataUnitsExplicit {
+		m.applyDataUnits(m.dataUnits)
+	} else {
+		m.applyDataUnits(app.DataUnits)
+	}
 	m.configPath = setup.path
 	if m.configPath == "" {
 		m.configPath = app.ConfigPath()
@@ -647,7 +681,13 @@ func (m *model) goTo(next page) tea.Cmd {
 		// the saved name remains visible while the request is in flight.
 		return m.ensureSearchPlugins(m.needsDefaultSearchValidation())
 	}
-	if next == configPage || m.backend == nil {
+	if next == configPage {
+		if m.needsDefaultSearchValidation() {
+			return m.ensureSearchPlugins()
+		}
+		return nil
+	}
+	if m.backend == nil {
 		return nil
 	}
 	return m.refresh()
@@ -875,6 +915,9 @@ func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
 }
 
 func (m *model) currentIndex() int {
+	if m.page == configPage {
+		return m.configSelection
+	}
 	if m.page == searchPage {
 		return m.resultIndex
 	}
@@ -887,6 +930,8 @@ func (m *model) moveCursor(delta int) {
 		m.queueIndex = max(0, min(m.queueIndex+delta, len(m.queue)-1))
 	case searchPage:
 		m.resultIndex = max(0, min(m.resultIndex+delta, len(m.results)-1))
+	case configPage:
+		m.moveConfigSelection(delta)
 	}
 }
 

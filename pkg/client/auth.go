@@ -534,6 +534,18 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 
 	app.creds = creds
 	app.configPath = configPath
+	// A malformed optional display preference must not prevent authentication.
+	app.DataUnits = DataUnitsHuman
+	if configured, readErr := ReadDataUnits(configPath); readErr == nil {
+		app.DataUnits = configured
+	}
+	if opts.DataUnits != "" {
+		configured, parseErr := ParseDataUnits(string(opts.DataUnits))
+		if parseErr != nil {
+			return nil, codedErrf(ExitBadArgs, "%v", parseErr)
+		}
+		app.DataUnits = configured
+	}
 	app.client = newClient(creds, app.Stderr)
 
 	if err := app.client.loginContext(app.context()); err != nil {

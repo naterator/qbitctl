@@ -952,6 +952,20 @@ def run(args: argparse.Namespace) -> None:
             if not torrent_result.get("id") or not alt_result.get("id"):
                 raise RuntimeError("qbitctl did not cache both providers' search results")
 
+            magnet_result = search_result_named(multi_results, "qbitctl search magnet")
+            if magnet_result.get("size") != 1048576:
+                raise RuntimeError("qbitctl search JSON did not preserve the byte count")
+            for units, expected_size in (((), "1.0 MiB"), (("--units", "bytes"), "1048576 B")):
+                text_results = run_cli(
+                    binary, url, password, root, config_home,
+                    "search", "fixture", "--plugin", "qbitctl_fixture", *units,
+                ).stdout
+                if not any(
+                    ["qbitctl search magnet", expected_size] == line.split("\t")[1:3]
+                    for line in text_results.splitlines()
+                ):
+                    raise RuntimeError(f"qbitctl search did not display {expected_size}")
+
             search_id = str(torrent_result["id"])
             run_cli(binary, url, password, root, config_home, "add", "--search-id", search_id)
             search_torrent = wait_for_torrent(

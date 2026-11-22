@@ -3,58 +3,14 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
 
 func (m *model) openPaletteDialog() {
-	search := dialogItem{label: "New search", action: "search", description: "Find torrents with " + m.searchPluginLabel(m.searchPlugin)}
-	if m.page != queuePage {
-		search.keys = "/"
-	}
-	items := paletteGroup(nil, "Suggested",
-		search,
-		dialogItem{label: "Add torrent", action: "add", description: "Add a magnet, URL, or .torrent file", keys: "a"},
-		dialogItem{label: "Refresh", action: "refresh", description: "Reload this page", keys: "r"},
-	)
-	items = paletteGroup(items, "Navigate",
-		dialogItem{label: "Queue", action: "queue", description: "Browse and manage torrents", keys: "1"},
-		dialogItem{label: "Search results", action: "search-page", description: "Show the latest search results", keys: "2"},
-		dialogItem{label: "Server", action: "server", description: "View server information", keys: "3"},
-		dialogItem{label: "Configuration", action: "config-page", description: "Edit connection and startup settings", keys: "4"},
-	)
-	switch m.page {
-	case queuePage:
-		items = paletteGroup(items, "Queue",
-			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
-			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by name, progress, or state", keys: "o"},
-			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent", keys: "enter"},
-			dialogItem{label: "Trackers", action: "trackers", description: "Inspect tracker status", keys: "t"},
-			dialogItem{label: "Edit torrent", action: "edit", description: "Set a qBittorrent torrent field", keys: "e"},
-			dialogItem{label: "Clear marks", action: "clear-marks", description: "Clear multi-select marks", keys: "esc"},
-		)
-		items = paletteGroup(items, "Transfer actions",
-			dialogItem{label: "Start", action: "start", description: "Start selected torrents", keys: "s"},
-			dialogItem{label: "Pause", action: "pause", description: "Pause selected torrents", keys: "p"},
-			dialogItem{label: "Force start", action: "force-start", description: "Force selected torrents to start", keys: "f"},
-			dialogItem{label: "Move", action: "move", description: "Change the selected torrent path", keys: "m"},
-			dialogItem{label: "Remove", action: "remove", description: "Remove torrents but keep files", keys: "x"},
-			dialogItem{label: "Delete files", action: "delete", description: "Remove torrents and delete files", keys: "⇧d"},
-		)
-	case searchPage:
-		items = paletteGroup(items, "Current results",
-			dialogItem{label: "Choose search provider", action: "providers", description: "Set the provider for the next search", keys: "p"},
-			dialogItem{label: "Filter results", action: "filter-results", description: "Narrow loaded results by text, seeders, or size", keys: "f"},
-			dialogItem{label: "Sort results", action: "sort-results", description: "Sort the current results by seeders or size", keys: "s"},
-			dialogItem{label: "Add selected result", action: "add-result", description: "Submit a cached search result", keys: "enter"},
-		)
-	}
-	items = paletteGroup(items, "Session",
-		dialogItem{label: "Keyboard shortcuts", action: "help", description: "Show help and key bindings", keys: "?"},
-		dialogItem{label: "Quit", action: "quit", description: "Close qbitctl", keys: "q"},
-	)
-
+	items := m.paletteCommands()
 	d := &dialog{
 		kind:     dialogPalette,
 		title:    "Command palette",
@@ -64,6 +20,227 @@ func (m *model) openPaletteDialog() {
 	}
 	m.dialog = d
 	d.focusField(0)
+}
+
+// paletteCommands returns the commands that can be acted on from the current
+// model state. The palette is deliberately rebuilt on every open (and by the
+// model after asynchronous work completes), so it does not advertise stale
+// queue selections, search results, or provider catalogs.
+func (m *model) paletteCommands() []dialogItem {
+	connected := m.backend != nil
+	idle := m.busy == "" && !m.quitting
+	canRequest := connected && idle
+
+	items := make([]dialogItem, 0, 32)
+	if canRequest {
+		searchKeys := ""
+		if m.page != queuePage {
+			searchKeys = "/"
+		}
+		items = paletteGroup(items, "Suggested",
+			dialogItem{label: "New search", action: "search", description: "Find torrents with " + m.searchPluginLabel(m.searchPlugin), keys: searchKeys},
+			dialogItem{label: "Add torrent", action: "add", description: "Add a magnet, URL, or .torrent file", keys: "a"},
+		)
+	}
+
+	// Navigation itself remains useful while disconnected: Config is needed to
+	// establish a connection, and the other tabs provide a predictable place
+	// to return after a connection finishes.
+	items = paletteGroup(items, "Navigate",
+		dialogItem{label: "Queue", action: "queue", description: "Browse and manage torrents", keys: "1"},
+		dialogItem{label: "Search results", action: "search-page", description: "Show the latest search results", keys: "2"},
+		dialogItem{label: "Server", action: "server", description: "View server information", keys: "3"},
+		dialogItem{label: "Configuration", action: "config-page", description: "Edit connection, view, and search settings", keys: "4"},
+	)
+
+	switch m.page {
+	case queuePage:
+		m.addQueuePaletteCommands(&items, connected, idle)
+	case searchPage:
+		m.addSearchPaletteCommands(&items, connected, idle)
+	case serverPage:
+		m.addServerPaletteCommands(&items, connected, idle)
+	case configPage:
+		m.addConfigPaletteCommands(&items, idle)
+	}
+	if m.busy != "" && m.work == searchWork {
+		items = paletteGroup(items, "Search",
+			dialogItem{label: "Cancel search", action: "cancel-search", description: "Stop the active search request", keys: "esc"},
+		)
+	}
+	if m.busy != "" && m.work == connectWork {
+		items = paletteGroup(items, "Connection",
+			dialogItem{label: "Cancel connection", action: "cancel-connection", description: "Stop the connection attempt", keys: "esc"},
+		)
+	}
+
+	items = paletteGroup(items, "Session",
+		dialogItem{label: "Keyboard shortcuts", action: "help", description: "Show help and key bindings", keys: "?"},
+		dialogItem{label: "Quit", action: "quit", description: "Close qbitctl", keys: "q"},
+	)
+	return items
+}
+
+func (m *model) addQueuePaletteCommands(items *[]dialogItem, connected, idle bool) {
+	if idle {
+		*items = paletteGroup(*items, "Queue",
+			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
+			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by name, progress, or state", keys: "o"},
+		)
+		if connected {
+			*items = paletteGroup(*items, "Queue",
+				dialogItem{label: "Refresh queue", action: "refresh", description: "Reload the torrent queue", keys: "r"},
+			)
+		}
+	}
+	if idle && (strings.TrimSpace(m.filter) != "" || (strings.TrimSpace(m.stateFilter) != "" && !strings.EqualFold(strings.TrimSpace(m.stateFilter), "all"))) {
+		*items = paletteGroup(*items, "Queue",
+			dialogItem{label: "Clear queue filter", action: "clear-queue-filter", description: "Show all torrents again", keys: ""},
+		)
+	}
+	if !idle {
+		return
+	}
+
+	focused, hasFocused := m.focusedTorrent()
+	if hasFocused {
+		label, description := "Mark torrent", "Mark the focused torrent for multi-select actions"
+		if m.marked[focused.Hash] {
+			label, description = "Unmark torrent", "Remove the focused torrent from the multi-select set"
+		}
+		*items = paletteGroup(*items, "Queue",
+			dialogItem{label: label, action: "toggle-mark", description: description, keys: "space"},
+		)
+	}
+	if len(m.marked) > 0 {
+		*items = paletteGroup(*items, "Queue",
+			dialogItem{label: "Clear marks", action: "clear-marks", description: "Clear all marked torrents", keys: "esc"},
+		)
+	}
+	if len(m.queue) > 0 {
+		m.addListMovementCommands(items, len(m.queue))
+	}
+	if !connected {
+		return
+	}
+	targets := m.targetHashes()
+	if hasFocused {
+		*items = paletteGroup(*items, "Queue",
+			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent", keys: "enter"},
+			dialogItem{label: "Trackers", action: "trackers", description: "Inspect tracker status", keys: "t"},
+		)
+	}
+	if len(targets) == 0 {
+		return
+	}
+	*items = paletteGroup(*items, "Transfer actions",
+		dialogItem{label: "Edit torrent", action: "edit", description: "Set a qBittorrent torrent field", keys: "e"},
+		dialogItem{label: "Start", action: "start", description: "Start the focused or marked torrents", keys: "s"},
+		dialogItem{label: "Pause", action: "pause", description: "Pause the focused or marked torrents", keys: "p"},
+		dialogItem{label: "Force start", action: "force-start", description: "Force the focused or marked torrents to start", keys: "f"},
+		dialogItem{label: "Move", action: "move", description: "Change the selected torrent path", keys: "m"},
+		dialogItem{label: "Remove", action: "remove", description: "Remove torrents but keep files", keys: "x"},
+		dialogItem{label: "Delete files", action: "delete", description: "Remove torrents and delete files", keys: "⇧d"},
+	)
+
+}
+
+func (m *model) addSearchPaletteCommands(items *[]dialogItem, connected, idle bool) {
+	// Provider discovery is intentionally allowed while a search runs; the
+	// picker changes only the next search and does not disturb current results.
+	if connected {
+		*items = paletteGroup(*items, "Search",
+			dialogItem{label: "Choose search provider", action: "providers", description: "Set the provider for the next search", keys: "p"},
+		)
+	}
+	if !idle {
+		return
+	}
+	if connected && strings.TrimSpace(m.query) != "" {
+		*items = paletteGroup(*items, "Search",
+			dialogItem{label: "Search again", action: "refresh", description: "Run the current query again", keys: "r"},
+		)
+	}
+	// Keep these visible even before the first result arrives: they configure
+	// the next Search interaction and are useful when a previous result set is
+	// empty or still being rebuilt.
+	*items = paletteGroup(*items, "Search results",
+		dialogItem{label: "Filter results", action: "filter-results", description: "Narrow loaded results by text, seeders, or size", keys: "f"},
+		dialogItem{label: "Sort results", action: "sort-results", description: "Sort the current results by seeders or size", keys: "s"},
+	)
+	if m.resultFilter.active() {
+		*items = paletteGroup(*items, "Search results",
+			dialogItem{label: "Clear result filter", action: "clear-result-filter", description: "Show all search results again", keys: ""},
+		)
+	}
+	if connected {
+		label := "Add result by ID"
+		description := "Submit a cached search result by its numeric ID"
+		keys := ""
+		if result, ok := m.focusedResult(); ok && result.ID > 0 {
+			label = "Add selected result"
+			description = fmt.Sprintf("Submit cached result %d", result.ID)
+			keys = "enter"
+		}
+		*items = paletteGroup(*items, "Search results",
+			dialogItem{label: label, action: "add-result", description: description, keys: keys},
+		)
+	}
+	if len(m.results) > 0 {
+		m.addListMovementCommands(items, len(m.results))
+	}
+}
+
+func (m *model) addServerPaletteCommands(items *[]dialogItem, connected, idle bool) {
+	if !connected || !idle {
+		return
+	}
+	*items = paletteGroup(*items, "Server",
+		dialogItem{label: "Refresh server info", action: "refresh", description: "Reload qBittorrent server and transfer statistics", keys: "r"},
+	)
+	if len(m.serverRows) > 0 {
+		*items = paletteGroup(*items, "Server",
+			dialogItem{label: "Server details", action: "server-details", description: "Inspect the loaded server statistics", keys: "enter"},
+		)
+	}
+}
+
+func (m *model) addConfigPaletteCommands(items *[]dialogItem, idle bool) {
+	if !idle {
+		return
+	}
+	*items = paletteGroup(*items, "Connection",
+		dialogItem{label: "Edit server address", action: "config-server", description: "Change the qBittorrent Web API address"},
+		dialogItem{label: "Edit username", action: "config-username", description: "Change the Web API username"},
+		dialogItem{label: "Edit password", action: "config-password", description: "Change the saved Web API password"},
+	)
+	*items = paletteGroup(*items, "View",
+		dialogItem{label: "Toggle TUI default", action: "config-default", description: "Choose whether qbitctl starts in the TUI"},
+		dialogItem{label: "Choose color scheme", action: "config-theme", description: "Preview and save a color scheme"},
+		dialogItem{label: "Toggle data units", action: "config-units", description: "Switch between human-readable and exact bytes"},
+	)
+	*items = paletteGroup(*items, "Search",
+		dialogItem{label: "Choose default provider", action: "config-provider", description: "Save the provider used by new searches"},
+	)
+	*items = paletteGroup(*items, "Files",
+		dialogItem{label: "Show config file path", action: "config-file", description: "Focus the saved configuration file path"},
+		dialogItem{label: "Show search cache path", action: "config-cache", description: "Focus the local cached search-results path"},
+	)
+	m.addListMovementCommands(items, len(m.configSettings()))
+}
+
+func (m *model) addListMovementCommands(items *[]dialogItem, count int) {
+	if count < 1 {
+		return
+	}
+	*items = paletteGroup(*items, "Navigate list",
+		dialogItem{label: "Previous item", action: "previous-item", description: "Move to the previous visible item", keys: "↑/k"},
+		dialogItem{label: "Next item", action: "next-item", description: "Move to the next visible item", keys: "↓/j"},
+		dialogItem{label: "Previous page", action: "previous-page", description: "Move up one page of items", keys: "pgup"},
+		dialogItem{label: "Next page", action: "next-page", description: "Move down one page of items", keys: "pgdn"},
+		dialogItem{label: "First item", action: "first-item", description: "Jump to the first visible item", keys: "home/g"},
+		dialogItem{label: "Last item", action: "last-item", description: "Jump to the last visible item", keys: "end/G"},
+	)
 }
 
 func paletteGroup(items []dialogItem, group string, commands ...dialogItem) []dialogItem {
@@ -87,6 +264,7 @@ func (d *dialog) refreshPalette() {
 	for _, item := range d.allItems {
 		if query == "" || strings.Contains(strings.ToLower(item.label), query) ||
 			strings.Contains(strings.ToLower(item.action), query) ||
+			strings.Contains(strings.ToLower(item.group), query) ||
 			strings.Contains(strings.ToLower(item.description), query) ||
 			strings.Contains(strings.ToLower(item.keys), query) {
 			d.items = append(d.items, item)

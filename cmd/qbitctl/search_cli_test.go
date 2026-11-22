@@ -23,10 +23,10 @@ func TestRenderSearchResultsKeepsPipedOutputStable(t *testing.T) {
 		Source:   "tracker.example",
 	}}
 	var output bytes.Buffer
-	if err := renderSearchTable(&output, results, false, 0); err != nil {
+	if err := renderSearchTable(&output, results, false, 0, qbt.DataUnits("")); err != nil {
 		t.Fatal(err)
 	}
-	want := "ID\tName\tSize (bytes)\tSeeders\tLeechers\tSource\n123\tUbuntu Desktop\t1536\t10\t2\ttracker.example\n"
+	want := "ID\tName\tSize\tSeeders\tLeechers\tSource\n123\tUbuntu Desktop\t1.5 KiB\t10\t2\ttracker.example\n"
 	if output.String() != want {
 		t.Fatalf("piped output = %q, want %q", output.String(), want)
 	}
@@ -40,7 +40,7 @@ func TestRenderSearchResultsUsesHumanSizeAndTerminalWidth(t *testing.T) {
 		Source: "tracker.example",
 	}}
 	var output bytes.Buffer
-	if err := renderSearchTable(&output, results, true, 50); err != nil {
+	if err := renderSearchTable(&output, results, true, 50, qbt.DataUnits("human")); err != nil {
 		t.Fatal(err)
 	}
 	text := output.String()
@@ -52,6 +52,28 @@ func TestRenderSearchResultsUsesHumanSizeAndTerminalWidth(t *testing.T) {
 	}
 	if !strings.Contains(text, "…") {
 		t.Fatalf("terminal output omitted the truncation marker: %q", text)
+	}
+}
+
+func TestRenderSearchResultsBytesModeIsPreciseInBothTextModes(t *testing.T) {
+	results := []qbt.SearchResult{{ID: 1, Name: "Ubuntu", Size: 1536}}
+	for _, tt := range []struct {
+		name string
+		tty  bool
+	}{
+		{name: "piped", tty: false},
+		{name: "terminal", tty: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := renderSearchTable(&output, results, tt.tty, 80, qbt.DataUnits("bytes")); err != nil {
+				t.Fatal(err)
+			}
+			text := output.String()
+			if !strings.Contains(text, "1536 B") || strings.Contains(text, "1.5 KiB") {
+				t.Fatalf("bytes output = %q, want precise bytes", text)
+			}
+		})
 	}
 }
 

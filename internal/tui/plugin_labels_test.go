@@ -10,8 +10,12 @@ import (
 )
 
 func TestSelectedSearchPluginAppearsInTUILabels(t *testing.T) {
-	m := newModel(t.Context(), nil)
+	// The palette hides network actions until a backend is available. Keep this
+	// label test deterministic with the same lightweight service used by the
+	// other TUI unit tests instead of relying on a live qBittorrent connection.
+	m := newModel(t.Context(), &recordingService{})
 	m.searchPlugin = "prowlarr"
+	m.searchPluginDefaultActive = false
 
 	m.openSearchDialog()
 	if m.dialog == nil || m.dialog.title != "Search Prowlarr" {

@@ -61,6 +61,108 @@ func TestShowSingleTorrentInfo(t *testing.T) {
 	}
 }
 
+func TestTorrentHumanPresentationUsesConfiguredUnits(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{
+		Name:       "Ubuntu ISO",
+		Hash:       fullHash,
+		UpLimit:    -1,
+		DLLimit:    0,
+		DLSpeed:    1536,
+		UpSpeed:    2048,
+		Size:       1536,
+		Uploaded:   2048,
+		Downloaded: -1,
+	}}
+
+	app := server.newApp()
+	var buf bytes.Buffer
+	app.Stdout = &buf
+	if err := app.ShowSingleTorrentInfo(fullHash); err != nil {
+		t.Fatalf("ShowSingleTorrentInfo err = %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"unlimited",
+		"0 B/s",
+		"1.5 KiB/s",
+		"2.0 KiB/s",
+		"1.5 KiB",
+		"2.0 KiB",
+		"?",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("human torrent output missing %q: %q", want, out)
+		}
+	}
+
+	buf.Reset()
+	app.DataUnits = DataUnitsBytes
+	if err := app.ShowSingleTorrentFields(fullHash, []string{"size", "dl-speed", "uploaded"}, false); err != nil {
+		t.Fatalf("ShowSingleTorrentFields err = %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "1536 B\t1536 B/s\t2048 B" {
+		t.Fatalf("byte field output = %q", got)
+	}
+
+	buf.Reset()
+	if err := app.ShowAllTorrentsFields([]string{"size", "dl-speed"}, false); err != nil {
+		t.Fatalf("ShowAllTorrentsFields err = %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "1536 B\t1536 B/s" {
+		t.Fatalf("byte list field output = %q", got)
+	}
+
+	buf.Reset()
+	if err := app.GetField(fullHash, "size"); err != nil {
+		t.Fatalf("GetField err = %v", err)
+	}
+	if got := strings.TrimSpace(buf.String()); got != "1536 B" {
+		t.Fatalf("byte GetField size = %q", got)
+	}
+	buf.Reset()
+	if err := app.GetFieldJSON(fullHash, "size"); err != nil {
+		t.Fatalf("GetFieldJSON err = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"size": "1536"`) {
+		t.Fatalf("GetFieldJSON changed raw size: %q", buf.String())
+	}
+
+	fields, err := app.TorrentDisplayFields(fullHash)
+	if err != nil {
+		t.Fatalf("TorrentDisplayFields err = %v", err)
+	}
+	if fields["Size"] != "1536 B" || fields["Speed: Download"] != "1536 B/s" {
+		t.Fatalf("byte display fields = %#v", fields)
+	}
+}
+
+func TestTorrentJSONAndTemplateKeepRawValues(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: fullHash, Size: 1536}}
+	app := server.newApp()
+	app.DataUnits = DataUnitsBytes
+
+	var jsonOut bytes.Buffer
+	app.Stdout = &jsonOut
+	if err := app.ShowSingleTorrentInfoAsJSON(fullHash); err != nil {
+		t.Fatalf("ShowSingleTorrentInfoAsJSON err = %v", err)
+	}
+	if !strings.Contains(jsonOut.String(), `"Size": "1536"`) {
+		t.Fatalf("formatted JSON changed raw size: %q", jsonOut.String())
+	}
+
+	var templateOut bytes.Buffer
+	if err := renderTorrentTemplate(&templateOut, "test", `{{field "size" .}}`, server.Torrents[0]); err != nil {
+		t.Fatalf("renderTorrentTemplate returned error: %v", err)
+	}
+	if strings.TrimSpace(templateOut.String()) != "1536" {
+		t.Fatalf("template field size = %q, want raw 1536", templateOut.String())
+	}
+}
+
 func TestShowSingleTorrentInfoAsJSON(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)

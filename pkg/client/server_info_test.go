@@ -28,6 +28,52 @@ func TestShowServerInfo(t *testing.T) {
 	}
 }
 
+func TestServerHumanPresentationUsesConfiguredUnitsAndSentinels(t *testing.T) {
+	server := newQBTestServer(t)
+	server.TransferInfo = &TransferInfo{
+		DLInfoSpeed:      1536,
+		UPInfoSpeed:      2048,
+		DLInfoData:       1536,
+		UPInfoData:       2048,
+		DLRateLimit:      0,
+		UPRateLimit:      -1,
+		DHTNodes:         42,
+		ConnectionStatus: "connected",
+	}
+	app := server.newApp()
+	var buf bytes.Buffer
+	app.Stdout = &buf
+	if err := app.ShowServerInfo(); err != nil {
+		t.Fatalf("ShowServerInfo err = %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"1.5 KiB/s", "2.0 KiB/s", "1.5 KiB", "2.0 KiB", "unlimited"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("human server output missing %q: %q", want, out)
+		}
+	}
+
+	app.DataUnits = DataUnitsBytes
+	fields, err := app.ServerDisplayFields()
+	if err != nil {
+		t.Fatalf("ServerDisplayFields err = %v", err)
+	}
+	if fields["Speed: Download"] != "1536 B/s" || fields["Transferred: Down"] != "1536 B" {
+		t.Fatalf("byte server display fields = %#v", fields)
+	}
+	if fields["Limit: Download"] != "unlimited" || fields["Limit: Upload"] != "unlimited" {
+		t.Fatalf("server limit sentinels = %#v", fields)
+	}
+
+	buf.Reset()
+	if err := app.ShowServerInfoAsJSON(); err != nil {
+		t.Fatalf("ShowServerInfoAsJSON err = %v", err)
+	}
+	if strings.Contains(buf.String(), "1.5 KiB") || !strings.Contains(buf.String(), `"Speed: Download": "1536"`) {
+		t.Fatalf("formatted server JSON changed raw values: %q", buf.String())
+	}
+}
+
 func TestShowServerInfoAsJSON(t *testing.T) {
 	server := newQBTestServer(t)
 	app := server.newApp()

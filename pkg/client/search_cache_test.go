@@ -35,7 +35,7 @@ func TestCacheSearchResultsRoundTripAndPermissions(t *testing.T) {
 	if err != nil || target.URL != "magnet:?xt=urn:btih:abc" || target.Plugin != "jackett" {
 		t.Fatalf("cached target = %#v, %v", target, err)
 	}
-	path, err := app.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestCacheSearchResultsRetainsSnapshotsAndRejectsOtherScopes(t *testing.T) {
 
 func TestCachedSearchResultRejectsExpiredCache(t *testing.T) {
 	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
-	path, err := app.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestCachedSearchResultRejectsExpiredCache(t *testing.T) {
 
 func TestCachedSearchResultReportsMalformedCache(t *testing.T) {
 	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
-	path, err := app.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestCachedSearchResultReportsMalformedCache(t *testing.T) {
 
 func TestSearchCachePreservesRecentLegacyIDs(t *testing.T) {
 	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
-	path, err := app.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestSearchCachePreservesRecentLegacyIDs(t *testing.T) {
 
 func TestSearchCacheRecoversFromInvalidFile(t *testing.T) {
 	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
-	path, err := app.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestCachedSearchResultReportsUnreadableCache(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", base)
 	app := &App{creds: Credentials{URL: "https://torrent.example/qbt", User: "admin"}}
-	path, err := app.searchCachePath()
+	path, err := SearchResultsCachePath()
 	if err != nil {
 		t.Fatal(err)
 	}

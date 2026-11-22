@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/naterator/qbitctl/pkg/client"
@@ -52,8 +53,20 @@ type queueSync struct {
 // renderer-owned writers without changing the command app. Copying App keeps
 // its underlying Client (and therefore its authenticated cookie jar) shared.
 type tuiClient struct {
-	app        *client.App
-	queueState queueSync
+	app          *client.App
+	queueState   queueSync
+	dataUnitsMu  sync.RWMutex
+	dataUnits    client.DataUnits
+	dataUnitsSet bool
+}
+
+func (c *tuiClient) setDataUnits(mode client.DataUnits) {
+	if c == nil {
+		return
+	}
+	c.dataUnitsMu.Lock()
+	c.dataUnits, c.dataUnitsSet = mode, true
+	c.dataUnitsMu.Unlock()
 }
 
 func (c *tuiClient) searchPlugins(ctx context.Context) ([]searchPluginInfo, error) {
@@ -68,7 +81,13 @@ func (c *tuiClient) withContext(ctx context.Context, stdout, stderr io.Writer) *
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	c.dataUnitsMu.RLock()
+	mode, modeSet := c.dataUnits, c.dataUnitsSet
+	c.dataUnitsMu.RUnlock()
 	clone := *c.app
+	if modeSet {
+		clone.DataUnits = mode
+	}
 	clone.Ctx = ctx
 	clone.Stdout = stdout
 	clone.Stderr = stderr
@@ -334,15 +353,14 @@ func (c *tuiClient) searchResolved(app *client.App, stdout, stderr *bytes.Buffer
 	return results, warning, nil
 }
 
-// details returns the existing detailed torrent presentation as rows. Using
-// ShowSingleTorrentInfoAsJSON keeps formatting, field names, and compatibility
-// behavior in one place. Tracker rows are fetched only when requested.
+// details returns the existing detailed torrent presentation as rows. The
+// client owns unit formatting and sentinel handling; tracker rows are fetched
+// only when requested.
 func (c *tuiClient) details(ctx context.Context, hash string, trackers bool) ([]detailRow, error) {
 	if c == nil || c.app == nil {
 		return nil, fmt.Errorf("qBittorrent client is not configured")
 	}
-	var output bytes.Buffer
-	app := c.withContext(ctx, &output, io.Discard)
+	app := c.withContext(ctx, io.Discard, io.Discard)
 	if trackers {
 		trackers, err := app.FetchTrackerEntries(hash)
 		if err != nil {
@@ -351,14 +369,11 @@ func (c *tuiClient) details(ctx context.Context, hash string, trackers bool) ([]
 		return expandTrackerEntries(trackers), nil
 	}
 
-	if err := app.ShowSingleTorrentInfoAsJSON(hash); err != nil {
+	fields, err := app.TorrentDisplayFields(hash)
+	if err != nil {
 		return nil, err
 	}
-	rows, err := decodeRows(output.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("decode torrent details: %w", err)
-	}
-	return orderRows(rows, detailRowOrder), nil
+	return orderRows(detailRowsFromMap(fields), detailRowOrder), nil
 }
 
 // server returns the server/transfer summary in the same order as the
@@ -368,16 +383,12 @@ func (c *tuiClient) server(ctx context.Context) ([]detailRow, error) {
 	if c == nil || c.app == nil {
 		return nil, fmt.Errorf("qBittorrent client is not configured")
 	}
-	var output bytes.Buffer
-	app := c.withContext(ctx, &output, io.Discard)
-	if err := app.ShowServerInfoAsJSON(); err != nil {
+	app := c.withContext(ctx, io.Discard, io.Discard)
+	fields, err := app.ServerDisplayFields()
+	if err != nil {
 		return nil, err
 	}
-	rows, err := decodeRows(output.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("decode server details: %w", err)
-	}
-	return orderRows(rows, serverRowOrder), nil
+	return orderRows(detailRowsFromMap(fields), serverRowOrder), nil
 }
 
 // action executes one TUI mutation against the shared authenticated client.
@@ -472,6 +483,14 @@ func decodeRows(data []byte) ([]detailRow, error) {
 		rows = append(rows, detailRow{label: label, value: value})
 	}
 	return rows, nil
+}
+
+func detailRowsFromMap(values map[string]string) []detailRow {
+	rows := make([]detailRow, 0, len(values))
+	for label, value := range values {
+		rows = append(rows, detailRow{label: label, value: value})
+	}
+	return rows
 }
 
 func expandTrackerRows(rows []detailRow) []detailRow {

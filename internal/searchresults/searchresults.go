@@ -123,20 +123,7 @@ func ParseSize(raw string) (int64, error) {
 
 // FormatSize formats a byte count using the same binary units as the TUI.
 func FormatSize(value int64) string {
-	if value < 0 {
-		return "?"
-	}
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
-	amount := float64(value)
-	unit := 0
-	for amount >= 1024 && unit < len(units)-1 {
-		amount /= 1024
-		unit++
-	}
-	if unit == 0 {
-		return fmt.Sprintf("%d %s", value, units[unit])
-	}
-	return fmt.Sprintf("%.1f %s", amount, units[unit])
+	return client.DataUnitsHuman.FormatSize(value)
 }
 
 // Filter selects search results by free-form text and numeric bounds.

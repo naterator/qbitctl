@@ -127,6 +127,7 @@ func makeHiddenInput(in io.Reader, out io.Writer) qbt.HiddenInputFunc {
 func newRootCmd() *cobra.Command {
 	var opts CLIOptions
 	var passStdin bool
+	unitsValue := ""
 
 	rootCmd := &cobra.Command{
 		Use:           "qbitctl",
@@ -137,6 +138,11 @@ func newRootCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		Annotations:   map[string]string{stdinModeAnnotation: stdinInteractive},
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			units, err := parseDataUnits(unitsValue)
+			if err != nil {
+				return result(cmd, err)
+			}
+			opts.DataUnits = units
 			return result(cmd, resolvePassword(cmd, &opts, passStdin))
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -161,6 +167,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().StringVarP(&opts.User, "user", "U", "", "qBittorrent username")
 	rootCmd.PersistentFlags().StringVarP(&opts.Pass, "pass", "p", "", "qBittorrent password (visible in process arguments; prefer --pass-stdin or QBITCTL_PASSWORD)")
 	rootCmd.PersistentFlags().BoolVar(&passStdin, "pass-stdin", false, "Read the qBittorrent password from standard input")
+	rootCmd.PersistentFlags().StringVar(&unitsValue, "units", "", "Data-size output units: human or bytes; empty uses config (human fallback)")
 	rootCmd.MarkFlagsMutuallyExclusive("pass", "pass-stdin")
 
 	rootCmd.AddCommand(

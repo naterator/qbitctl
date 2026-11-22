@@ -72,6 +72,22 @@ func (m *model) toggleTUIDefault() tea.Cmd {
 	})
 }
 
+func (m *model) toggleDataUnits() tea.Cmd {
+	next := client.DataUnitsBytes
+	if m.dataUnits == client.DataUnitsBytes {
+		next = client.DataUnitsHuman
+	}
+	if m.configPath == "" {
+		m.applyDataUnits(next)
+		m.setNotice("Data units selected for this session", false)
+		return nil
+	}
+	return m.startWork(configWork, "Saving data-unit preference", func(context.Context) workDone {
+		err := client.SetDataUnits(m.configPath, next)
+		return workDone{setDataUnits: &next, err: err}
+	})
+}
+
 func (m *model) saveConfig(values client.Credentials, tuiDefault bool) tea.Cmd {
 	if m.busy != "" {
 		if m.dialog != nil {
@@ -221,6 +237,8 @@ func runConfigurableConnecting(ctx context.Context, opts client.Options, setup s
 	m := newModel(sessionCtx, nil)
 	m.page = queuePage
 	m.setup = setup
+	m.dataUnits = opts.DataUnits
+	m.dataUnitsExplicit = opts.DataUnits != ""
 	m.configPath = setup.path
 	if m.configPath == "" {
 		m.configPath = opts.ConfigPath
@@ -278,6 +296,8 @@ func runConfigurableApp(ctx context.Context, app *client.App, setup setupState, 
 	m := newModel(sessionCtx, &tuiClient{app: app})
 	m.app, m.ownsApp = app, true
 	m.setup = setup
+	m.dataUnits = app.DataUnits
+	m.applyDataUnits(m.dataUnits)
 	m.configPath = setup.path
 	if m.configPath == "" {
 		m.configPath = app.ConfigPath()
@@ -291,6 +311,8 @@ func runConfigurableBootstrap(ctx context.Context, opts client.Options, setup se
 	m := newModel(sessionCtx, nil)
 	m.page = configPage
 	m.setup = setup
+	m.dataUnits = opts.DataUnits
+	m.dataUnitsExplicit = opts.DataUnits != ""
 	m.configPath = setup.path
 	if m.configPath == "" {
 		m.configPath = opts.ConfigPath

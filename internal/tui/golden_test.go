@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -23,6 +24,7 @@ type goldenCase struct {
 
 func TestGoldenFrames(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(goldenConfigRoot(), "cache"))
 	for _, tc := range goldenCases() {
 		for _, size := range []struct{ width, height int }{{80, 24}, {120, 40}} {
 			t.Run(fmt.Sprintf("%s/%dx%d", tc.name, size.width, size.height), func(t *testing.T) {
@@ -33,6 +35,13 @@ func TestGoldenFrames(t *testing.T) {
 			})
 		}
 	}
+}
+
+func goldenConfigRoot() string {
+	if runtime.GOOS == "windows" {
+		return `C:\`
+	}
+	return "/t/"
 }
 
 func TestStyledGoldenThemes(t *testing.T) {
@@ -118,10 +127,10 @@ func goldenCases() []goldenCase {
 			m.setNotice("server request failed", true)
 		}},
 		{name: "config-saved-password", setup: func(m *model) {
-			m.page, m.setup = configPage, setupState{path: "/tmp/qbitctl/config.json", url: "https://qbt.test/qbt", user: "admin", hasPassword: true, tuiDefault: true, ready: true}
+			m.page, m.setup = configPage, setupState{path: filepath.Join(goldenConfigRoot(), "qbitctl", "config.json"), url: "https://qbt.test/qbt", user: "admin", hasPassword: true, tuiDefault: true, ready: true}
 		}},
 		{name: "config-first-run-form", setup: func(m *model) {
-			m.page, m.setup = configPage, setupState{path: "/tmp/qbitctl/config.json"}
+			m.page, m.setup = configPage, setupState{path: filepath.Join(goldenConfigRoot(), "qbitctl", "config.json")}
 			m.openConfigDialog()
 		}},
 		{name: "config-theme-picker", setup: func(m *model) {
@@ -158,6 +167,10 @@ func assertGoldenFrame(t *testing.T, name string, m *model) {
 	frame := m.View().Content
 	assertFrameSize(t, frame, m.width, m.height)
 	got := normalizeGoldenFrame(frame)
+	if runtime.GOOS == "windows" && m.page == configPage {
+		// Keep both fixture roots the same width before comparing path display.
+		got = strings.ReplaceAll(filepath.ToSlash(got), "C:/", "/t/")
+	}
 	path := filepath.Join("testdata", "frames", name+".txt")
 	if *updateGoldenFrames {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -4,9 +4,9 @@
   Keyboard shortcuts
 
   Navigate                               Config                                 Queue
-  ↑/↓ · j/k  Move                        enter  Edit connection                 /      Filter queue
-  pgup/pgdn  Page                        d      Toggle TUI default              o      Sort queue
-  home/end   Top / bottom                c      Choose color scheme             enter  Torrent details
+  ↑/↓ · j/k  Move                        ↑/↓ · j/k  Move between settings       /      Filter queue
+  pgup/pgdn  Page                        enter      Change the selected sett…   o      Sort queue
+  home/end   Top / bottom                                                       enter  Torrent details
   tab/⇧tab   Switch tabs                                                        space  Mark torrent
   1/2/3/4    Jump to a tab                                                      esc    Clear marks
                                                                                 a      Add torrent

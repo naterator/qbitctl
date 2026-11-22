@@ -153,7 +153,43 @@ func torrentFieldValue(t TorrentInfo, field string) string {
 	}
 }
 
-func writeTorrentFieldRows(w io.Writer, torrents []TorrentInfo, fields []string, header bool) error {
+// torrentDisplayFieldValue formats the fields that are intended for people to
+// read. The raw torrentFieldValue function is deliberately kept separate: it
+// is also used by --json and Go templates, whose existing values are part of
+// the CLI contract.
+func torrentDisplayFieldValue(units DataUnits, t TorrentInfo, field string) string {
+	switch field {
+	case "up-limit":
+		return formatTorrentRateLimit(units, t.UpLimit)
+	case "dl-limit":
+		return formatTorrentRateLimit(units, t.DLLimit)
+	case "up-speed":
+		return units.FormatRate(t.UpSpeed)
+	case "dl-speed":
+		return units.FormatRate(t.DLSpeed)
+	case "size":
+		return units.FormatSize(t.Size)
+	case "uploaded":
+		return units.FormatSize(t.Uploaded)
+	case "downloaded":
+		return units.FormatSize(t.Downloaded)
+	default:
+		return torrentFieldValue(t, field)
+	}
+}
+
+func formatTorrentRateLimit(units DataUnits, value int64) string {
+	switch value {
+	case -1:
+		return "unlimited"
+	case -2:
+		return "global"
+	default:
+		return units.FormatRate(value)
+	}
+}
+
+func writeTorrentFieldRows(w io.Writer, torrents []TorrentInfo, fields []string, header bool, units DataUnits) error {
 	writer := csv.NewWriter(w)
 	writer.Comma = '\t'
 
@@ -166,7 +202,7 @@ func writeTorrentFieldRows(w io.Writer, torrents []TorrentInfo, fields []string,
 	for _, torrent := range torrents {
 		row := make([]string, 0, len(fields))
 		for _, field := range fields {
-			row = append(row, torrentFieldValue(torrent, field))
+			row = append(row, torrentDisplayFieldValue(units, torrent, field))
 		}
 		if err := writer.Write(row); err != nil {
 			return err

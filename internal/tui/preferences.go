@@ -30,6 +30,7 @@ func tuiPreferencesDir() (string, error) {
 func (m *model) loadPreferences(path string) {
 	m.preferencesPath = path
 	m.loadSavedSearchPlugin(path)
+	m.loadDataUnits(path)
 	if path == "" {
 		return
 	}
@@ -47,6 +48,18 @@ func (m *model) loadPreferences(path string) {
 		m.preferenceNotice(fmt.Errorf("search preferences: %w", err))
 	}
 	m.loadTheme(path)
+}
+
+func (m *model) loadDataUnits(path string) {
+	if m.dataUnitsExplicit || strings.TrimSpace(path) == "" {
+		return
+	}
+	mode, err := client.ReadDataUnits(path)
+	if err != nil {
+		m.preferenceNotice(fmt.Errorf("data units: %w", err))
+		return
+	}
+	m.applyDataUnits(mode)
 }
 
 // loadSavedSearchPlugin reads the provider preference independently of the

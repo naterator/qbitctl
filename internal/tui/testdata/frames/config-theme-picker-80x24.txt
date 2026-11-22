@@ -21,4 +21,4 @@
 
     ↑/↓ preview   enter save   esc cancel
 
-  enter edit   d toggle default   c colors   q quit
+  ↑/↓ · j/k move   enter change   q quit

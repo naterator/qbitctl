@@ -76,6 +76,17 @@ type searchCommandOptions struct {
 	limit  int
 }
 
+func parseDataUnits(value string) (qbt.DataUnits, error) {
+	if strings.TrimSpace(value) == "" {
+		return qbt.DataUnits(""), nil
+	}
+	parsed, err := qbt.ParseDataUnits(value)
+	if err != nil {
+		return qbt.DataUnits(""), codedErr(exitBadArgs, err.Error())
+	}
+	return parsed, nil
+}
+
 func parseSearchCommandOptions(sortValue string, minSeeders int64, minSeedersSet bool, minSize string, minSizeSet bool, maxSize string, maxSizeSet bool, filterValue string, limit int) (searchCommandOptions, error) {
 	sort, err := searchresults.ParseSort(sortValue)
 	if err != nil {
@@ -109,9 +120,13 @@ func parseSearchCommandOptions(sortValue string, minSeeders int64, minSeedersSet
 	return searchCommandOptions{sort: sort, filter: filter, limit: limit}, nil
 }
 
-func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width int) error {
+func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width int, units qbt.DataUnits) error {
+	unitHeader := "Size"
+	if strings.EqualFold(string(units), "bytes") {
+		unitHeader = "Size (bytes)"
+	}
 	if !tty {
-		if _, err := fmt.Fprintln(w, "ID\tName\tSize (bytes)\tSeeders\tLeechers\tSource"); err != nil {
+		if _, err := fmt.Fprintf(w, "ID\tName\t%s\tSeeders\tLeechers\tSource\n", unitHeader); err != nil {
 			return err
 		}
 		for _, item := range results {
@@ -119,10 +134,10 @@ func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width 
 			if item.ID != 0 {
 				id = fmt.Sprintf("%d", item.ID)
 			}
-			if _, err := fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%s\n",
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n",
 				id,
 				sanitizeSearchText(item.Name),
-				item.Size,
+				units.FormatSize(item.Size),
 				item.Seeders,
 				item.Leechers,
 				sanitizeSearchText(item.Source),
@@ -143,7 +158,7 @@ func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width 
 		nameWidth = 8
 	}
 	table := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "ID\tName\tSize\tSeeders\tLeechers\tSource"); err != nil {
+	if _, err := fmt.Fprintf(table, "ID\tName\t%s\tSeeders\tLeechers\tSource\n", unitHeader); err != nil {
 		return err
 	}
 	for _, item := range results {
@@ -154,7 +169,7 @@ func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width 
 		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\n",
 			id,
 			truncateSearchName(sanitizeSearchText(item.Name), nameWidth),
-			searchresults.FormatSize(item.Size),
+			units.FormatSize(item.Size),
 			item.Seeders,
 			item.Leechers,
 			sanitizeSearchText(item.Source),

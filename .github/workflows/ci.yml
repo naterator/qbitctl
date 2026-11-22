@@ -16,20 +16,8 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - name: Format, vet, and native tests
-        run: |
-          test -z "$(gofmt -l cmd internal pkg)"
-          go vet ./...
-          go test -race ./...
-      - name: Native binary and API smoke
-        run: |
-          go build -trimpath -o qbitctl-smoke ./cmd/qbitctl
-          python3 scripts/smoke_native.py ./qbitctl-smoke
-          python3 scripts/smoke_pty.py ./qbitctl-smoke
-      - name: Validate release workflow helpers and targets
-        run: |
-          sh scripts/test_release_helpers.sh
-          sh scripts/test_release_targets.sh
+      - name: Check formatting, tests, smoke, and release helpers
+        run: make ci
 
   compatibility:
     name: qBittorrent compatibility (${{ matrix.version }})

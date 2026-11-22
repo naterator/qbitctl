@@ -148,9 +148,9 @@ func (a *App) SetSeedtimeLimit(hash, seedtimeStr string) error {
 }
 
 func (a *App) SetRatioLimit(hash, ratioStr string) error {
-	ratio, err := strconv.ParseFloat(ratioStr, 64)
-	if err != nil || ratio < 0 {
-		return codedErrf(ExitBadArgs, "Invalid ratio value: %s", ratioStr)
+	ratio, err := parseRatioLimit(ratioStr)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "%v", err)
 	}
 	torrents, err := a.torrentsForHashes(splitHashList(hash))
 	if err != nil {

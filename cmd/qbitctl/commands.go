@@ -172,7 +172,12 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"l", "li", "ls"},
 		Short:   "List all torrents",
 		GroupID: "view",
-		Args:    cobra.NoArgs,
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.NoArgs(cmd, args); err != nil {
+				return err
+			}
+			return validateOutputArgs(cmd, tmpl, fieldsValue, noHeader)
+		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
@@ -196,6 +201,7 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
 	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
 	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
+	cmd.MarkFlagsMutuallyExclusive("server-json", "json", "template", "fields")
 	return cmd
 }
 
@@ -275,7 +281,12 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"s", "sh"},
 		Short:   "Show info for a single torrent",
 		GroupID: "view",
-		Args:    cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+				return err
+			}
+			return validateOutputArgs(cmd, tmpl, fieldsValue, noHeader)
+		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[0])
 			if err != nil {
@@ -303,6 +314,7 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
 	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
 	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
+	cmd.MarkFlagsMutuallyExclusive("server-json", "json", "template", "fields")
 	return cmd
 }
 
@@ -316,7 +328,7 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 		Long: "Read one torrent property.\n\nAvailable fields:\n" +
 			wrapFields(getFieldNames, "  ", 72),
 		GroupID:   "view",
-		Args:      cobra.ExactArgs(2),
+		Args:      validateOutputModeFlags,
 		ValidArgs: getFieldNames,
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[1])
@@ -334,11 +346,13 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
+	cmd.MarkFlagsMutuallyExclusive("server-json", "json")
+	cmd.Args = cobra.MatchAll(cmd.Args, validateFieldArg(0, qbt.IsGetField, qbt.CanonicalGetField, "get"))
 	return cmd
 }
 
 func newSetCmd(opts *CLIOptions) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:     "set <field> <value> <hash>",
 		Aliases: []string{"se"},
 		Short:   "Update one torrent property",
@@ -350,7 +364,7 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 			"                              -1 unlimited, -2 global limit\n" +
 			"  seqdl / autotmm / superseed true or false",
 		GroupID:   "change",
-		Args:      cobra.ExactArgs(3),
+		Args:      validateSetArgs,
 		ValidArgs: setFieldNames,
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[2])
@@ -360,6 +374,7 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 			return app.SetField(hash, qbt.CanonicalSetField(args[0]), args[1])
 		}),
 	}
+	return cmd
 }
 
 func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*App, string) error) *cobra.Command {

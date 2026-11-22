@@ -145,6 +145,9 @@ func newRootCmd() *cobra.Command {
 	}
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.SetVersionTemplate("qbitctl {{.Version}}\n")
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return codedErr(exitBadArgs, err.Error())
+	})
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "view", Title: "View:"},

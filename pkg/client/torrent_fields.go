@@ -193,9 +193,13 @@ func torrentTemplateFuncs() template.FuncMap {
 }
 
 func renderTorrentTemplate(w io.Writer, name, tmpl string, data any) error {
-	parsed, err := template.New(name).Funcs(torrentTemplateFuncs()).Parse(tmpl)
+	parsed, err := parseTorrentTemplate(name, tmpl)
 	if err != nil {
 		return err
 	}
 	return parsed.Execute(w, data)
+}
+
+func parseTorrentTemplate(name, tmpl string) (*template.Template, error) {
+	return template.New(name).Funcs(torrentTemplateFuncs()).Parse(tmpl)
 }

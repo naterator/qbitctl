@@ -68,7 +68,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Exercise Windows updater replacement and rollback
-        run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|Windows.*)' -count=1
+        run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|Windows.*)|TestRemovePreviousExecutable' -count=1
 
   govulncheck:
     runs-on: ubuntu-26.04

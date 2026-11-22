@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -210,5 +211,6 @@ func execute() int {
 }
 
 func main() {
+	removePreviousExecutable(runtime.GOOS, os.Executable, os.Remove)
 	os.Exit(execute())
 }

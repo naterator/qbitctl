@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,6 +47,25 @@ func TestCacheSearchResultsRoundTripAndPermissions(t *testing.T) {
 		if runtime.GOOS != "windows" && info.Mode().Perm() != want {
 			t.Errorf("%s permissions = %v, want %v", cachePath, info.Mode().Perm(), want)
 		}
+	}
+}
+
+func TestSearchCacheUsesSymlinkedCacheHome(t *testing.T) {
+	realBase := t.TempDir()
+	linkBase := filepath.Join(t.TempDir(), "cache-link")
+	if err := os.Symlink(realBase, linkBase); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("XDG_CACHE_HOME", linkBase)
+	app := &App{creds: Credentials{URL: "https://torrent.example/qbt", User: "admin"}}
+	results := []SearchResult{{downloadURL: "https://download.example/result.torrent"}}
+
+	if err := app.CacheSearchResults(results); err != nil {
+		t.Fatalf("cache through symlinked home: %v", err)
+	}
+	path := filepath.Join(realBase, searchCacheDirName, searchCacheFileName)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("real cache path stat error = %v", err)
 	}
 }
 
@@ -111,6 +131,31 @@ func TestCachedSearchResultRejectsExpiredCache(t *testing.T) {
 		if _, err := app.cachedSearchResult(id); !errors.Is(err, errSearchCacheUnavailable) {
 			t.Fatalf("invalid timestamp for %d returned error %v", id, err)
 		}
+	}
+}
+
+func TestCachedSearchResultReportsMalformedCache(t *testing.T) {
+	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
+	path, err := app.searchCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = app.cachedSearchResult(123456789012)
+	if !errors.Is(err, errSearchCacheUnreadable) {
+		t.Fatalf("malformed cache error = %v, want errSearchCacheUnreadable", err)
+	}
+	if errors.Is(err, errSearchCacheUnavailable) {
+		t.Fatalf("malformed cache error = %v, unexpectedly unavailable", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected end of JSON input") {
+		t.Fatalf("malformed cache error = %v, want parse cause", err)
 	}
 }
 
@@ -180,5 +225,82 @@ func TestSearchCacheSerializesConcurrentWriters(t *testing.T) {
 		if err != nil || target.URL != result.downloadURL {
 			t.Errorf("lost result %d, target = %v, %v", result.ID, target, err)
 		}
+	}
+}
+
+func TestSearchCacheWriteReportsDirectoryCause(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "cache-file")
+	if err := os.WriteFile(base, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CACHE_HOME", base)
+	app := &App{creds: Credentials{URL: "https://torrent.example/qbt", User: "admin"}}
+
+	err := app.CacheSearchResults([]SearchResult{{downloadURL: "https://download.example/result.torrent"}})
+	if !errors.Is(err, errSearchCacheWrite) {
+		t.Fatalf("cache write error = %v, want errSearchCacheWrite", err)
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("cache write error = %v, want not-a-directory cause", err)
+	}
+}
+
+func TestSearchCacheWriteReportsPermissionCause(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permission checks are not reliable on this platform or as root")
+	}
+	base := t.TempDir()
+	if err := os.Chmod(base, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
+	t.Setenv("XDG_CACHE_HOME", base)
+	app := &App{creds: Credentials{URL: "https://torrent.example/qbt", User: "admin"}}
+
+	err := app.CacheSearchResults([]SearchResult{{downloadURL: "https://download.example/result.torrent"}})
+	if !errors.Is(err, errSearchCacheWrite) {
+		t.Fatalf("cache write error = %v, want errSearchCacheWrite", err)
+	}
+	if !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("cache write error = %v, want permission-denied cause", err)
+	}
+}
+
+func TestCachedSearchResultReportsUnreadableCache(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file permission checks are not reliable on this platform or as root")
+	}
+	base := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", base)
+	app := &App{creds: Credentials{URL: "https://torrent.example/qbt", User: "admin"}}
+	path, err := app.searchCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":2}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	_, err = app.cachedSearchResult(123456789012)
+	if !errors.Is(err, errSearchCacheUnreadable) {
+		t.Fatalf("cache read error = %v, want errSearchCacheUnreadable", err)
+	}
+	if strings.Contains(err.Error(), "Run qbitctl search again") {
+		t.Fatalf("unreadable cache error gave unavailable advice: %v", err)
+	}
+}
+
+func TestCachedSearchResultMissingCacheStaysUnavailable(t *testing.T) {
+	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
+	_, err := app.cachedSearchResult(123456789012)
+	if !errors.Is(err, errSearchCacheUnavailable) {
+		t.Fatalf("missing cache error = %v, want errSearchCacheUnavailable", err)
 	}
 }

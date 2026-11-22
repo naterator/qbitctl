@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,7 @@ const (
 
 var (
 	errSearchCacheUnavailable = errors.New("search result ID is unavailable or expired. Run qbitctl search again")
+	errSearchCacheUnreadable  = errors.New("could not read the local search cache")
 	errSearchCacheWrite       = errors.New("could not save result IDs to the local search cache")
 )
 
@@ -63,10 +65,10 @@ type searchCacheResult struct {
 func (a *App) CacheSearchResults(results []SearchResult) error {
 	path, err := a.searchCachePath()
 	if err != nil {
-		return errSearchCacheWrite
+		return fmt.Errorf("%w: %w", errSearchCacheWrite, err)
 	}
 	if err := prepareSearchCache(path); err != nil {
-		return errSearchCacheWrite
+		return fmt.Errorf("%w: %w", errSearchCacheWrite, err)
 	}
 	ids := make([]int64, len(results))
 	for i := range results {
@@ -112,7 +114,7 @@ func (a *App) CacheSearchResults(results []SearchResult) error {
 		return true, nil
 	})
 	if err != nil {
-		return errSearchCacheWrite
+		return fmt.Errorf("%w: %w", errSearchCacheWrite, err)
 	}
 	for i, id := range ids {
 		results[i].ID = id
@@ -126,14 +128,21 @@ func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {
 	}
 	path, err := a.searchCachePath()
 	if err != nil {
-		return cachedSearchTarget{}, errSearchCacheUnavailable
+		return cachedSearchTarget{}, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return cachedSearchTarget{}, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
+		}
 		return cachedSearchTarget{}, errSearchCacheUnavailable
 	}
+	searches, err := parseSearches(data)
+	if err != nil {
+		return cachedSearchTarget{}, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
+	}
 	scope := a.searchScope()
-	for _, snapshot := range retainSearches(decodeSearches(data), time.Now()) {
+	for _, snapshot := range retainSearches(searches, time.Now()) {
 		if snapshot.searchScope != scope {
 			continue
 		}
@@ -151,17 +160,22 @@ func (a *App) searchScope() searchScope {
 }
 
 func decodeSearches(data []byte) []searchSnapshot {
+	searches, _ := parseSearches(data)
+	return searches
+}
+
+func parseSearches(data []byte) ([]searchSnapshot, error) {
 	var cache searchCacheFile
-	if json.Unmarshal(data, &cache) != nil {
-		return nil
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
 	}
 	switch cache.Version {
 	case 1:
-		return []searchSnapshot{cache.searchSnapshot}
+		return []searchSnapshot{cache.searchSnapshot}, nil
 	case searchCacheVersion:
-		return cache.Searches
+		return cache.Searches, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -219,17 +233,36 @@ func newSearchCacheID(used map[int64]struct{}) (int64, error) {
 
 func prepareSearchCache(path string) error {
 	dir := filepath.Dir(path)
+	for current := dir; ; current = filepath.Dir(current) {
+		info, err := os.Stat(current)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("search cache directory %q is not a directory", current)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
-		return errors.New("invalid search cache directory")
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("search cache directory %q is not a directory", dir)
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
-		return errors.New("invalid search cache file")
+		return fmt.Errorf("search cache file %q is not a regular file", path)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

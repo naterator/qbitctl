@@ -25,11 +25,13 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+    - name: Install Go from go.mod
+      uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
       with:
         go-version-file: go.mod
         cache: false
-    - id: paths
+    - name: Find Go cache paths
+      id: paths
       shell: bash
       run: |
         {
@@ -41,14 +43,21 @@ runs:
     # The key changes with dependencies or the Go version (both in go.mod), so
     # main saves a cache once per change. Code-only changes recompile just
     # qbitctl's own packages on top of the restored cache.
-    - id: key
+    - name: Compute and validate Go cache key
+      id: key
       shell: bash
       run: |
         prefix="go-${{ inputs.cache-name }}-${{ runner.os }}-${{ runner.arch }}-"
+        key="${prefix}${{ hashFiles('go.mod', 'go.sum') }}"
+        if [[ ! "$key" =~ ^go-[a-z0-9-]+-(Linux|macOS|Windows)-(X64|ARM64)-[0-9a-f]{64}$ ]]; then
+          echo "::error::Malformed Go cache key: $key"
+          exit 1
+        fi
         echo "prefix=${prefix}" >> "$GITHUB_OUTPUT"
-        echo "key=${prefix}${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+        echo "key=${key}" >> "$GITHUB_OUTPUT"
     # A cache problem should only cost time, never fail CI.
-    - id: restore
+    - name: Restore Go cache
+      id: restore
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:

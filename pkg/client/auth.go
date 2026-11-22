@@ -613,7 +613,8 @@ func ValidateConfigURL(value string) (string, error) {
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func promptLineTo(out io.Writer, reader *bufio.Reader, prompt, defaultValue string) (string, error) {
+// readPromptLine preserves io.EOF alongside any final unterminated input.
+func readPromptLine(out io.Writer, reader *bufio.Reader, prompt string) (string, error) {
 	fmt.Fprint(out, prompt)
 	text, err := reader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -621,23 +622,47 @@ func promptLineTo(out io.Writer, reader *bufio.Reader, prompt, defaultValue stri
 	}
 	text = strings.TrimRight(text, "\r\n")
 	if text == "quit" {
-		return "", fmt.Errorf("quit")
+		return "", errors.New("quit")
 	}
-	if text == "" {
+	return text, err
+}
+
+func promptLineTo(out io.Writer, reader *bufio.Reader, prompt, defaultValue string) (string, error) {
+	value, err := readPromptLine(out, reader, prompt)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	if value == "" {
 		return defaultValue, nil
 	}
-	return text, nil
+	return value, nil
 }
 
 func promptValidatedLine(out io.Writer, reader *bufio.Reader, prompt, defaultValue string, validate func(string) (string, error)) (string, error) {
-	for {
-		value, err := promptLineTo(out, reader, prompt, defaultValue)
-		if err != nil {
+	const maxPromptAttempts = 5
+	var previousValidationErr error
+	for attempt := 1; ; attempt++ {
+		value, err := readPromptLine(out, reader, prompt)
+		ended := errors.Is(err, io.EOF)
+		if err != nil && !ended {
 			return "", err
+		}
+		if value == "" {
+			if ended && previousValidationErr != nil {
+				return "", fmt.Errorf("%w: %v", ErrSetupInputEnded, previousValidationErr)
+			}
+			value = defaultValue
 		}
 		normalized, err := validate(value)
 		if err == nil {
 			return normalized, nil
+		}
+		previousValidationErr = err
+		if ended {
+			return "", fmt.Errorf("%w: %v", ErrSetupInputEnded, err)
+		}
+		if attempt >= maxPromptAttempts {
+			return "", fmt.Errorf("%w: invalid value after %d attempts: %v", ErrSetupInputEnded, maxPromptAttempts, err)
 		}
 		fmt.Fprintf(out, "[ERROR] %v\n", err)
 	}

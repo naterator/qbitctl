@@ -32,6 +32,10 @@ type Setup struct {
 // password is available for the same server origin.
 var ErrSetupPasswordRequired = errors.New("password required to connect")
 
+// ErrSetupInputEnded indicates that setup input ended before a valid value
+// could be entered, or that the prompt exceeded its bounded retry budget.
+var ErrSetupInputEnded = errors.New("setup input ended before a valid value was entered")
+
 // ErrPasswordRequired is a concise alias for callers that do not need to
 // distinguish setup-specific password prompts.
 var ErrPasswordRequired = ErrSetupPasswordRequired
@@ -51,6 +55,12 @@ func (s Setup) Ready() bool {
 // migrating, or rewriting its password. Explicit --config paths are selected
 // even when they do not exist yet so the setup UI can create a first config.
 func ReadSetup(opts Options) (Setup, error) {
+	setup, err := readSetup(opts)
+	setup.URL = redactSetupURL(setup.URL)
+	return setup, err
+}
+
+func readSetup(opts Options) (Setup, error) {
 	path := opts.ConfigPath
 	if path == "" {
 		for _, candidate := range defaultAuthSearchPaths() {
@@ -81,7 +91,6 @@ func ReadSetup(opts Options) (Setup, error) {
 		if err != nil {
 			return Setup{}, err
 		}
-		setup.URL = redactSetupURL(setup.URL)
 	}
 	if value, ok := configValue(object, "user"); ok {
 		setup.User, err = decodeSetupString("user", value)
@@ -114,7 +123,7 @@ func ReadSetup(opts Options) (Setup, error) {
 	// Command-line values are intentional overrides, but empty flags must not
 	// erase values discovered from the selected config file.
 	if opts.URL != "" {
-		setup.URL = redactSetupURL(opts.URL)
+		setup.URL = opts.URL
 	}
 	if opts.User != "" {
 		setup.User = opts.User
@@ -369,13 +378,18 @@ func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, 
 	if profilePath == "" {
 		profilePath = defaultAuthPath()
 	}
-	profile, err := ReadSetup(Options{ConfigPath: profilePath})
+	profile, err := readSetup(Options{ConfigPath: profilePath})
 	if err != nil {
 		return "", err
 	}
-	urlDefault := profile.URL
-	if urlDefault == "" {
-		urlDefault = defaultConfigURL
+	urlDefault := defaultConfigURL
+	if strings.TrimSpace(profile.URL) != "" {
+		normalizedURL, validationErr := ValidateConfigURL(profile.URL)
+		if validationErr != nil {
+			fmt.Fprintf(out, "[WARN] Saved URL is invalid (%v). Enter a new URL.\n", validationErr)
+		} else {
+			urlDefault = normalizedURL
+		}
 	}
 	userDefault := profile.User
 	if userDefault == "" {

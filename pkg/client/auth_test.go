@@ -593,6 +593,53 @@ func TestPromptLineDefaultAndQuit(t *testing.T) {
 	}
 }
 
+func TestReadPromptLineReportsEnded(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantValue string
+		wantEnded bool
+	}{
+		{name: "empty EOF", input: "", wantEnded: true},
+		{name: "final line", input: "x", wantValue: "x", wantEnded: true},
+		{name: "newline", input: "x\n", wantValue: "x", wantEnded: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := readPromptLine(io.Discard, bufio.NewReader(strings.NewReader(test.input)), "Prompt: ")
+			ended := errors.Is(err, io.EOF)
+			if err != nil && !ended {
+				t.Fatalf("readPromptLine returned error: %v", err)
+			}
+			if value != test.wantValue || ended != test.wantEnded {
+				t.Fatalf("readPromptLine = (%q, %t), want (%q, %t)", value, ended, test.wantValue, test.wantEnded)
+			}
+		})
+	}
+}
+
+func TestPromptValidatedLineStopsAtEOFAfterInvalidEntry(t *testing.T) {
+	var output strings.Builder
+	_, err := promptValidatedLine(&output, bufio.NewReader(strings.NewReader("ftp://x\n")), "URL [ftp://x]: ", "ftp://x", ValidateConfigURL)
+	if !errors.Is(err, ErrSetupInputEnded) {
+		t.Fatalf("promptValidatedLine error = %v, want ErrSetupInputEnded", err)
+	}
+	if count := strings.Count(output.String(), "[ERROR]"); count != 1 {
+		t.Fatalf("validation error count = %d, want one: %q", count, output.String())
+	}
+}
+
+func TestPromptValidatedLineLimitsInvalidAttempts(t *testing.T) {
+	var output strings.Builder
+	_, err := promptValidatedLine(&output, bufio.NewReader(strings.NewReader(strings.Repeat("bad\n", 6))), "URL [bad]: ", "bad", ValidateConfigURL)
+	if !errors.Is(err, ErrSetupInputEnded) {
+		t.Fatalf("promptValidatedLine error = %v, want ErrSetupInputEnded", err)
+	}
+	if count := strings.Count(output.String(), "[ERROR]"); count != 4 {
+		t.Fatalf("validation error count = %d, want four before the fifth bounded attempt: %q", count, output.String())
+	}
+}
+
 func TestInteractiveConfigValidatesURLAndSaves(t *testing.T) {
 	withMockMasterKey(t)
 	server := newQBTestServer(t)

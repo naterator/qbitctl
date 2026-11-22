@@ -396,3 +396,92 @@ func TestInteractiveConfigContextRejectsInvalidURLBeforeConnecting(t *testing.T)
 		t.Fatalf("login calls = %d, want one after URL correction", server.LoginCalls)
 	}
 }
+
+func TestInteractiveConfigStopsAtEOFWithInvalidSavedURL(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"url":"localhost:9999","user":"admin","password":""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	_, err := InteractiveConfigContext(context.Background(), strings.NewReader(""), &output, nil, path)
+	if !errors.Is(err, ErrSetupPasswordRequired) {
+		t.Fatalf("InteractiveConfigContext error = %v, want ErrSetupPasswordRequired", err)
+	}
+	if strings.Count(output.String(), "[WARN] Saved URL is invalid") != 1 {
+		t.Fatalf("saved-URL warning count = %d, output = %q", strings.Count(output.String(), "[WARN] Saved URL is invalid"), output.String())
+	}
+	if strings.Contains(output.String(), "localhost:9999") {
+		t.Fatalf("output echoed invalid saved URL: %q", output.String())
+	}
+	if server.LoginCalls != 0 {
+		t.Fatalf("login calls = %d, want zero", server.LoginCalls)
+	}
+}
+
+func TestInteractiveConfigOffersDefaultForInvalidSavedURL(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"url":"localhost:9999","user":"old-user","password":""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	_, err := InteractiveConfigContext(context.Background(), strings.NewReader("\nadmin\nsecret\n"), &output, nil, path)
+	if err != nil {
+		t.Fatalf("InteractiveConfigContext returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "URL [http://localhost:8080]: ") {
+		t.Fatalf("URL prompt = %q, want documented default", output.String())
+	}
+	if server.LoginCalls != 1 {
+		t.Fatalf("login calls = %d, want one", server.LoginCalls)
+	}
+	loaded, ok, err := loadAuthFile(path, io.Discard)
+	if err != nil || !ok {
+		t.Fatalf("loadAuthFile = %#v, %t, %v", loaded, ok, err)
+	}
+	if loaded.URL != defaultConfigURL || loaded.User != "admin" || loaded.Pass != "secret" {
+		t.Fatalf("saved credentials = %#v", loaded)
+	}
+}
+
+func TestInteractiveConfigAcceptsFinalLineWithoutNewline(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	path := filepath.Join(t.TempDir(), "config.json")
+	input := strings.NewReader(server.creds().URL + "\nadmin\nsecret")
+	if _, err := InteractiveConfigContext(context.Background(), input, io.Discard, nil, path); err != nil {
+		t.Fatalf("InteractiveConfigContext returned error: %v", err)
+	}
+	if server.LoginCalls != 1 {
+		t.Fatalf("login calls = %d, want one", server.LoginCalls)
+	}
+}
+
+func TestInteractiveConfigEmptyPathUsesDefaultSavePathAtEOF(t *testing.T) {
+	withMockMasterKey(t)
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	tmp := t.TempDir()
+	withWorkingDirectory(t, tmp)
+	withHomeDirectory(t, filepath.Join(tmp, "home"))
+	defaultPath := filepath.Join(tmp, "home", ".config", defaultAuthDir, defaultAuthFile)
+	input := strings.NewReader(server.creds().URL + "\nadmin\nsecret\n")
+	saved, err := InteractiveConfigContext(context.Background(), input, io.Discard, nil, "")
+	if err != nil {
+		t.Fatalf("InteractiveConfigContext returned error: %v", err)
+	}
+	if saved != defaultPath {
+		t.Fatalf("saved path = %q, want %q", saved, defaultPath)
+	}
+	if _, err := os.Stat(defaultPath); err != nil {
+		t.Fatalf("default config was not written: %v", err)
+	}
+}

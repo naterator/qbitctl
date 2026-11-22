@@ -53,6 +53,8 @@ jobs:
           sparse-checkout: |
             scripts/build.sh
             scripts/release_helpers.sh
+            scripts/release_assets.sh
+            scripts/check_release_formats.sh
           sparse-checkout-cone-mode: false
       # Release binaries build from scratch from the tagged source, never
       # from a cache written by an earlier workflow run.
@@ -60,6 +62,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Verify annotated signed release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . .release-workflow/scripts/release_helpers.sh
+          release_verify_tag_signature "$GITHUB_REPOSITORY" "$RELEASE_TAG"
+        shell: bash
       - name: Run native tests
         run: |
           go vet ./...
@@ -75,8 +84,30 @@ jobs:
         shell: bash
       - name: Build every release target
         run: VERSION="$RELEASE_TAG" bash .release-workflow/scripts/build.sh
-      - name: Verify ARMv7 binary format
-        run: file dist/qbitctl-linux-arm | grep -q 'ARM, EABI5'
+      - name: Check raw binary growth
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_GROWTH_PERCENT: 10
+        shell: bash
+        run: |
+          previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 \
+            --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName // empty')
+          if [[ -z "$previous" ]]; then
+            echo 'No previous release to use for the size budget.'
+            exit 0
+          fi
+          sizes=$(gh release view "$previous" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | select(.name | test("^qbitctl-[a-z0-9-]+(\\.exe)?$")) | [.name, .size] | @tsv')
+          while IFS=$'\t' read -r name previous_bytes; do
+            [[ -f "dist/$name" && "$previous_bytes" -gt 0 ]] || continue
+            current_bytes=$(wc -c < "dist/$name")
+            if ((current_bytes * 100 > previous_bytes * (100 + MAX_GROWTH_PERCENT))); then
+              echo "::error::$name grew from $previous_bytes to $current_bytes bytes, above the ${MAX_GROWTH_PERCENT}% budget."
+              exit 1
+            fi
+          done <<< "$sizes"
+      - name: Verify release binary formats
+        run: bash .release-workflow/scripts/check_release_formats.sh dist
       - name: Smoke release binary
         run: python3 scripts/smoke_native.py "./dist/qbitctl-$(go env GOOS)-$(go env GOARCH)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -85,8 +116,143 @@ jobs:
           path: dist/qbitctl-*
           if-no-files-found: error
 
-  upload:
+  verify-assets:
     needs: package
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-26.04
+            raw: qbitctl-linux-amd64
+            formats: gz xz
+          - runner: ubuntu-26.04-arm
+            raw: qbitctl-linux-arm64
+            formats: gz xz
+          - runner: ubuntu-26.04
+            raw: qbitctl-linux-arm
+            formats: gz xz
+            qemu: true
+          - runner: macos-26
+            raw: qbitctl-darwin-arm64
+            formats: gz
+          - runner: macos-26-intel
+            raw: qbitctl-darwin-amd64
+            formats: gz
+          - runner: windows-2025
+            raw: qbitctl-windows-amd64.exe
+            formats: zip
+          - runner: windows-11-arm
+            raw: qbitctl-windows-arm64.exe
+            formats: zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-workflow
+          sparse-checkout: scripts/smoke_native.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: qbitctl-release-assets
+          path: dist
+      - name: Install ARMv7 emulator
+        if: matrix.qemu == true
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes qemu-user
+      - name: Verify and smoke Unix asset
+        if: runner.os != 'Windows'
+        env:
+          RAW_ASSET: ${{ matrix.raw }}
+          ASSET_FORMATS: ${{ matrix.formats }}
+          USE_QEMU: ${{ matrix.qemu || false }}
+        run: |
+          set -euo pipefail
+          raw="dist/$RAW_ASSET"
+          checksum() {
+            local file=$1 expected actual
+            expected=$(awk 'NF {print $1; exit}' "$file.sha256")
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$file" | awk '{print $1}')
+            else
+              actual=$(shasum -a 256 "$file" | awk '{print $1}')
+            fi
+            [[ "$expected" == "$actual" ]] || { echo "checksum mismatch for $file" >&2; exit 1; }
+          }
+          smoke() {
+            local binary=$1 version qemu_arm
+            chmod +x "$binary"
+            if [[ "$USE_QEMU" == true ]]; then
+              qemu_arm=$(command -v qemu-arm-static || command -v qemu-arm)
+              version=$("$qemu_arm" "$binary" version)
+              [[ "$version" == "qbitctl $RELEASE_TAG" ]] || { echo "version mismatch for $binary: $version" >&2; exit 1; }
+              "$qemu_arm" "$binary" --help | grep -Fq 'View:'
+            else
+              RELEASE_TAG="$RELEASE_TAG" python3 .release-workflow/scripts/smoke_native.py "$binary"
+            fi
+          }
+          checksum "$raw"
+          smoke "$raw"
+          for format in $ASSET_FORMATS; do
+            archive="$raw.$format"
+            checksum "$archive"
+            unpacked=$(mktemp)
+            case "$format" in
+              gz) gzip -dc "$archive" > "$unpacked" ;;
+              xz) xz -dc "$archive" > "$unpacked" ;;
+              *) echo "unexpected Unix asset format: $format" >&2; exit 1 ;;
+            esac
+            smoke "$unpacked"
+            rm -f "$unpacked"
+          done
+      - name: Verify and smoke Windows asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RAW_ASSET: ${{ matrix.raw }}
+        run: |
+          $raw = Join-Path 'dist' $env:RAW_ASSET
+          $checksumPath = "$raw.sha256"
+          $line = Get-Content -Raw $checksumPath
+          if ($line -notmatch '^(?<hash>[0-9a-fA-F]{64})\s+\*?(?<name>[^\s]+)\s*$') {
+            throw "invalid checksum record in $checksumPath"
+          }
+          if ($Matches.name -ne $env:RAW_ASSET) {
+            throw "checksum record names $($Matches.name), expected $env:RAW_ASSET"
+          }
+          if ((Get-FileHash -Algorithm SHA256 $raw).Hash -ne $Matches.hash) {
+            throw "checksum mismatch for $raw"
+          }
+          $archiveName = $env:RAW_ASSET -replace '\.exe$', '.zip'
+          $archive = Join-Path 'dist' $archiveName
+          $archiveChecksum = "$archive.sha256"
+          $line = Get-Content -Raw $archiveChecksum
+          if ($line -notmatch '^(?<hash>[0-9a-fA-F]{64})\s+\*?(?<name>[^\s]+)\s*$') {
+            throw "invalid checksum record in $archiveChecksum"
+          }
+          if ($Matches.name -ne $archiveName) {
+            throw "checksum record names $($Matches.name), expected $archiveName"
+          }
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash -ne $Matches.hash) {
+            throw "checksum mismatch for $archive"
+          }
+          $extract = Join-Path $env:RUNNER_TEMP ("qbitctl-asset-" + [guid]::NewGuid())
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract
+          $members = @(Get-ChildItem -File $extract)
+          if ($members.Count -ne 1 -or $members[0].Name -ne 'qbitctl.exe') {
+            throw "$archive must contain only qbitctl.exe"
+          }
+          $python = (Get-Command python -ErrorAction Stop).Source
+          & $python .release-workflow/scripts/smoke_native.py $raw
+          & $python .release-workflow/scripts/smoke_native.py $members[0].FullName
+
+  upload:
+    needs: [package, verify-assets]
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -98,7 +264,12 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-workflow
-          sparse-checkout: scripts/release_helpers.sh
+          sparse-checkout: |
+            scripts/release_helpers.sh
+            scripts/check_release_assets.sh
+            scripts/release_assets.sh
+            scripts/build.sh
+            scripts/check_release_formats.sh
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -107,6 +278,10 @@ jobs:
       - name: Verify checksums
         working-directory: dist
         run: sha256sum -c qbitctl-*.sha256
+      - name: Verify release asset contract
+        run: bash .release-workflow/scripts/check_release_assets.sh dist
+      - name: Verify release binary formats
+        run: bash .release-workflow/scripts/check_release_formats.sh dist
       - name: Attach binaries to a draft release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -5,7 +5,8 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: '17 6 * * *'
+    - cron: '17 6 * * 0,2-6'
+    - cron: '17 6 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -85,3 +86,12 @@ jobs:
       - name: Build every release target
         if: runner.os == 'Linux'
         run: VERSION=nightly bash scripts/build.sh
+      - name: Compare two clean release builds
+        if: runner.os == 'Linux' && github.event.schedule == '17 6 * * 1'
+        shell: bash
+        run: |
+          second="$RUNNER_TEMP/reproducibility-dist"
+          GOCACHE="$RUNNER_TEMP/reproducibility-go-cache" VERSION=nightly bash scripts/build.sh "$second"
+          for checksum in dist/*.sha256; do
+            diff -u "$checksum" "$second/${checksum##*/}"
+          done

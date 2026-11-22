@@ -45,9 +45,11 @@ runs:
       shell: bash
       run: |
         prefix="go-${{ inputs.cache-name }}-${{ runner.os }}-${{ runner.arch }}-"
-        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-        echo "key=$prefix${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+        echo "prefix=${prefix}" >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+    # A cache problem should only cost time, never fail CI.
     - id: restore
+      continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.paths.outputs.paths }}

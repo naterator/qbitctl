@@ -37,6 +37,7 @@ jobs:
         run: make ci
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go.outputs.cache-paths }}
@@ -74,6 +75,7 @@ jobs:
             --version '${{ matrix.version }}'
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true' && matrix.version == '5.3.0'
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go.outputs.cache-paths }}
@@ -99,6 +101,7 @@ jobs:
           sh scripts/test_install.sh
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go.outputs.cache-paths }}
@@ -117,6 +120,7 @@ jobs:
         run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|Windows.*)|TestRemovePreviousExecutable' -count=1
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go.outputs.cache-paths }}
@@ -134,6 +138,7 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go.outputs.cache-paths }}

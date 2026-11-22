@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -161,36 +162,18 @@ func (m *model) resetRemoteState() {
 }
 
 // RunConfigurable is the public TUI entry point used by the root command. It
-// connects immediately when flags or an existing config are sufficient, and
-// otherwise starts directly on the in-TUI configuration page.
+// starts the workspace immediately when flags or an existing config are
+// sufficient, then performs authentication as visible background work.
 func RunConfigurable(ctx context.Context, opts client.Options, input io.Reader, output io.Writer) error {
 	setup, setupErr := readSetupState(opts)
 	if setupErr == nil && setup.ready {
-		app, err := client.NewClientWithOutput(ctx, &opts, io.Discard, io.Discard)
-		if err != nil {
-			// A stale saved credential should be repairable without dropping the
-			// user back to a text prompt. Keep the password field empty and show
-			// the real login diagnostic in the Config page.
-			return runConfigurableBootstrap(ctx, opts, setup, err, input, output)
-		}
-		return runConfigurableApp(ctx, app, setup, input, output)
+		return runConfigurableConnecting(ctx, opts, setup, false, input, output)
 	}
 	if setupErr == nil && optionsHaveCredentials(opts) {
-		app, err := client.NewClientWithOutput(ctx, &opts, io.Discard, io.Discard)
-		if err == nil {
-			return runConfigurableApp(ctx, app, setup, input, output)
-		}
-		return err
+		return runConfigurableConnecting(ctx, opts, setup, true, input, output)
 	}
 	if setupErr != nil && optionsHaveCredentials(opts) {
-		// Explicit flags are authoritative. Let the normal client path report
-		// a malformed or unreachable configuration instead of hiding it behind
-		// the bootstrap form.
-		app, err := client.NewClientWithOutput(ctx, &opts, io.Discard, io.Discard)
-		if err == nil {
-			return runConfigurableApp(ctx, app, setup, input, output)
-		}
-		return err
+		return runConfigurableConnecting(ctx, opts, setup, true, input, output)
 	}
 	if setupErr != nil {
 		// configfile.Update cannot safely repair an object that could not be
@@ -199,6 +182,37 @@ func RunConfigurable(ctx context.Context, opts client.Options, input io.Reader, 
 		return setupErr
 	}
 	return runConfigurableBootstrap(ctx, opts, setup, setupErr, input, output)
+}
+
+func runConfigurableConnecting(ctx context.Context, opts client.Options, setup setupState, explicit bool, input io.Reader, output io.Writer) error {
+	sessionCtx, stop := context.WithCancel(ctx)
+	m := newModel(sessionCtx, nil)
+	m.page = queuePage
+	m.setup = setup
+	m.configPath = setup.path
+	if m.configPath == "" {
+		m.configPath = opts.ConfigPath
+	}
+	m.loadPreferences(m.configPath)
+	m.connect = &opts
+	m.connectExplicit = explicit
+	m.connectTarget = connectionTarget(opts, setup)
+	return runConfigurableSession(sessionCtx, stop, m, input, output)
+}
+
+func connectionTarget(opts client.Options, setup setupState) string {
+	value := strings.TrimSpace(setup.url)
+	if strings.TrimSpace(opts.URL) != "" {
+		value = strings.TrimSpace(opts.URL)
+	}
+	parsed, err := url.Parse(value)
+	if err == nil && parsed.Hostname() != "" {
+		if parsed.Port() != "" {
+			return parsed.Hostname() + ":" + parsed.Port()
+		}
+		return parsed.Hostname()
+	}
+	return "server"
 }
 
 func readSetupState(opts client.Options) (setupState, error) {
@@ -279,6 +293,9 @@ func runConfigurableSession(sessionCtx context.Context, stop context.CancelFunc,
 	_, err := program.Run()
 	if errors.Is(err, tea.ErrProgramKilled) && sessionCtx.Err() != nil {
 		return nil
+	}
+	if m.exitErr != nil {
+		return m.exitErr
 	}
 	return err
 }

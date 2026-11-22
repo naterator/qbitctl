@@ -35,6 +35,7 @@ const (
 	detailWork
 	actionWork
 	configWork
+	connectWork
 )
 
 type service interface {
@@ -76,6 +77,11 @@ type model struct {
 	preferencesPath string
 	configPath      string
 	setup           setupState
+	connect         *client.Options
+	connectExplicit bool
+	connectCanceled bool
+	connectTarget   string
+	exitErr         error
 	theme           themeID
 	themePreview    themeID
 
@@ -104,6 +110,10 @@ type model struct {
 
 	noticeID uint64
 }
+
+// connectClient is injectable so connection progress and cancellation can be
+// tested without waiting on a real Web API.
+var connectClient = client.NewClientWithOutput
 
 func newModel(ctx context.Context, backend service) *model {
 	return &model{
@@ -141,7 +151,19 @@ func Run(ctx context.Context, app *client.App, input io.Reader, output io.Writer
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.refresh(), nextTick(), m.noticeTimer())
+	commands := []tea.Cmd{nextTick(), m.noticeTimer()}
+	if m.connect != nil {
+		opts := *m.connect
+		setup := m.setup
+		m.connect = nil
+		commands = append(commands, m.startWork(connectWork, "Connecting to "+m.connectTarget, func(ctx context.Context) workDone {
+			app, err := connectClient(ctx, &opts, io.Discard, io.Discard)
+			return workDone{app: app, err: err, setup: setup}
+		}))
+	} else {
+		commands = append(commands, m.refresh())
+	}
+	return tea.Batch(commands...)
 }
 
 func nextTick() tea.Cmd {
@@ -245,7 +267,11 @@ func (m *model) handleKey(key string) tea.Cmd {
 		}
 		return m.openAction("search")
 	case "esc":
-		if m.busy != "" && m.work == searchWork {
+		if m.busy != "" && m.work == connectWork {
+			m.connectCanceled = true
+			m.cancel()
+			m.busy = "Canceling connection"
+		} else if m.busy != "" && m.work == searchWork {
 			m.cancelSearch()
 		} else if m.page == searchPage && m.resultFilter.active() {
 			m.clearResultFilter()
@@ -362,6 +388,40 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		return tea.Quit
 	}
 	m.releasePendingApp(done.app)
+	if done.kind == connectWork {
+		canceled := m.connectCanceled
+		m.connectCanceled = false
+		if canceled || errors.Is(done.err, context.Canceled) {
+			return m.finishCanceledConnection(done.app)
+		}
+		if done.err != nil {
+			if done.app != nil {
+				done.app.Logout()
+			}
+			if m.connectExplicit && !canceled {
+				m.exitErr = done.err
+				return tea.Quit
+			}
+			m.page = configPage
+			m.setNotice("Connection failed: "+done.err.Error(), true)
+			m.openConfigDialog()
+			if m.dialog != nil {
+				m.dialog.status = "Connection failed: " + done.err.Error()
+			}
+			return nil
+		}
+		if done.app == nil {
+			m.page = configPage
+			m.setNotice("Connection failed: client returned no session", true)
+			m.openConfigDialog()
+			if m.dialog != nil {
+				m.dialog.status = "Connection failed: client returned no session"
+			}
+			return nil
+		}
+		m.adoptApp(done.app, done.setup)
+		return m.refresh()
+	}
 	if done.err != nil {
 		if done.app != nil {
 			done.app.Logout()
@@ -398,13 +458,7 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 				// submitted. Release the old Web UI session before replacing it.
 				m.app.Logout()
 			}
-			m.app, m.ownsApp = done.app, true
-			m.backend = &tuiClient{app: done.app}
-			m.configPath = done.setup.path
-			m.setup = done.setup
-			m.resetRemoteState()
-			m.loadPreferences(m.configPath)
-			m.page = queuePage
+			m.adoptApp(done.app, done.setup)
 			m.setNotice("Configuration saved · reconnecting", false)
 			return m.refresh()
 		}
@@ -414,6 +468,32 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		return m.refresh()
 	}
 	return nil
+}
+
+func (m *model) finishCanceledConnection(app *client.App) tea.Cmd {
+	if app != nil {
+		app.Logout()
+	}
+	m.page = configPage
+	m.setNotice("Connection canceled", true)
+	m.openConfigDialog()
+	if m.dialog != nil {
+		m.dialog.status = "Connection canceled"
+	}
+	return nil
+}
+
+func (m *model) adoptApp(app *client.App, setup setupState) {
+	m.app, m.ownsApp = app, true
+	m.backend = &tuiClient{app: app}
+	m.configPath = setup.path
+	if m.configPath == "" {
+		m.configPath = app.ConfigPath()
+	}
+	m.setup = setup
+	m.resetRemoteState()
+	m.loadPreferences(m.configPath)
+	m.page = queuePage
 }
 
 func (m *model) releasePendingApp(app *client.App) {

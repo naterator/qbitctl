@@ -215,7 +215,11 @@ func (m *model) viewQueueList(width, height int) []string {
 	rows := []string{m.viewQueueHeader(width)}
 	if len(m.queue) == 0 {
 		if m.busy != "" {
-			rows = append(rows, viewMutedStyle.Render("Waiting for queue data…"))
+			message := "Waiting for queue data…"
+			if m.work == connectWork {
+				message = "Connecting to " + viewSafe(m.connectTarget) + "…"
+			}
+			rows = append(rows, viewMutedStyle.Render(message))
 		} else {
 			rows = append(rows, viewMutedStyle.Render("No torrents in the current view."))
 		}

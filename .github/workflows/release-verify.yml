@@ -64,6 +64,9 @@ jobs:
     needs: releases
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,6 +118,7 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: read
+      attestations: read
     env:
       RELEASE_TAG: ${{ needs.releases.outputs.selected }}
       LATEST_TAG: ${{ needs.releases.outputs.latest }}

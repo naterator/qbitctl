@@ -125,31 +125,6 @@ func newModel(ctx context.Context, backend service) *model {
 	}
 }
 
-// Run opens the terminal workspace using the caller's authenticated session.
-func Run(ctx context.Context, app *client.App, input io.Reader, output io.Writer) error {
-	sessionCtx, stop := context.WithCancel(ctx)
-	m := newModel(sessionCtx, &tuiClient{app: app})
-	m.app, m.configPath = app, app.ConfigPath()
-	m.loadPreferences(m.configPath)
-	m.loadSetup(client.Options{ConfigPath: m.configPath})
-	defer func() {
-		stop()
-		// A canceled search still needs time to delete its remote job before
-		// the caller logs out the session.
-		m.workers.Wait()
-		m.cleanupPendingApps()
-		if m.ownsApp && m.app != nil {
-			m.app.Logout()
-		}
-	}()
-	program := tea.NewProgram(m, tea.WithContext(sessionCtx), tea.WithoutSignalHandler(), tea.WithInput(input), tea.WithOutput(output))
-	_, err := program.Run()
-	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
-		return nil
-	}
-	return err
-}
-
 func (m *model) Init() tea.Cmd {
 	commands := []tea.Cmd{nextTick(), m.noticeTimer()}
 	if m.connect != nil {

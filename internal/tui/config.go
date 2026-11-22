@@ -52,27 +52,6 @@ func savedPasswordMetadata(setup client.Setup) client.Setup {
 	return setup
 }
 
-func (m *model) loadSetup(opts client.Options) {
-	setup, err := client.ReadSetup(opts)
-	if err != nil {
-		m.setNotice("Configuration: "+err.Error(), true)
-		if m.configPath == "" {
-			m.configPath = opts.ConfigPath
-		}
-		return
-	}
-	ready := setup.Ready()
-	m.setup = setupStateFromClient(savedPasswordMetadata(setup))
-	// Keep readiness from the original read. HasPassword is replaced below
-	// with saved-only metadata so an ephemeral --pass is never shown as saved,
-	// but it must still be allowed to authenticate this launch.
-	m.setup.ready = ready
-	m.configPath = m.setup.path
-	if m.configPath == "" {
-		m.configPath = opts.ConfigPath
-	}
-}
-
 func validateConfigURL(value string) error {
 	_, err := client.ValidateConfigURL(value)
 	return err

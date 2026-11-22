@@ -54,9 +54,12 @@ jobs:
             scripts/build.sh
             scripts/release_helpers.sh
           sparse-checkout-cone-mode: false
+      # Release binaries build from scratch from the tagged source, never
+      # from a cache written by an earlier workflow run.
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: Run native tests
         run: |
           go vet ./...

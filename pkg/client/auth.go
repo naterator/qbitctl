@@ -85,6 +85,9 @@ func getMasterSecret() (string, error) {
 	if s := os.Getenv("QBITCTL_MASTER_KEY"); s != "" {
 		return s, nil
 	}
+	if runtime.GOOS == "darwin" && os.Getenv("SSH_CONNECTION") != "" {
+		return readMacMasterSecretOverSSH(masterSecretGet, readMacMasterSecretFromLoginSession)
+	}
 	return masterSecretGet(masterKeyService, masterKeyUser)
 }
 

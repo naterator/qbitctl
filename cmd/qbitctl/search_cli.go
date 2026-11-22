@@ -1,0 +1,126 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"text/tabwriter"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/term"
+	"github.com/naterator/qbitctl/internal/searchresults"
+	qbt "github.com/naterator/qbitctl/pkg/client"
+)
+
+type searchCommandOptions struct {
+	sort   searchresults.Sort
+	filter searchresults.Filter
+	limit  int
+}
+
+func parseSearchCommandOptions(sortValue string, minSeeders int64, minSeedersSet bool, minSize string, minSizeSet bool, maxSize string, maxSizeSet bool, filterValue string, limit int) (searchCommandOptions, error) {
+	sort, err := searchresults.ParseSort(sortValue)
+	if err != nil {
+		return searchCommandOptions{}, codedErr(exitBadArgs, err.Error())
+	}
+	if limit < 0 {
+		return searchCommandOptions{}, codedErr(exitBadArgs, "--limit must be nonnegative")
+	}
+
+	filter := searchresults.Filter{Query: filterValue}
+	if minSeedersSet {
+		filter.MinSeeders = &minSeeders
+	}
+	if minSizeSet {
+		value, parseErr := searchresults.ParseSize(minSize)
+		if parseErr != nil {
+			return searchCommandOptions{}, codedErr(exitBadArgs, fmt.Sprintf("--min-size: %v", parseErr))
+		}
+		filter.MinSize = &value
+	}
+	if maxSizeSet {
+		value, parseErr := searchresults.ParseSize(maxSize)
+		if parseErr != nil {
+			return searchCommandOptions{}, codedErr(exitBadArgs, fmt.Sprintf("--max-size: %v", parseErr))
+		}
+		filter.MaxSize = &value
+	}
+	if err := filter.Validate(); err != nil {
+		return searchCommandOptions{}, codedErr(exitBadArgs, err.Error())
+	}
+	return searchCommandOptions{sort: sort, filter: filter, limit: limit}, nil
+}
+
+func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width int) error {
+	if !tty {
+		if _, err := fmt.Fprintln(w, "ID\tName\tSize (bytes)\tSeeders\tLeechers\tSource"); err != nil {
+			return err
+		}
+		for _, item := range results {
+			id := "-"
+			if item.ID != 0 {
+				id = fmt.Sprintf("%d", item.ID)
+			}
+			if _, err := fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%s\n",
+				id,
+				sanitizeSearchText(item.Name),
+				item.Size,
+				item.Seeders,
+				item.Leechers,
+				sanitizeSearchText(item.Source),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if width <= 0 {
+		width = 80
+	}
+	// Keep the title column bounded so long plugin titles don't push the
+	// remaining search fields past the terminal edge.
+	nameWidth := width - 54
+	if nameWidth < 8 {
+		nameWidth = 8
+	}
+	table := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(table, "ID\tName\tSize\tSeeders\tLeechers\tSource"); err != nil {
+		return err
+	}
+	for _, item := range results {
+		id := "-"
+		if item.ID != 0 {
+			id = fmt.Sprintf("%d", item.ID)
+		}
+		if _, err := fmt.Fprintf(table, "%s\t%s\t%s\t%d\t%d\t%s\n",
+			id,
+			truncateSearchName(sanitizeSearchText(item.Name), nameWidth),
+			searchresults.FormatSize(item.Size),
+			item.Seeders,
+			item.Leechers,
+			sanitizeSearchText(item.Source),
+		); err != nil {
+			return err
+		}
+	}
+	return table.Flush()
+}
+
+func truncateSearchName(value string, width int) string {
+	if width <= 0 {
+		return value
+	}
+	return ansi.Truncate(value, width, "…")
+}
+
+func searchTerminalWidth(w io.Writer) int {
+	file, ok := w.(interface{ Fd() uintptr })
+	if !ok {
+		return 0
+	}
+	width, _, err := term.GetSize(file.Fd())
+	if err != nil {
+		return 0
+	}
+	return width
+}

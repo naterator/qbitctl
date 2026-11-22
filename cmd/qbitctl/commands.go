@@ -3,10 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/naterator/qbitctl/internal/searchresults"
 	qbt "github.com/naterator/qbitctl/pkg/client"
 
 	"github.com/spf13/cobra"
@@ -210,6 +210,11 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 	plugin := "jackett"
 	searchTimeout := 30 * time.Second
 	jsonOutput := false
+	sortValue := "original"
+	minSeeders := int64(0)
+	minSize, maxSize, filterValue := "", "", ""
+	limit := 0
+	var searchOptions searchCommandOptions
 	cmd := &cobra.Command{
 		Use:     "search <pattern>",
 		Short:   "Search torrents with a qBittorrent search plugin",
@@ -227,6 +232,21 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 			if strings.TrimSpace(plugin) == "" {
 				return codedErr(exitBadArgs, "search plugin cannot be empty")
 			}
+			var err error
+			searchOptions, err = parseSearchCommandOptions(
+				sortValue,
+				minSeeders,
+				cmd.Flags().Changed("min-seeders"),
+				minSize,
+				cmd.Flags().Changed("min-size"),
+				maxSize,
+				cmd.Flags().Changed("max-size"),
+				filterValue,
+				limit,
+			)
+			if err != nil {
+				return err
+			}
 			return nil
 		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
@@ -237,33 +257,25 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 			if err := app.CacheSearchResults(results); err != nil {
 				fmt.Fprintf(app.Stderr, "[WARN] %v\n", err)
 			}
+			results = searchresults.Apply(results, searchOptions.filter, searchOptions.sort, searchOptions.limit)
 			if jsonOutput {
 				if err := json.NewEncoder(app.Stdout).Encode(results); err != nil {
 					return codedErr(exitFetchFail, fmt.Sprintf("failed to render search results: %v", err))
 				}
 				return nil
 			}
-			fmt.Fprintln(app.Stdout, "ID\tName\tSize (bytes)\tSeeders\tLeechers\tSource")
-			for _, item := range results {
-				id := "-"
-				if item.ID != 0 {
-					id = strconv.FormatInt(item.ID, 10)
-				}
-				fmt.Fprintf(app.Stdout, "%s\t%s\t%d\t%d\t%d\t%s\n",
-					id,
-					sanitizeSearchText(item.Name),
-					item.Size,
-					item.Seeders,
-					item.Leechers,
-					sanitizeSearchText(item.Source),
-				)
-			}
-			return nil
+			return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout))
 		}),
 	}
 	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin to use")
 	cmd.Flags().DurationVar(&searchTimeout, "timeout", searchTimeout, "Time to wait before returning available results, for example 30s or 2m")
 	cmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output search results as JSON")
+	cmd.Flags().StringVar(&sortValue, "sort", sortValue, "Sort results: original, seeders-desc, seeders-asc, size-desc, or size-asc")
+	cmd.Flags().Int64Var(&minSeeders, "min-seeders", minSeeders, "Only include results with at least this many seeders")
+	cmd.Flags().StringVar(&minSize, "min-size", minSize, "Only include results at least this size, for example 500MB or 2GiB")
+	cmd.Flags().StringVar(&maxSize, "max-size", maxSize, "Only include results no larger than this size, for example 4GiB")
+	cmd.Flags().StringVar(&filterValue, "filter", filterValue, "Require whitespace-separated terms in the name, source, or ID")
+	cmd.Flags().IntVar(&limit, "limit", limit, "Limit displayed results; 0 means no limit")
 	return cmd
 }
 

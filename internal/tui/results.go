@@ -3,7 +3,6 @@
 package tui
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/naterator/qbitctl/internal/searchresults"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -46,30 +46,7 @@ func (order resultSort) label() string {
 }
 
 func (order resultSort) compare(left, right client.SearchResult) int {
-	switch order {
-	case resultSeedersDesc, resultSeedersAsc:
-		return compareResultMetric(int64(left.Seeders), int64(right.Seeders), order == resultSeedersDesc)
-	case resultSizeDesc, resultSizeAsc:
-		return compareResultMetric(left.Size, right.Size, order == resultSizeDesc)
-	default:
-		return 0
-	}
-}
-
-func compareResultMetric(left, right int64, descending bool) int {
-	if left < 0 {
-		if right < 0 {
-			return 0
-		}
-		return 1
-	}
-	if right < 0 {
-		return -1
-	}
-	if descending {
-		return cmp.Compare(right, left)
-	}
-	return cmp.Compare(left, right)
+	return searchresults.Sort(order).Compare(left, right)
 }
 
 func (m *model) replaceSearchResults(results []client.SearchResult) {
@@ -130,10 +107,9 @@ func (m *model) persistSearchPreferences(order resultSort, filter *resultFilter)
 
 func (m *model) rebuildSearchResults() {
 	previous, selected := m.focusedResult()
-	terms := strings.Fields(strings.ToLower(m.resultFilter.query))
 	m.results = m.results[:0]
 	for _, result := range m.allResults {
-		if m.resultFilter.matches(result, terms) {
+		if m.resultFilter.matches(result, nil) {
 			m.results = append(m.results, result)
 		}
 	}
@@ -149,31 +125,20 @@ func (m *model) rebuildSearchResults() {
 }
 
 func (f resultFilter) matches(result client.SearchResult, terms []string) bool {
-	if f.minSeeders.text != "" && int64(result.Seeders) < f.minSeeders.value {
-		return false
+	filter := searchresults.Filter{Query: f.query}
+	if terms != nil {
+		filter.Query = strings.Join(terms, " ")
 	}
-	if (f.minSize.text != "" || f.maxSize.text != "") && result.Size < 0 {
-		return false
+	if f.minSeeders.text != "" {
+		filter.MinSeeders = &f.minSeeders.value
 	}
-	if f.minSize.text != "" && result.Size < f.minSize.value {
-		return false
+	if f.minSize.text != "" {
+		filter.MinSize = &f.minSize.value
 	}
-	if f.maxSize.text != "" && result.Size > f.maxSize.value {
-		return false
+	if f.maxSize.text != "" {
+		filter.MaxSize = &f.maxSize.value
 	}
-	if len(terms) == 0 {
-		return true
-	}
-	text := strings.ToLower(result.Name + " " + result.Source)
-	if result.ID > 0 {
-		text += " " + strconv.FormatInt(result.ID, 10)
-	}
-	for _, term := range terms {
-		if !strings.Contains(text, term) {
-			return false
-		}
-	}
-	return true
+	return filter.Matches(result)
 }
 
 var resultFilterFields = [...]struct {

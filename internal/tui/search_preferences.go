@@ -5,6 +5,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/naterator/qbitctl/internal/searchresults"
 )
 
 const searchPreferencesFileName = "tui-search.json"
@@ -52,12 +54,8 @@ func decodeSearchPreferences(data json.RawMessage) (resultSort, resultFilter, er
 }
 
 func knownResultSort(order resultSort) bool {
-	for _, choice := range resultSortChoices {
-		if choice.order == order {
-			return true
-		}
-	}
-	return false
+	parsed, err := searchresults.ParseSort(string(order))
+	return err == nil && resultSort(parsed) == order
 }
 
 func saveSearchPreferences(path string, order resultSort, filter *resultFilter) error {

@@ -72,6 +72,12 @@ func TestSearchCommandLifecycle(t *testing.T) {
 			resultBody: `{"results":[],"status":"Stopped","total":0}`, wantOut: "[]", deleteStatus: http.StatusNotFound,
 		},
 		{
+			name: "filtered and limited", flags: []string{"--sort", "seeders-desc", "--min-seeders", "10", "--limit", "1"},
+			afterStart: []string{statusPath, resultsPath},
+			resultBody: `{"results":[{"fileName":"Ubuntu Desktop","fileSize":4294967296,"nbSeeders":15,"nbLeechers":3,"descrLink":"https://tracker.example/42","siteUrl":"https://jackett.example","fileUrl":"https://jackett.example/api?apikey=mock-key","engineName":"jackett"},{"fileName":"Ubuntu Server","fileSize":2147483648,"nbSeeders":8,"nbLeechers":1,"siteUrl":"https://fallback.example/path"}],"status":"Stopped","total":2}`,
+			wantOut:    `[{"name":"Ubuntu Desktop","size":4294967296,"seeders":15,"leechers":3,"source":"tracker.example"}]`, wantIDs: []bool{true},
+		},
+		{
 			name: "timeout", flags: []string{"--timeout", "100ms"}, afterStart: []string{statusPath, resultsPath},
 			waitForPoll: true,
 			resultBody:  `{"results":[{"fileName":"Ubuntu partial","fileSize":123,"nbSeeders":4,"nbLeechers":2,"descrLink":"https://tracker.example/partial","fileUrl":"magnet:?xt=urn:btih:partial","engineName":"jackett"}],"status":"Running","total":1}`,

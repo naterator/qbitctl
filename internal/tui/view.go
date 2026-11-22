@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/searchresults"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -709,20 +710,7 @@ func boundedProgress(progress float64) float64 {
 }
 
 func viewBytes(value int64) string {
-	if value < 0 {
-		return "?"
-	}
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB", "PiB"}
-	amount := float64(value)
-	unit := 0
-	for amount >= 1024 && unit < len(units)-1 {
-		amount /= 1024
-		unit++
-	}
-	if unit == 0 {
-		return fmt.Sprintf("%d %s", value, units[unit])
-	}
-	return fmt.Sprintf("%.1f %s", amount, units[unit])
+	return searchresults.FormatSize(value)
 }
 
 func viewSpeed(value int64) string {

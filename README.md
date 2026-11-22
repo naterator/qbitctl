@@ -320,7 +320,18 @@ qbitctl keeps download links in a private local cache. IDs remain available for 
 qbitctl search "Ubuntu 24.04"
 qbitctl search "Ubuntu 24.04" --plugin jackett --timeout 2m
 qbitctl search "Ubuntu 24.04" --json
+qbitctl search "Ubuntu 24.04" --sort seeders-desc --min-seeders 10 --limit 5
+qbitctl search "Ubuntu 24.04" --filter "desktop tracker.example" --min-size 500MB --max-size 2GiB
 ```
+
+Search results can be ordered with `--sort` (`original`, `seeders-desc`,
+`seeders-asc`, `size-desc`, or `size-asc`) and narrowed with `--filter`,
+`--min-seeders`, `--min-size`, and `--max-size`. The filter uses
+whitespace-separated terms that must match the result name, source, or ID.
+`--limit` applies after filtering and sorting; `0` (the default) shows every
+matching result. Piped output keeps the tab-separated byte-size format for
+scripts, while an interactive terminal uses aligned columns and human-readable
+binary sizes.
 
 #### show (aliases: s, sh)
 

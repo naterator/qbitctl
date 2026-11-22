@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -72,11 +73,12 @@ type dialog struct {
 	scroll int
 
 	request actionRequest
-	// torrent is captured when the edit dialog opens. Setters intentionally
-	// edit only that focused torrent, even when other rows are marked.
-	torrent *client.TorrentInfo
-	status  string
-	message string
+	// torrents are captured when the edit dialog opens. Marked rows are edited
+	// together, while an unmarked queue uses its focused row.
+	torrents []client.TorrentInfo
+	mixed    bool
+	status   string
+	message  string
 }
 
 func newDialogField(label, value, placeholder, help string) dialogField {
@@ -358,8 +360,25 @@ func (m *model) openAddResultDialog() {
 }
 
 func (m *model) openEditDialog() {
-	torrent, ok := m.focusedTorrent()
-	if !ok {
+	hashes := m.targetHashes()
+	if len(hashes) == 0 {
+		m.setNotice("Select or mark a torrent first", false)
+		return
+	}
+	byHash := make(map[string]client.TorrentInfo, len(m.allTorrents))
+	for _, torrent := range m.allTorrents {
+		byHash[torrent.Hash] = torrent
+	}
+	for _, torrent := range m.queue {
+		byHash[torrent.Hash] = torrent
+	}
+	torrents := make([]client.TorrentInfo, 0, len(hashes))
+	for _, hash := range hashes {
+		if torrent, ok := byHash[hash]; ok {
+			torrents = append(torrents, torrent)
+		}
+	}
+	if len(torrents) == 0 {
 		m.setNotice("Select or mark a torrent first", false)
 		return
 	}
@@ -367,13 +386,17 @@ func (m *model) openEditDialog() {
 	for _, field := range client.SetFieldNames {
 		items = append(items, dialogItem{label: field, action: field, description: "Set this qBittorrent field"})
 	}
+	title := "Edit torrent field"
+	if len(torrents) > 1 {
+		title = fmt.Sprintf("Edit %d torrents", len(torrents))
+	}
 	d := &dialog{
 		kind:     dialogEditSelect,
-		title:    "Edit torrent field",
+		title:    title,
 		allItems: items,
 		items:    append([]dialogItem(nil), items...),
-		torrent:  &torrent,
-		request:  actionRequest{hashes: torrent.Hash},
+		torrents: torrents,
+		request:  actionRequest{hashes: joinHashes(hashes)},
 	}
 	m.dialog = d
 }
@@ -649,13 +672,33 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			}
 			field := client.CanonicalSetField(d.items[d.selected].action)
 			value := ""
-			if d.torrent != nil {
-				value = setFieldValue(*d.torrent, field)
+			mixed := false
+			if len(d.torrents) > 0 {
+				value = setFieldValue(d.torrents[0], field)
+				for _, torrent := range d.torrents[1:] {
+					if setFieldValue(torrent, field) != value {
+						mixed = true
+						value = ""
+						break
+					}
+				}
 			}
 			d.kind = dialogEditValue
+			d.mixed = mixed
 			d.title = "Set " + field
+			if len(d.torrents) > 1 {
+				d.title = fmt.Sprintf("Set %s for %d torrents", field, len(d.torrents))
+			}
 			d.request.field = field
-			d.fields = []dialogField{newDialogField("Value", value, "value", "qBittorrent validates this field")}
+			placeholder := "value"
+			help := "qBittorrent validates this field"
+			if mixed {
+				placeholder = "(mixed)"
+				help = fmt.Sprintf("Applies to %d torrents", len(d.torrents))
+			} else if len(d.torrents) > 1 {
+				help = fmt.Sprintf("Applies to %d torrents", len(d.torrents))
+			}
+			d.fields = []dialogField{newDialogField("Value", value, placeholder, help)}
 			return d.focusField(0)
 		}
 		return nil
@@ -809,6 +852,10 @@ func (m *model) submitDialog() tea.Cmd {
 		}
 		if d.request.field == "" {
 			d.status = "Choose a field first"
+			return nil
+		}
+		if d.mixed && strings.TrimSpace(d.value(0)) == "" {
+			d.status = fmt.Sprintf("Enter a value to apply to %d torrents", len(d.torrents))
 			return nil
 		}
 		m.dialog = nil

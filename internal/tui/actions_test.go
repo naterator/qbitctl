@@ -219,6 +219,42 @@ func TestDeleteMessageListsMarkedTorrentNames(t *testing.T) {
 	}
 }
 
+func TestEditDialogAppliesToMarkedTorrents(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	seedRecordingQueue(m, service,
+		client.TorrentInfo{Hash: "a", Name: "Alpha", UpLimit: 2048, Category: "linux"},
+		client.TorrentInfo{Hash: "b", Name: "Beta", UpLimit: 2048, Category: "linux"},
+	)
+	m.queueIndex = 0
+	m.toggleMark()
+	m.queueIndex = 1
+	m.toggleMark()
+	m.openEditDialog()
+	if m.dialog == nil || m.dialog.request.hashes != "a|b" || !strings.Contains(m.dialog.title, "2") {
+		t.Fatalf("marked edit dialog = %#v", m.dialog)
+	}
+	for m.dialog.selected < 8 {
+		m.update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	// SetFieldNames places upload-limit at the last position.
+	if m.dialog.items[m.dialog.selected].action != "up-limit" {
+		t.Fatalf("selected field = %q", m.dialog.items[m.dialog.selected].action)
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.dialog == nil || m.dialog.kind != dialogEditValue || m.dialog.value(0) != "2048" {
+		t.Fatalf("shared edit value = %#v", m.dialog)
+	}
+	runTUIWork(t, m, m.update(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	actions := service.recordedActions()
+	if len(actions) != 1 || actions[0].kind != "set" || actions[0].hashes != "a|b" || actions[0].field != "up-limit" || actions[0].value != "2048" {
+		t.Fatalf("edit action = %#v", actions)
+	}
+	if m.notice != "Saved up-limit for 2 torrents" {
+		t.Fatalf("batch edit notice = %q", m.notice)
+	}
+}
+
 func TestEditFocusedSeedtimePrefillsAndKeepsSingleNotice(t *testing.T) {
 	service := &recordingService{}
 	m := newModel(t.Context(), service)
@@ -242,5 +278,35 @@ func TestEditFocusedSeedtimePrefillsAndKeepsSingleNotice(t *testing.T) {
 	}
 	if m.notice != "Saved torrent property" {
 		t.Fatalf("single edit notice = %q", m.notice)
+	}
+}
+
+func TestEditMixedValuesRejectBlankThenAcceptValue(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	seedRecordingQueue(m, service,
+		client.TorrentInfo{Hash: "a", Name: "Alpha", Category: "linux"},
+		client.TorrentInfo{Hash: "b", Name: "Beta", Category: "books"},
+	)
+	m.queueIndex = 0
+	m.toggleMark()
+	m.queueIndex = 1
+	m.toggleMark()
+	m.openEditDialog()
+	// Category is the second field in the client set list.
+	m.update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.dialog == nil || m.dialog.kind != dialogEditValue || m.dialog.fields[0].input.Placeholder != "(mixed)" {
+		t.Fatalf("mixed edit dialog = %#v", m.dialog)
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.dialog.status != "Enter a value to apply to 2 torrents" {
+		t.Fatalf("mixed blank status = %q", m.dialog.status)
+	}
+	m.dialog.fields[0].input.SetValue("linux")
+	runTUIWork(t, m, m.update(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	actions := service.recordedActions()
+	if len(actions) != 1 || actions[0].field != "category" || actions[0].value != "linux" || actions[0].hashes != "a|b" {
+		t.Fatalf("mixed edit action = %#v", actions)
 	}
 }

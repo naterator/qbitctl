@@ -223,7 +223,8 @@ is saved and masks new passwords as you type.
   or `j` and `k` to move, `Enter` for details, and `Space` to mark torrents for
   batch actions. The palette includes start, pause, force-start, move, edit,
   trackers, remove, and delete. Removing torrents and deleting data require
-  confirmation.
+  confirmation. Edit applies to marked torrents, or to the focused torrent
+  when no rows are marked.
 - Torrent details use a two-column layout with right-aligned labels, a visual
   divider, and left-aligned values. Long values wrap within the value column,
   and the view remains scrollable in smaller terminals.

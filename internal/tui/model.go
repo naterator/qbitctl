@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -543,7 +544,14 @@ func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
 			"pause": "Paused selected torrents", "force-start": "Force started selected torrents", "move": "Move requested",
 			"remove": "Removed selected torrents", "delete": "Deleted selected torrents and files", "set": "Saved torrent property",
 		}
-		return workDone{notice: notices[request.kind], err: err}
+		notice := notices[request.kind]
+		if request.kind == "set" {
+			count := len(strings.Split(request.hashes, "|"))
+			if count > 1 {
+				notice = fmt.Sprintf("Saved %s for %d torrents", request.field, count)
+			}
+		}
+		return workDone{notice: notice, err: err}
 	})
 }
 

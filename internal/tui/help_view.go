@@ -124,7 +124,7 @@ var helpGroups = []helpGroup{
 			{key: "f", label: "Force start"},
 			{key: "m", label: "Move"},
 			{key: "t", label: "Trackers"},
-			{key: "e", label: "Edit"},
+			{key: "e", label: "Edit focused / marked"},
 			{key: "x", label: "Remove"},
 			{key: "⇧d", label: "Delete files"},
 		},

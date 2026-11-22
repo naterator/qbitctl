@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -54,11 +55,15 @@ func withHomeDirectory(t *testing.T, home string) {
 	t.Helper()
 	oldHome := os.Getenv("HOME")
 	oldXDG := os.Getenv("XDG_CONFIG_HOME")
+	oldUserProfile := os.Getenv("USERPROFILE")
 	if err := os.Setenv("HOME", home); err != nil {
 		t.Fatalf("setenv HOME failed: %v", err)
 	}
 	if err := os.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config")); err != nil {
 		t.Fatalf("setenv XDG_CONFIG_HOME failed: %v", err)
+	}
+	if err := os.Setenv("USERPROFILE", home); err != nil {
+		t.Fatalf("setenv USERPROFILE failed: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := os.Setenv("HOME", oldHome); err != nil {
@@ -66,6 +71,9 @@ func withHomeDirectory(t *testing.T, home string) {
 		}
 		if err := os.Setenv("XDG_CONFIG_HOME", oldXDG); err != nil {
 			t.Fatalf("restore XDG_CONFIG_HOME failed: %v", err)
+		}
+		if err := os.Setenv("USERPROFILE", oldUserProfile); err != nil {
+			t.Fatalf("restore USERPROFILE failed: %v", err)
 		}
 	})
 }
@@ -687,6 +695,9 @@ func TestWarnLoosePermissions(t *testing.T) {
 	if strings.Contains(out.String(), "[WARN]") {
 		t.Fatalf("unexpected warning for 0600 perms: %q", out.String())
 	}
+	if runtime.GOOS == "windows" {
+		return
+	}
 
 	// Loosen permissions to 0644
 	if err := os.Chmod(path, 0o644); err != nil {
@@ -765,7 +776,7 @@ func TestSaveAndLoadAuthFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat failed: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("config file perms = %v, want 0600", info.Mode().Perm())
 	}
 }

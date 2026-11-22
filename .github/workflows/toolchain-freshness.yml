@@ -1,0 +1,38 @@
+name: Toolchain freshness
+
+on:
+  schedule:
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  go-patch:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the current Go patch release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set +e
+          report=$(scripts/check_go_toolchain.sh 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$report" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search '"Go toolchain freshness" in:title' --json number --jq 'length')
+          if [ "$existing" -eq 0 ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Go toolchain freshness: update the patch release" \
+              --body "$report"
+          fi
+          exit "$status"

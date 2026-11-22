@@ -21,8 +21,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse as urlparse
 from urllib import request as urlrequest
 
@@ -50,13 +52,13 @@ def bencode(value: object) -> bytes:
     raise TypeError(f"unsupported bencode value: {type(value)!r}")
 
 
-def write_fixture(path: Path) -> None:
+def write_fixture(path: Path, name: str = "qbitctl-compat-fixture.bin") -> None:
     """Write a valid trackerless, one-byte torrent with no external peers."""
 
     content = b"q"
     info = {
         b"length": len(content),
-        b"name": b"qbitctl-compat-fixture.bin",
+        b"name": name.encode("utf-8"),
         b"piece length": 16384,
         b"pieces": hashlib.sha1(content).digest(),
     }
@@ -75,6 +77,76 @@ def redact(value: str, password: str | None = None) -> str:
     return TEMP_PASSWORD_RE.sub(r"temporary password is provided for this session: <redacted>", value)
 
 
+class FixtureHandler(BaseHTTPRequestHandler):
+    """Serve the checked-in search plugin and the deterministic torrent."""
+
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):
+        if self.path == "/qbitctl_fixture.py":
+            body = self.server.plugin.read_bytes()
+            content_type = "text/x-python; charset=utf-8"
+        elif self.path == "/qbitctl-search.torrent":
+            body = self.server.torrent.read_bytes()
+            content_type = "application/x-bittorrent"
+        elif self.path == "/qbitctl-search-description":
+            body = b"qbitctl compatibility fixture"
+            content_type = "text/plain; charset=utf-8"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def authenticated_opener(url: str, password: str):
+    """Return a cookie-preserving opener authenticated to qBittorrent."""
+
+    cookies = http.cookiejar.CookieJar()
+    opener = urlrequest.build_opener(urlrequest.HTTPCookieProcessor(cookies))
+    login = urlparse.urlencode({"username": "admin", "password": password}).encode()
+    login_request = urlrequest.Request(url.rstrip("/") + "/api/v2/auth/login", data=login)
+    login_request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with opener.open(login_request, timeout=30) as response:
+        body = response.read().strip()
+        if response.status not in (200, 204) or (body and body != b"Ok."):
+            raise RuntimeError("qBittorrent search compatibility login failed")
+    return opener
+
+
+def install_search_plugin(url: str, password: str, plugin_url: str) -> None:
+    opener = authenticated_opener(url, password)
+    payload = urlparse.urlencode({"sources": plugin_url}).encode()
+    request = urlrequest.Request(
+        url.rstrip("/") + "/api/v2/search/installPlugin", data=payload
+    )
+    request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with opener.open(request, timeout=30) as response:
+        body = response.read().strip()
+        if response.status != 200 or body not in (b"", b"Ok."):
+            raise RuntimeError("qBittorrent rejected the fixture search plugin")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        with opener.open(url.rstrip("/") + "/api/v2/search/plugins", timeout=30) as response:
+            try:
+                plugins = json.loads(response.read())
+            except json.JSONDecodeError as error:
+                raise RuntimeError("qBittorrent returned invalid search plugin JSON") from error
+        if any(
+            isinstance(plugin, dict)
+            and str(plugin.get("name", "")).lower() == "qbitctl_fixture"
+            and plugin.get("enabled", True)
+            for plugin in plugins
+        ):
+            return
+        time.sleep(0.5)
+    raise RuntimeError("qBittorrent did not load the fixture search plugin")
+
+
 def docker_logs(container: str) -> str:
     result = subprocess.run(
         ["docker", "logs", container],
@@ -87,7 +159,13 @@ def docker_logs(container: str) -> str:
 
 
 def start_container(
-    image: str, container: str, config: Path, downloads: Path, web_port: int
+    image: str,
+    container: str,
+    config: Path,
+    downloads: Path,
+    web_port: int,
+    network: str,
+    fixture_base: str,
 ) -> None:
     command = [
         "docker",
@@ -96,6 +174,14 @@ def start_container(
         "--tty",
         "--name",
         container,
+        "--network",
+        network,
+        "--network-alias",
+        "qbit",
+        "--add-host",
+        "host.docker.internal:host-gateway",
+        "--env",
+        f"QBITCTL_FIXTURE_BASE={fixture_base}",
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         # The older image wrapper changes ownership before launching qBittorrent.
@@ -124,6 +210,117 @@ def start_container(
             "failed to start qBittorrent container: "
             + redact(result.stderr or result.stdout)
         )
+
+
+def start_https_proxy(
+    network: str,
+    proxy_container: str,
+    web_port: int,
+    https_port: int,
+    root: Path,
+) -> tuple[Path, Path]:
+    """Start an nginx sidecar that exposes qBittorrent below /qbt/."""
+
+    certificate = root / "qbitctl-compat-ca.pem"
+    key = root / "qbitctl-compat-key.pem"
+    config = root / "nginx.conf"
+    openssl = subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(certificate),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if openssl.returncode != 0:
+        raise RuntimeError("failed to create the HTTPS test certificate: " + openssl.stderr.strip())
+    config.write_text(
+        f"""events {{}}
+http {{
+    access_log /dev/stdout;
+    error_log /dev/stderr warn;
+    server {{
+        listen 443 ssl;
+        ssl_certificate /etc/nginx/qbitctl-compat-ca.pem;
+        ssl_certificate_key /etc/nginx/qbitctl-compat-key.pem;
+        location = /qbt {{ return 301 /qbt/; }}
+        location /qbt/ {{
+            proxy_pass http://qbit:{web_port}/;
+            proxy_http_version 1.1;
+            # qBittorrent 5.3 validates the backend Host port before it
+            # considers X-Forwarded-Host for the public reverse-proxy origin.
+            proxy_set_header Host $proxy_host;
+            proxy_set_header Origin $http_origin;
+            proxy_set_header Referer $http_referer;
+            proxy_set_header X-Forwarded-Host $http_host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }}
+    }}
+}}
+""",
+        encoding="utf-8",
+    )
+    image = os.environ.get(
+        "QBITCTL_NGINX_IMAGE",
+        "nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de",
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--detach",
+            "--name",
+            proxy_container,
+            "--network",
+            network,
+            "--read-only",
+            "--tmpfs",
+            "/var/cache/nginx",
+            "--tmpfs",
+            "/var/run",
+            "--publish",
+            f"127.0.0.1:{https_port}:443/tcp",
+            "--volume",
+            f"{config}:/etc/nginx/nginx.conf:ro",
+            "--volume",
+            f"{certificate}:/etc/nginx/qbitctl-compat-ca.pem:ro",
+            "--volume",
+            f"{key}:/etc/nginx/qbitctl-compat-key.pem:ro",
+            image,
+            "nginx",
+            "-g",
+            "daemon off;",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("failed to start nginx HTTPS sidecar: " + redact(result.stderr or result.stdout))
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", https_port), timeout=1):
+                return certificate, key
+        except OSError:
+            time.sleep(0.25)
+    raise RuntimeError("nginx HTTPS sidecar did not start listening")
 
 
 def wait_for_password(container: str, timeout: float = 60.0) -> str:
@@ -162,6 +359,7 @@ def run_cli(
     *args: str,
     check: bool = True,
     timeout: float = 30.0,
+    env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
         str(binary),
@@ -177,11 +375,14 @@ def run_cli(
     env.update(
         {
             "XDG_CONFIG_HOME": str(config_home),
+            "XDG_CACHE_HOME": str(config_home.parent / "cache-home"),
             "NO_COLOR": "1",
             # Keep the compatibility container independent of host keyrings.
             "QBITCTL_MASTER_KEY": "qbitctl-compat-master",
         }
     )
+    if env_overrides:
+        env.update(env_overrides)
     try:
         result = subprocess.run(
             command,
@@ -368,7 +569,7 @@ def wait_for_tags_and_limits(
     raise RuntimeError(f"timed out waiting for qBittorrent state on {name!r}")
 
 
-def prepare_config(config: Path, web_port: int) -> None:
+def prepare_config(config: Path, web_port: int, proxy_subnet: str) -> None:
     # The fixture has no tracker, and these settings prevent DHT/peer discovery
     # from making the compatibility job contact anything outside the runner.
     preferences = config / "qBittorrent" / "config" / "qBittorrent.conf"
@@ -388,8 +589,14 @@ MigrationVersion=9999
 Accepted=true
 [Preferences]
 WebUI\Port={web_port}
+WebUI\ServerDomains="127.0.0.1;qbit"
+WebUI\ReverseProxySupportEnabled=true
+WebUI\TrustedReverseProxiesList={proxy_subnet}
 [WebUI]
 Port={web_port}
+ServerDomains="127.0.0.1;qbit"
+ReverseProxySupportEnabled=true
+TrustedReverseProxiesList={proxy_subnet}
 """,
         encoding="utf-8",
     )
@@ -409,7 +616,10 @@ def run(args: argparse.Namespace) -> None:
         raise RuntimeError(f"qbitctl binary does not exist: {binary}")
 
     container = f"qbitctl-compat-{os.getpid()}"
+    proxy_container = f"qbitctl-compat-nginx-{os.getpid()}"
+    network = f"qbitctl-compat-net-{os.getpid()}"
     web_port = reserve_port()
+    https_port = reserve_port()
     with tempfile.TemporaryDirectory(prefix="qbitctl-qb-compat-") as temp:
         root = Path(temp)
         config = root / "config"
@@ -417,23 +627,56 @@ def run(args: argparse.Namespace) -> None:
         config_home = root / "config-home"
         downloads.mkdir()
         config_home.mkdir()
-        prepare_config(config, web_port)
+        (root / "cache-home").mkdir()
+        fixture = root / "qbitctl-compat.torrent"
+        search_fixture = root / "qbitctl-search.torrent"
+        invalid_fixture = root / "qbitctl-invalid.torrent"
+        write_fixture(fixture)
+        write_fixture(search_fixture, "qbitctl-search-fixture.bin")
+        invalid_fixture.write_bytes(b"not a bencoded torrent")
+        plugin = Path(__file__).with_name("fixtures") / "qbitctl_fixture.py"
+        fixture_server = ThreadingHTTPServer(("0.0.0.0", 0), FixtureHandler)
+        fixture_server.plugin = plugin
+        fixture_server.torrent = search_fixture
+        fixture_thread = threading.Thread(target=fixture_server.serve_forever, daemon=True)
+        fixture_thread.start()
+        fixture_base = f"http://host.docker.internal:{fixture_server.server_port}"
 
         password = ""
+        previous_ssl_cert = os.environ.get("SSL_CERT_FILE")
         try:
-            start_container(args.image, container, config, downloads, web_port)
+            network_create = subprocess.run(
+                ["docker", "network", "create", network],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if network_create.returncode != 0:
+                raise RuntimeError("failed to create compatibility Docker network: " + network_create.stderr.strip())
+            proxy_subnet = subprocess.check_output(
+                ["docker", "network", "inspect", "--format", "{{(index .IPAM.Config 0).Subnet}}", network],
+                text=True,
+            ).strip()
+            prepare_config(config, web_port, proxy_subnet)
+            start_container(
+                args.image,
+                container,
+                config,
+                downloads,
+                web_port,
+                network,
+                fixture_base,
+            )
             password = wait_for_password(container)
             url = f"http://127.0.0.1:{web_port}"
             print(f"qBittorrent {args.version}: authenticating")
             wait_for_ready(binary, url, password, root, config_home)
+            certificate, _ = start_https_proxy(network, proxy_container, web_port, https_port, root)
+            os.environ["SSL_CERT_FILE"] = str(certificate)
             # Completion reads the saved setup because Cobra's hidden
             # __complete command skips the normal pre-run password handling.
             run_cli(binary, url, password, root, config_home, "config", "write")
-
-            fixture = root / "qbitctl-compat.torrent"
-            invalid_fixture = root / "qbitctl-invalid.torrent"
-            write_fixture(fixture)
-            invalid_fixture.write_bytes(b"not a bencoded torrent")
+            install_search_plugin(url, password, fixture_base + "/qbitctl_fixture.py")
 
             category = "qbitctl-compat"
             destination = "/downloads/compat"
@@ -457,6 +700,50 @@ def run(args: argparse.Namespace) -> None:
             if torrent.get("category") != category or str(torrent.get("save_path")).rstrip("/") != destination:
                 raise RuntimeError("qBittorrent did not apply the add category and save path")
             verify_main_data(url, password)
+
+            search_output = run_cli(
+                binary,
+                url,
+                password,
+                root,
+                config_home,
+                "search",
+                "fixture",
+                "--plugin",
+                "qbitctl_fixture",
+                "--json",
+                "--timeout",
+                "60s",
+            )
+            try:
+                search_results = json.loads(search_output.stdout)
+            except json.JSONDecodeError as error:
+                raise RuntimeError("qbitctl search returned invalid JSON") from error
+            if not isinstance(search_results, list) or len(search_results) != 2:
+                raise RuntimeError("qbitctl search fixture did not return two results")
+            torrent_result = next(
+                (
+                    row
+                    for row in search_results
+                    if isinstance(row, dict) and row.get("name") == "qbitctl search torrent"
+                ),
+                None,
+            )
+            if not isinstance(torrent_result, dict) or not torrent_result.get("id"):
+                raise RuntimeError("qbitctl search fixture torrent result was not cached")
+            search_id = str(torrent_result["id"])
+            run_cli(binary, url, password, root, config_home, "add", "--search-id", search_id)
+            search_torrent = wait_for_torrent(
+                binary,
+                url,
+                password,
+                root,
+                config_home,
+                "qbitctl-search-fixture.bin",
+            )
+            if search_torrent is None or not search_torrent.get("hash"):
+                raise RuntimeError("qbitctl did not add the .torrent search result")
+            search_hash = str(search_torrent["hash"])
 
             completions = complete_show(binary, url, password, root, config_home)
             expected_completion = f"{torrent_hash}\tqbitctl-compat-fixture.bin"
@@ -562,14 +849,70 @@ def run(args: argparse.Namespace) -> None:
                 1.5,
             )
 
-            run_cli(binary, url, password, root, config_home, "delete", torrent_hash)
+            https_url = f"https://127.0.0.1:{https_port}/qbt"
+            https_env = {"SSL_CERT_FILE": str(certificate)}
+            wait_for_ready(
+                binary,
+                https_url,
+                password,
+                root,
+                config_home,
+                timeout=30,
+            )
+            https_torrents = list_torrents(binary, https_url, password, root, config_home)
+            if not any(item.get("hash") == torrent_hash for item in https_torrents):
+                raise RuntimeError("HTTPS path did not expose the existing torrent list")
+            run_cli(
+                binary,
+                https_url,
+                password,
+                root,
+                config_home,
+                "set",
+                "tags",
+                "qbitctl-https",
+                torrent_hash,
+                env_overrides=https_env,
+            )
+            wait_for_tags_and_limits(
+                binary,
+                https_url,
+                password,
+                root,
+                config_home,
+                "qbitctl-compat-fixture.bin",
+                {"qbitctl-https"},
+                2,
+                1.5,
+            )
+            run_cli(
+                binary,
+                https_url,
+                password,
+                root,
+                config_home,
+                "delete",
+                torrent_hash,
+                env_overrides=https_env,
+            )
+            wait_for_torrent(
+                binary,
+                https_url,
+                password,
+                root,
+                config_home,
+                "qbitctl-compat-fixture.bin",
+                present=False,
+            )
+
+            run_cli(binary, url, password, root, config_home, "delete", search_hash)
             wait_for_torrent(
                 binary,
                 url,
                 password,
                 root,
                 config_home,
-                "qbitctl-compat-fixture.bin",
+                "qbitctl-search-fixture.bin",
                 present=False,
             )
             print(f"qBittorrent {args.version}: compatibility checks passed")
@@ -577,14 +920,35 @@ def run(args: argparse.Namespace) -> None:
             logs = redact(docker_logs(container), password).strip()
             if logs:
                 print("qBittorrent container logs:\n" + logs, file=sys.stderr)
+            proxy_logs = redact(docker_logs(proxy_container), password).strip()
+            if proxy_logs:
+                print("nginx sidecar logs:\n" + proxy_logs, file=sys.stderr)
             raise
         finally:
+            if previous_ssl_cert is None:
+                os.environ.pop("SSL_CERT_FILE", None)
+            else:
+                os.environ["SSL_CERT_FILE"] = previous_ssl_cert
+            subprocess.run(
+                ["docker", "rm", "--force", proxy_container],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
             subprocess.run(
                 ["docker", "rm", "--force", container],
                 check=False,
                 capture_output=True,
                 text=True,
             )
+            subprocess.run(
+                ["docker", "network", "rm", network],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            fixture_server.shutdown()
+            fixture_thread.join(timeout=5)
 
 
 def main() -> int:

@@ -1,0 +1,40 @@
+  ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Transfers  ·  2 · 2 marked                                                  │ Selected torrent
+      Name                                       Done            State         │ two
+   *  one                                        ┄┄┄┄┄┄┄┄┄┄   0% downloading   │ stalledUP  ·  0 B
+   ›* two                                        ┄┄┄┄┄┄┄┄┄┄   0% stalledUP     │
+                                                                               │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄   0%
+                                                                               │
+                                                                               │ Down      —
+                                                                               │ Up        —
+                                                                               │ Ratio     0.00
+
+                      Edit 2 torrents
+
+                      › autotmm · Set this qBittorrent field
+                        category · Set this qBittorrent field
+                        dl-limit · Set this qBittorrent field
+                        ratio-limit · Set this qBittorrent field
+                        seedtime-limit · Set this qBittorrent field
+                        seqdl · Set this qBittorrent field
+                        superseed · Set this qBittorrent field
+                        tags · Set this qBittorrent field
+                        up-limit · Set this qBittorrent field
+
+                      ↑/↓ move   enter select   esc close
+
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+  ● Ready
+  / filter   o sort   enter details   space mark   a add   q quit

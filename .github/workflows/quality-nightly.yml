@@ -1,0 +1,97 @@
+name: Quality and nightly checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 6 * * 0,2-6'
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.name }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: client-limit
+            package: ./pkg/client
+            target: FuzzParseLimit
+          - name: client-seedtime
+            package: ./pkg/client
+            target: FuzzParseSeedtimeLimit
+          - name: client-sanitize
+            package: ./pkg/client
+            target: FuzzSanitizeServerText
+          - name: client-search-results
+            package: ./pkg/client
+            target: FuzzSearchResults
+          - name: search-size
+            package: ./internal/searchresults
+            target: FuzzParseSize
+          - name: client-url
+            package: ./pkg/client
+            target: FuzzValidateConfigURL
+          - name: config
+            package: ./internal/configfile
+            target: FuzzDecodeConfig
+          - name: maindata
+            package: ./internal/tui
+            target: FuzzMainDataMerge
+          - name: checksum
+            package: ./cmd/qbitctl
+            target: FuzzParseSHA256File
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Fuzz parser
+        run: go test -run=^$ -fuzz=^${{ matrix.target }}$ -fuzztime=${{ github.event_name == 'schedule' && '10m' || '30s' }} '${{ matrix.package }}'
+      - name: Save failing input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure-${{ matrix.name }}
+          path: ${{ matrix.package }}/testdata/fuzz/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+  uncached:
+    name: uncached (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, macos-26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run shuffled race suite without cache
+        run: go test -race -count=3 -shuffle=on ./...
+      - name: Run native smoke tests without cache
+        run: make smoke
+      - name: Build every release target
+        if: runner.os == 'Linux'
+        run: VERSION=nightly bash scripts/build.sh
+      - name: Compare two clean release builds
+        if: runner.os == 'Linux' && github.event.schedule == '17 6 * * 1'
+        shell: bash
+        run: |
+          second="$RUNNER_TEMP/reproducibility-dist"
+          GOCACHE="$RUNNER_TEMP/reproducibility-go-cache" VERSION=nightly bash scripts/build.sh "$second"
+          for checksum in dist/*.sha256; do
+            diff -u "$checksum" "$second/${checksum##*/}"
+          done

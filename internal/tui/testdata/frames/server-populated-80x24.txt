@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+    1 Queue      2 Search    ▸ 3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+   Server & transfers
+   Connection               ● connected
+   Download speed           1.2 MiB/s
+   DHT nodes                42
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ● Ready
+  enter details   r refresh   q quit

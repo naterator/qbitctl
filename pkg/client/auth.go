@@ -274,6 +274,10 @@ func migratePassword(path, previousPassword, encodedPassword string) error {
 }
 
 func warnLoosePermissions(path string, infoOut io.Writer) {
+	// Windows reports synthetic Unix mode bits rather than the file's ACL.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return

@@ -1,0 +1,284 @@
+name: Verify published release
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify (defaults to the latest release)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  releases:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      selected: ${{ steps.tags.outputs.selected }}
+      latest: ${{ steps.tags.outputs.latest }}
+      previous: ${{ steps.tags.outputs.previous }}
+      archives: ${{ steps.tags.outputs.archives }}
+    steps:
+      - id: tags
+        name: Select release pair
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          selected=${REQUESTED_TAG:-$latest}
+          assets=$(gh release view "$selected" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name')
+          archives=false
+          if grep -Eq '\.(gz|zip)$' <<< "$assets"; then
+            archives=true
+          fi
+          previous=""
+          if [[ "$selected" == "$latest" ]]; then
+            tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 20 \
+              --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName')
+            while IFS= read -r tag; do
+              if [[ "$tag" != "$latest" && -n "$tag" ]]; then
+                previous="$tag"
+                break
+              fi
+            done <<< "$tags"
+          fi
+          {
+            echo "selected=$selected"
+            echo "latest=$latest"
+            echo "previous=$previous"
+            echo "archives=$archives"
+          } >> "$GITHUB_OUTPUT"
+          echo "Verifying $selected${previous:+ after $previous}"
+
+  assets:
+    needs: releases
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+      - name: Verify all downloaded assets against the signed attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.releases.outputs.selected }}
+          HAS_ARCHIVES: ${{ needs.releases.outputs.archives }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset_dir="$RUNNER_TEMP/published-assets"
+          mkdir -p "$asset_dir"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --dir "$asset_dir"
+          gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --format json \
+            --jq '.verificationResult.statement.subject[] | select(.digest.sha256) | [.digest.sha256, .name] | join("  ")' \
+            > "$RUNNER_TEMP/attested-assets.sha256"
+          (
+            cd "$asset_dir"
+            sha256sum --check --strict "$RUNNER_TEMP/attested-assets.sha256"
+            diff -u <(cut -c67- "$RUNNER_TEMP/attested-assets.sha256" | LC_ALL=C sort) \
+              <(find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          )
+          if [[ "$HAS_ARCHIVES" == true ]]; then
+            bash scripts/check_release_assets.sh "$asset_dir"
+          fi
+
+  verify:
+    name: ${{ matrix.name }}
+    needs: releases
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-26.04
+            kind: unix
+          - name: Linux ARM64
+            runner: ubuntu-26.04-arm
+            kind: unix
+          - name: macOS ARM64
+            runner: macos-26
+            kind: unix
+          - name: Windows x86-64
+            runner: windows-2025
+            kind: windows
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      attestations: read
+    env:
+      RELEASE_TAG: ${{ needs.releases.outputs.selected }}
+      LATEST_TAG: ${{ needs.releases.outputs.latest }}
+      PREVIOUS_TAG: ${{ needs.releases.outputs.previous }}
+      HAS_ARCHIVES: ${{ needs.releases.outputs.archives }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify Unix installer and updater
+        if: matrix.kind == 'unix'
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$RELEASE_TAG"
+          previous="$PREVIOUS_TAG"
+          install_script="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh"
+          root="$RUNNER_TEMP/qbitctl-release-verify"
+          mkdir -p "$root"
+          export QBITCTL_SYSTEM_BIN_DIR="$root/test-system-bin"
+
+          verify_version() {
+            expected="$1"
+            binary="$2"
+            got=$("$binary" version)
+            [[ "$got" == "qbitctl $expected" ]] || {
+              echo "::error::Expected qbitctl $expected, got $got"
+              return 1
+            }
+          }
+
+          # Exercise the exact README one-liner twice, then prove the PATH
+          # edit is idempotent.
+          home="$root/home-latest"
+          mkdir -p "$home"
+          if [[ "$latest" == "$LATEST_TAG" ]]; then
+            env HOME="$home" SHELL=/bin/bash PATH="/usr/local/bin:/usr/bin:/bin" \
+              bash -o pipefail -c "curl -fsSL '$install_script' | bash"
+            verify_version "$latest" "$home/.local/bin/qbitctl"
+            env HOME="$home" SHELL=/bin/bash PATH="/usr/local/bin:/usr/bin:/bin" \
+              bash -o pipefail -c "curl -fsSL '$install_script' | bash"
+            startup="$home/.bashrc"
+            if [[ "$RUNNER_OS" == macOS ]]; then
+              startup="$home/.bash_profile"
+            fi
+            [[ "$(grep -cxF '# Added by the qbitctl installer' "$startup")" == 1 ]]
+            # shellcheck disable=SC2016
+            [[ "$(grep -cxF 'export PATH="$HOME/.local/bin:$PATH"' "$startup")" == 1 ]]
+          fi
+
+          # Verify every format the runner can unpack. xz is published for
+          # Linux-family targets, while macOS deliberately uses gzip.
+          formats=(raw)
+          if [[ "$HAS_ARCHIVES" == true ]]; then
+            formats+=(gz)
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              formats+=(xz)
+            fi
+          fi
+          for format in "${formats[@]}"; do
+            target="$root/format-$format"
+            mkdir -p "$target"
+            env HOME="$root/home-$format" SHELL=/bin/bash \
+              QBITCTL_VERSION="$latest" QBITCTL_INSTALL_DIR="$target" \
+              QBITCTL_NO_MODIFY_PATH=1 QBITCTL_DOWNLOAD_FORMAT="$format" \
+              bash -o pipefail -c "curl -fsSL '$install_script' | bash"
+            verify_version "$latest" "$target/qbitctl"
+          done
+
+          # 1.3.1 predates compressed assets. Keep the raw fallback covered
+          # while that release remains published. The release cleanup process
+          # may remove it after the first post-release verification run.
+          if gh release view 1.3.1 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            legacy="$root/legacy"
+            mkdir -p "$legacy"
+            env HOME="$root/home-legacy" SHELL=/bin/bash \
+              QBITCTL_VERSION=1.3.1 QBITCTL_INSTALL_DIR="$legacy" \
+              QBITCTL_NO_MODIFY_PATH=1 \
+              bash -o pipefail -c "curl -fsSL '$install_script' | bash"
+            verify_version 1.3.1 "$legacy/qbitctl"
+          else
+            echo 'Release 1.3.1 is no longer published, so the raw fallback check is skipped.'
+          fi
+
+          # A published pair is required for an upgrade test. The schedule
+          # stays green while the repository has only one release.
+          if [[ -n "$previous" && "$previous" != "$latest" ]]; then
+            upgrade="$root/upgrade"
+            mkdir -p "$upgrade"
+            env HOME="$root/home-upgrade" SHELL=/bin/bash \
+              QBITCTL_VERSION="$previous" QBITCTL_INSTALL_DIR="$upgrade" \
+              QBITCTL_NO_MODIFY_PATH=1 QBITCTL_DOWNLOAD_FORMAT=raw \
+              bash -o pipefail -c "curl -fsSL '$install_script' | bash"
+            update_log="$root/update.log"
+            "$upgrade/qbitctl" update | tee "$update_log"
+            verify_version "$latest" "$upgrade/qbitctl"
+            grep -qE 'Updated qbitctl to' "$update_log"
+            prior_assets=$(gh release view "$previous" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            if [[ "$HAS_ARCHIVES" == true ]] && grep -Eq '\.gz$' <<< "$prior_assets"; then
+              grep -Eq 'using qbitctl-.*\.gz$' "$update_log"
+            fi
+          else
+            echo 'No older published release can update to this tag, so the update check is skipped.'
+          fi
+
+      - name: Verify Windows binary and updater
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $asset = 'qbitctl-windows-amd64.exe'
+          $path = Join-Path $env:RUNNER_TEMP $asset
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $asset --dir $env:RUNNER_TEMP --clobber
+          gh release verify-asset $env:RELEASE_TAG $path --repo $env:GITHUB_REPOSITORY
+          & $path version | Tee-Object -Variable version
+          if ($version.Trim() -ne "qbitctl $env:RELEASE_TAG") {
+            throw "Expected qbitctl $env:RELEASE_TAG, got $version"
+          }
+          if ($env:PREVIOUS_TAG) {
+            $upgrade = Join-Path $env:RUNNER_TEMP 'qbitctl-upgrade'
+            New-Item -ItemType Directory -Path $upgrade -Force | Out-Null
+            gh release download $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --pattern $asset --dir $upgrade --clobber
+            $old = Join-Path $upgrade $asset
+            $update = & $old update
+            $update | Write-Output
+            $updatedVersion = & $old version
+            if ($updatedVersion.Trim() -ne "qbitctl $env:RELEASE_TAG") {
+              throw "Expected upgraded qbitctl $env:RELEASE_TAG, got $updatedVersion"
+            }
+            $priorAssets = gh release view $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+            if (($env:HAS_ARCHIVES -eq 'true') -and ($priorAssets -contains 'qbitctl-windows-amd64.zip')) {
+              if (-not ($update -match 'using qbitctl-windows-amd64\.zip$')) {
+                throw 'The updater did not report the compressed Windows asset'
+              }
+            }
+          }
+
+  report-failure:
+    needs: [releases, assets, verify]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update release verification issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.releases.outputs.latest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Scheduled release verification failed for $RELEASE_TAG"
+          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title release verification failed" --json number --jq '.[0].number // empty')
+          body="The scheduled release verification failed for **$RELEASE_TAG** in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+          if [[ -n "$issue" ]]; then
+            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh label create release-verify --repo "$GITHUB_REPOSITORY" --description 'Published release verification' --force
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --label release-verify --body "$body"
+          fi

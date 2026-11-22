@@ -28,6 +28,26 @@ tag-moved)
 tag-stable)
 	printf '%s\n' 'expected-commit'
 	;;
+tag-lightweight)
+	case "$*" in
+		*git/ref/tags/*) printf 'commit\tlightweight-object\n' ;;
+		*) printf '%s\n' 'unexpected tag API call' >&2; exit 2 ;;
+	esac
+	;;
+tag-unsigned)
+	case "$*" in
+		*git/ref/tags/*) printf 'tag\tunsigned-object\n' ;;
+		*git/tags/*) printf '%s\n' 'false' ;;
+		*) printf '%s\n' 'unexpected tag API call' >&2; exit 2 ;;
+	esac
+	;;
+tag-verified)
+	case "$*" in
+		*git/ref/tags/*) printf 'tag\tverified-object\n' ;;
+		*git/tags/*) printf '%s\n' 'true' ;;
+		*) printf '%s\n' 'unexpected tag API call' >&2; exit 2 ;;
+	esac
+	;;
 *)
 	printf '%s\n' "unknown fake gh scenario: ${GH_FAKE_SCENARIO:-}" >&2
 	exit 2
@@ -78,5 +98,21 @@ if PATH="$fake_dir:$PATH" GH_FAKE_SCENARIO=tag-moved \
 	echo "moved tag verification unexpectedly succeeded" >&2
 	exit 1
 fi
+
+if PATH="$fake_dir:$PATH" GH_FAKE_SCENARIO=tag-lightweight \
+	sh -c '. "$1"; release_verify_tag_signature "$2" "$3"' sh "$helpers" example/repo v1.2.3 >/dev/null 2>&1; then
+	echo "lightweight tag signature verification unexpectedly succeeded" >&2
+	exit 1
+fi
+
+if PATH="$fake_dir:$PATH" GH_FAKE_SCENARIO=tag-unsigned \
+	sh -c '. "$1"; release_verify_tag_signature "$2" "$3"' sh "$helpers" example/repo v1.2.3 >/dev/null 2>&1; then
+	echo "unsigned tag signature verification unexpectedly succeeded" >&2
+	exit 1
+fi
+
+verified_output=$(PATH="$fake_dir:$PATH" GH_FAKE_SCENARIO=tag-verified \
+	sh -c '. "$1"; release_verify_tag_signature "$2" "$3"' sh "$helpers" example/repo v1.2.3)
+[ -z "$verified_output" ]
 
 echo "release helper regression tests passed"

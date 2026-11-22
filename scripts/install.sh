@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+if [ -z "${BASH_VERSION:-}" ]; then
+  printf 'qbitctl-install: error: this installer must be run with bash\n' >&2
+  exit 1
+fi
+
 # Install the latest qbitctl release:
 #
 #   curl -fsSL https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.sh | bash

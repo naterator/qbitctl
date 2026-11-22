@@ -1,0 +1,40 @@
+  ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Transfers  ·  3 · 1 marked                                                  │ Selected torrent
+      Name                                       Done            State         │ Ubuntu 24.04 LTS
+   ›* Ubuntu 24.04 LTS                           ━━━━┄┄┄┄┄┄  42% downloading   │ downloading  ·  0 B
+      long-directory-name/long-directory-name/l… ┄┄┄┄┄┄┄┄┄┄   7% error         │
+      日本語 🌐 release                          ━━━━━━━━━━ 100% stalledUP     │ ━━━━━━━┄┄┄┄┄┄┄┄┄┄┄┄  42%
+                                                                               │
+                                                                               │ Down      1.0 MiB/s
+                                                                               │ Up        —
+                                                                               │ Ratio     0.00
+                                                                               │ Tracker
+                                                                               │ Path
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+  ● Ready
+  / filter   o sort   enter details   space mark   a add   q quit

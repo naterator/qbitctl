@@ -1,0 +1,8 @@
+# GitHub runner labels introduced after actionlint's built-in catalog.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
+    - macos-26
+    - macos-26-intel
+    - windows-11-arm

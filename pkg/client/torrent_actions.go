@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // qBittorrent 5.0's request parser caps the complete POST body at 64 MiB.
@@ -89,7 +91,7 @@ func (a *App) AddTorrentWithOptions(source string, options AddTorrentOptions) er
 		return codedErrf(ExitBadArgs, "Torrent file path or magnet link required")
 	}
 	if looksLikeTorrentSourceURL(source) {
-		return a.addTorrentURL(source, options)
+		return a.addTorrentURL(source, options, "")
 	}
 	return a.addTorrentFile(source, options)
 }
@@ -100,24 +102,69 @@ func (a *App) AddSearchResult(id int64) error {
 	if err != nil {
 		return err
 	}
-	if target.Plugin != "" && (strings.HasPrefix(target.URL, "http:") || strings.HasPrefix(target.URL, "https:")) {
-		_, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/search/downloadTorrent", url.Values{
-			"torrentUrl": {target.URL},
-			"pluginName": {target.Plugin},
-		})
-		if err != nil {
-			return codedErrWrapf(ExitActionFail, err, "Failed to submit search result %d: %v", id, err)
-		}
-		return nil
+	if target.Plugin == "" || !(strings.HasPrefix(target.URL, "http:") || strings.HasPrefix(target.URL, "https:")) {
+		return a.addTorrentURL(target.URL, AddTorrentOptions{}, "")
 	}
-	return a.addTorrentURL(target.URL, AddTorrentOptions{})
+	version, err := a.fetchAppVersion()
+	if err != nil {
+		return err
+	}
+	if compareDottedVersion(version, "5.2.0") >= 0 {
+		// The newer Web UI cancels its pending plugin download when the
+		// session logs out. Fetch metadata first so add completes in-session.
+		if err := a.waitForSearchMetadata(target); err != nil {
+			return codedErrWrapf(ExitActionFail, err, "Failed to fetch metadata for search result %d: %v", id, err)
+		}
+		return a.addTorrentURL(target.URL, AddTorrentOptions{}, target.Plugin)
+	}
+	_, err = a.client.requestContext(a.context(), http.MethodPost, "/api/v2/search/downloadTorrent", url.Values{
+		"torrentUrl": {target.URL},
+		"pluginName": {target.Plugin},
+	})
+	if err != nil {
+		return codedErrWrapf(ExitActionFail, err, "Failed to submit search result %d: %v", id, err)
+	}
+	return nil
 }
 
-func (a *App) addTorrentURL(source string, options AddTorrentOptions) error {
+func (a *App) waitForSearchMetadata(target cachedSearchTarget) error {
+	ctx, cancel := context.WithTimeout(a.context(), 60*time.Second)
+	defer cancel()
+	poll := time.NewTicker(250 * time.Millisecond)
+	defer poll.Stop()
+	// The metadata endpoint percent-decodes source after parsing the form.
+	source := strings.ReplaceAll(url.QueryEscape(target.URL), "+", "%20")
+	params := url.Values{"source": {source}, "downloader": {target.Plugin}}
+	for {
+		_, status, err := a.client.requestWithStatusContext(ctx, http.MethodPost, "/api/v2/torrents/fetchMetadata", params)
+		if err != nil {
+			return err
+		}
+		switch status {
+		case http.StatusOK:
+			return nil
+		case http.StatusAccepted:
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-poll.C:
+			}
+		default:
+			return fmt.Errorf("unexpected metadata HTTP status %d", status)
+		}
+	}
+}
+
+func (a *App) addTorrentURL(source string, options AddTorrentOptions, downloader string) error {
 	var body strings.Builder
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("urls", source); err != nil {
 		return codedErrf(ExitActionFail, "Failed to build add request")
+	}
+	if downloader != "" {
+		if err := writer.WriteField("downloader", downloader); err != nil {
+			return codedErrf(ExitActionFail, "Failed to build add request")
+		}
 	}
 	if err := writeTorrentAddOptions(writer, options); err != nil {
 		return codedErrf(ExitActionFail, "Failed to build add request")
@@ -132,6 +179,14 @@ func (a *App) addTorrentURL(source string, options AddTorrentOptions) error {
 	}
 	if torrentAddRejected(response) {
 		return codedErrf(ExitActionFail, "Failed to add torrent from URL or magnet link: qBittorrent rejected the request")
+	}
+	if downloader != "" {
+		var result struct {
+			SuccessCount int `json:"success_count"`
+		}
+		if json.Unmarshal(response, &result) != nil || result.SuccessCount != 1 {
+			return codedErrf(ExitActionFail, "qBittorrent did not confirm adding the search result")
+		}
 	}
 	return nil
 }

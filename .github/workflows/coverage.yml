@@ -1,0 +1,136 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  COVERPKG: github.com/naterator/qbitctl/cmd/qbitctl,github.com/naterator/qbitctl/pkg/client,github.com/naterator/qbitctl/internal/configfile,github.com/naterator/qbitctl/internal/releaseattest,github.com/naterator/qbitctl/internal/searchresults,github.com/naterator/qbitctl/internal/tui
+
+jobs:
+  unit:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run unit tests with coverage data
+        run: |
+          mkdir -p coverage/unit
+          go test -count=1 -cover -coverpkg="$COVERPKG" ./... \
+            -args -test.gocoverdir="$GITHUB_WORKSPACE/coverage/unit"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-unit
+          path: coverage/unit
+          if-no-files-found: error
+
+  smoke:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build coverage binary and run smoke tests
+        run: |
+          mkdir -p coverage/smoke
+          go build -trimpath -cover -coverpkg="$COVERPKG" -o qbitctl-cover ./cmd/qbitctl
+          GOCOVERDIR="$GITHUB_WORKSPACE/coverage/smoke" python3 scripts/smoke_native.py ./qbitctl-cover
+          GOCOVERDIR="$GITHUB_WORKSPACE/coverage/smoke" python3 scripts/smoke_pty.py ./qbitctl-cover
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-smoke
+          path: coverage/smoke
+          if-no-files-found: error
+
+  compatibility:
+    name: coverage compatibility (${{ matrix.version }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: 5.0.0
+            image: qbittorrentofficial/qbittorrent-nox:5.0.0-1@sha256:03c968cd9d82c92a90b6ddde6c9a7a4093cf072c329090815c355dabeadd1fc9
+          - version: 5.2.4
+            image: qbittorrentofficial/qbittorrent-nox:5.2.4-1@sha256:92bfd78d731e254ba64f62b77b0696add6447a33642ee5feda106a26b285aa7f
+          - version: 5.3.0
+            image: qbittorrentofficial/qbittorrent-nox:5.3.0-2@sha256:43b2d352cf76330a7ca34c7320b9b74227d6f31e662e0e123d0457206b09a7ea
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Run compatibility suite with coverage
+        run: |
+          mkdir -p coverage/compat
+          go build -trimpath -cover -coverpkg="$COVERPKG" -o qbitctl-cover ./cmd/qbitctl
+          GOCOVERDIR="$GITHUB_WORKSPACE/coverage/compat" python3 scripts/integration_qbittorrent.py \
+            --binary "$GITHUB_WORKSPACE/qbitctl-cover" \
+            --image '${{ matrix.image }}' \
+            --version '${{ matrix.version }}'
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-compat-${{ matrix.version }}
+          path: coverage/compat
+          if-no-files-found: error
+
+  merge:
+    name: Merge coverage
+    if: needs.unit.result == 'success' && needs.smoke.result == 'success' && needs.compatibility.result == 'success'
+    needs: [unit, smoke, compatibility]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-unit
+          path: coverage/unit
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-smoke
+          path: coverage/smoke
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-compat-*
+          path: coverage/compat
+          merge-multiple: true
+      - name: Merge profiles and enforce coverage floor
+        shell: bash
+        run: |
+          mkdir -p coverage/merged
+          go tool covdata merge -i=coverage/unit,coverage/smoke,coverage/compat -o=coverage/merged
+          go tool covdata textfmt -i=coverage/merged -o=cover.out
+          go tool cover -func=cover.out | tee coverage-summary.txt
+          bash scripts/check_coverage.sh cover.out .coverage-floor | tee -a coverage-summary.txt
+          {
+            echo '### Unit coverage'
+            go tool covdata percent -i=coverage/unit
+            echo '### Merged coverage'
+            go tool covdata percent -i=coverage/merged
+            tail -1 coverage-summary.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: merged-coverage
+          path: |
+            cover.out
+            coverage-summary.txt

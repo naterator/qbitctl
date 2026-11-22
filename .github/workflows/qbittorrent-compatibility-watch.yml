@@ -1,0 +1,84 @@
+name: qBittorrent compatibility watch
+
+on:
+  schedule:
+    - cron: '29 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    outputs:
+      newer: ${{ steps.versions.outputs.newer }}
+      tag: ${{ steps.versions.outputs.tag }}
+      image: ${{ steps.versions.outputs.image }}
+      digest: ${{ steps.versions.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: versions
+        name: Check Docker Hub for a newer qBittorrent image
+        shell: bash
+        run: |
+          python3 scripts/check_qbittorrent_releases.py \
+            --workflow .github/workflows/ci.yml \
+            --github-output | tee "$RUNNER_TEMP/qbittorrent-version-check.txt"
+          grep -E '^(newer|tag|image|digest)=' "$RUNNER_TEMP/qbittorrent-version-check.txt" >> "$GITHUB_OUTPUT"
+
+  compatibility:
+    needs: detect
+    if: needs.detect.outputs.newer == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build compatibility binary
+        run: go build -trimpath -o "$RUNNER_TEMP/qbitctl-compat" ./cmd/qbitctl
+      - name: Exercise the new qBittorrent image
+        env:
+          QBITCTL_NGINX_IMAGE: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+        run: |
+          python3 scripts/integration_qbittorrent.py \
+            --binary "$RUNNER_TEMP/qbitctl-compat" \
+            --image '${{ needs.detect.outputs.image }}' \
+            --version '${{ needs.detect.outputs.tag }}'
+
+  report:
+    needs: [detect, compatibility]
+    if: always() && needs.detect.outputs.newer == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Open a tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_TAG: ${{ needs.detect.outputs.tag }}
+          NEW_IMAGE: ${{ needs.detect.outputs.image }}
+          NEW_DIGEST: ${{ needs.detect.outputs.digest }}
+          TEST_RESULT: ${{ needs.compatibility.result }}
+        shell: bash
+        run: |
+          title="qBittorrent compatibility check: ${NEW_TAG}"
+          if gh issue list --state open --search "$title in:title" --json title --jq 'length' | grep -q '^0$'; then
+            body="$RUNNER_TEMP/qbittorrent-compatibility.md"
+            {
+              printf '%s\n\n' "Automated qBittorrent compatibility watch result."
+              printf '%s\n' "- Tag: \`${NEW_TAG}\`"
+              printf '%s\n' "- Immutable image: \`${NEW_IMAGE}\`"
+              printf '%s\n' "- Digest: \`${NEW_DIGEST}\`"
+              printf '%s\n' "- Compatibility job: \`${TEST_RESULT}\`"
+              printf '\n%s\n' "Update the CI matrix if this release should become one of the newest supported versions."
+            } > "$body"
+            gh issue create --title "$title" --body-file "$body"
+          else
+            echo "An open tracking issue already exists for $NEW_TAG"
+          fi

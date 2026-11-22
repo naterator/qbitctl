@@ -141,7 +141,7 @@ func (u *githubReleaseUpdater) Run(ctx context.Context, currentVersion string, d
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "Updating qbitctl from %s to %s\n", currentVersionText, latestVersion)
+	fmt.Fprintf(stdout, "Updating qbitctl from %s to %s using %s\n", currentVersionText, latestVersion, binaryAsset.Name)
 	// Use the exact published tag when verifying the release attestation.
 	if err := u.downloadAndReplace(ctx, exePath, release.TagName, binaryAsset.Name, binaryAsset.BrowserDownloadURL, expectedChecksum); err != nil {
 		return err

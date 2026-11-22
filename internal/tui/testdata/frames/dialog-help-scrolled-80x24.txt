@@ -1,0 +1,24 @@
+  ⇅ qbitctl
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+
+  Queue                                  Torrent actions
+  /      Filter queue                    s   Start
+  o      Sort queue                      p   Pause
+  enter  Torrent details                 f   Force start
+  space  Mark torrent                    m   Move
+  esc    Clear marks                     t   Trackers
+  a      Add torrent                     e   Edit focused / marked
+                                         x   Remove
+                                         ⇧d  Delete files
+
+  Search                                 Dialogs
+  /      New search                      tab/⇧tab  Change field
+  s      Sort results                    enter     Submit
+  f      Filter results                  esc       Cancel
+  enter  Add result
+  esc    Cancel / clear filter
+
+  Session
+  ────────────────────────────────────────────────────────────────────────────
+  esc back   ↑/↓ scroll   pgup/pgdn page

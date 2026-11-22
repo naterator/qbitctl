@@ -1,0 +1,40 @@
+  ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
+    1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Search results                                                              │ Selected result
+   1 results  ·  Search order                                                  │ Ubuntu ISO
+   › Text    Min seeders    Min size    Max size                               │ 4.0 MiB  ·  jackett
+   Filter Text title, source, or ID                                            │
+      Title                          Size      Seeds ID         Source         │ Seeders   12
+   ›  Ubuntu ISO                     4.0 MiB   12    101        jackett        │ Leechers  0
+                                                                               │ Result ID 101
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+  ● Ready
+  tab field   enter apply   esc cancel   ↑/↓ move

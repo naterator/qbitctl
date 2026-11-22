@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+message_file=${1:?commit message file is required}
+if grep -Eiq '(^|[[:space:]])co-authored-by:.*(ai assistant|anthropic|chatgpt|claude|codex|copilot|gpt([^[:alnum:]]|$)|llm|openai|language model)|generated with[[:space:]]' "$message_file"; then
+	echo "commit-msg: generated or AI attribution is not allowed" >&2
+	exit 1
+fi

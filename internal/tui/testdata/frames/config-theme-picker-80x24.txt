@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+
+    Color scheme
+
+    › Default · qbitctl's original palette
+      Ocean · Deep blue with bright cyan accents
+      Forest · Calm green terminal garden
+      Amber · Warm gold on dark brown
+      Rose · Soft rose and plum
+      Violet · Purple surfaces with cool highlights
+      Monochrome · Quiet grayscale with clear hierarchy
+      Nord · Arctic blue-gray
+      Dracula · High-contrast purple night
+      Solarized · Classic teal and gold
+      Gruvbox · Earthy retro terminal colors
+      Catppuccin · Pastel accents on mocha
+      High contrast · Maximum separation for accessibility
+      Paper · Light parchment with ink-blue accents
+      Midnight · Nearly black with electric cyan
+      Terminal · Green phosphor with old-school contrast
+
+    ↑/↓ preview   enter save   esc cancel
+
+  enter edit   d toggle default   c colors   q quit

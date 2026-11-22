@@ -55,14 +55,22 @@ checksum_for() {
 	printf '%s  %s\n' "$(sha256 "$1/$2")" "$2" > "$1/$2.sha256"
 }
 
+# Publish a raw asset with its checksum.
+publish_named() {
+	release_dir=$1
+	name=$2
+	content=$3
+	mkdir -p "$release_dir"
+	printf '%s\n' "$content" > "$release_dir/$name"
+	checksum_for "$release_dir" "$name"
+}
+
 # Publish the raw asset, plus the compressed copies a release provides when
 # "compressed" is given: .gz always, and .xz on Linux when xz is available.
 publish() {
 	release_dir=$1
 	content=$2
-	mkdir -p "$release_dir"
-	printf '%s\n' "$content" > "$release_dir/$asset"
-	checksum_for "$release_dir" "$asset"
+	publish_named "$release_dir" "$asset" "$content"
 	[ "${3:-}" = compressed ] || return 0
 	gzip -9 -n -c "$release_dir/$asset" > "$release_dir/$asset.gz"
 	checksum_for "$release_dir" "$asset.gz"
@@ -76,6 +84,22 @@ server="$tmp_dir/server"
 publish "$server/latest/download" "latest fixture" compressed
 # Releases before compressed assets publish only the raw binary.
 publish "$server/download/1.2.3" "pinned fixture"
+# Include raw assets for every platform mapping in the installer matrix. The
+# compressed fixtures above exercise format selection on the host platform,
+# while these entries exercise OS and architecture detection independently.
+for matrix_asset in \
+	qbitctl-darwin-arm64 \
+	qbitctl-darwin-amd64 \
+	qbitctl-linux-amd64 \
+	qbitctl-linux-arm64 \
+	qbitctl-linux-arm \
+	qbitctl-freebsd-amd64 \
+	qbitctl-openbsd-arm64 \
+	qbitctl-dragonfly-amd64; do
+	matrix_content="$matrix_asset fixture"
+	[ "$matrix_asset" = "$asset" ] && matrix_content="latest fixture"
+	publish_named "$server/latest/download" "$matrix_asset" "$matrix_content"
+done
 
 port=$(python3 -c '
 import socket
@@ -103,6 +127,35 @@ run_installer() {
 	env -i HOME="$home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$tmp_dir" \
 		QBITCTL_RELEASES_URL="$releases" QBITCTL_SYSTEM_BIN_DIR="$tmp_dir/no-system-bin" \
 		"$@" bash < "$installer"
+}
+
+run_platform_installer() {
+	platform_os=$1
+	platform_machine=$2
+	platform_asset=$3
+	platform_content="$platform_asset fixture"
+	[ "$platform_asset" = "$asset" ] && platform_content="latest fixture"
+	platform_home="$tmp_dir/home-$platform_asset"
+	platform_dir="$tmp_dir/bin-$platform_asset"
+	platform_shim="$tmp_dir/shim-$platform_asset"
+	mkdir -p "$platform_shim" "$platform_home"
+	cat > "$platform_shim/uname" <<EOF
+#!/bin/sh
+case "\${1:-}" in
+  -s) printf '%s\\n' '$platform_os' ;;
+  -m) printf '%s\\n' '$platform_machine' ;;
+  *) exit 1 ;;
+esac
+EOF
+	chmod 0755 "$platform_shim/uname"
+	if env -i HOME="$platform_home" PATH="$platform_shim:/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$tmp_dir" \
+		SHELL=/bin/zsh QBITCTL_RELEASES_URL="$releases" QBITCTL_INSTALL_DIR="$platform_dir" \
+		QBITCTL_NO_MODIFY_PATH=1 bash < "$installer" > "$tmp_dir/platform.out" 2>&1; then
+		assert_installed "$platform_dir/qbitctl" "$platform_content"
+	else
+		cat "$tmp_dir/platform.out"
+		fail "installer rejected supported platform $platform_os/$platform_machine"
+	fi
 }
 
 assert_installed() {
@@ -228,5 +281,61 @@ if run_installer "$home" QBITCTL_DOWNLOAD_FORMAT=bz2 > "$tmp_dir/out" 2>&1; then
 	fail "installer accepted an unknown QBITCTL_DOWNLOAD_FORMAT"
 fi
 grep -qF "must be xz, gz, or raw" "$tmp_dir/out" || fail "installer did not explain the invalid format"
+
+# 9. Platform detection uses the documented release asset names, independent
+# of the host running this test. Compressed assets are absent for these
+# fixtures, so each supported mapping must fall through to its raw binary.
+run_platform_installer Darwin arm64 qbitctl-darwin-arm64
+run_platform_installer Darwin x86_64 qbitctl-darwin-amd64
+run_platform_installer Linux x86_64 qbitctl-linux-amd64
+run_platform_installer Linux aarch64 qbitctl-linux-arm64
+run_platform_installer Linux armv7l qbitctl-linux-arm
+run_platform_installer FreeBSD amd64 qbitctl-freebsd-amd64
+run_platform_installer OpenBSD arm64 qbitctl-openbsd-arm64
+run_platform_installer DragonFly x86_64 qbitctl-dragonfly-amd64
+
+run_unsupported_platform() {
+	platform_os=$1
+	platform_machine=$2
+	platform_shim="$tmp_dir/unsupported-shim-$platform_os-$platform_machine"
+	mkdir -p "$platform_shim"
+	cat > "$platform_shim/uname" <<EOF
+#!/bin/sh
+case "\${1:-}" in
+  -s) printf '%s\\n' '$platform_os' ;;
+  -m) printf '%s\\n' '$platform_machine' ;;
+  *) exit 1 ;;
+esac
+EOF
+	chmod 0755 "$platform_shim/uname"
+	if env -i HOME="$tmp_dir/unsupported-home" PATH="$platform_shim:/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$tmp_dir" \
+		SHELL=/bin/zsh QBITCTL_RELEASES_URL="$releases" QBITCTL_INSTALL_DIR="$tmp_dir/unsupported-bin" \
+		QBITCTL_NO_MODIFY_PATH=1 bash < "$installer" > "$tmp_dir/out" 2>&1; then
+		fail "installer accepted unsupported platform $platform_os/$platform_machine"
+	fi
+	grep -qF "Download a release asset" "$tmp_dir/out" ||
+		fail "unsupported platform $platform_os/$platform_machine did not point to release assets"
+}
+
+run_unsupported_platform Linux armv6l
+run_unsupported_platform NetBSD evbarm
+run_unsupported_platform SunOS i86pc
+run_unsupported_platform MINGW64_NT-10.0 x86_64
+
+# The script deliberately requires bash because it uses arrays, [[ ]], and
+# pipefail. A direct /bin/sh invocation exits with a clear diagnostic before
+# reaching any bash-only syntax.
+if ! sh -c 'test -n "${BASH_VERSION:-}"'; then
+	if sh "$installer" > "$tmp_dir/out" 2>&1; then
+		fail "installer unexpectedly ran under sh"
+	fi
+	grep -qF "must be run with bash" "$tmp_dir/out" || fail "sh invocation lacked the bash diagnostic"
+fi
+if command -v dash >/dev/null 2>&1 && dash "$installer" > "$tmp_dir/out" 2>&1; then
+	fail "installer unexpectedly ran under dash"
+fi
+if command -v dash >/dev/null 2>&1; then
+	grep -qF "must be run with bash" "$tmp_dir/out" || fail "dash invocation lacked the bash diagnostic"
+fi
 
 echo "installer tests passed"

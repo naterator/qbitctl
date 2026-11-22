@@ -78,3 +78,41 @@ release_verify_tag_commit() {
 		return 1
 	fi
 }
+
+# Require the release tag to be an annotated, GitHub-verified tag. A
+# lightweight tag has no tag object and therefore cannot carry a signature
+# that GitHub can verify.
+release_verify_tag_signature() {
+	if [ "$#" -ne 2 ]; then
+		echo "usage: release_verify_tag_signature <repository> <tag>" >&2
+		return 2
+	fi
+
+	release_repository=$1
+	release_tag=$2
+	if ! release_tag_ref=$(gh api "repos/$release_repository/git/ref/tags/$release_tag" \
+		--jq '.object | [.type, .sha] | @tsv'); then
+		echo "::error::Unable to resolve tag $release_tag before building."
+		return 1
+	fi
+	release_old_ifs=$IFS
+	IFS="$(printf '\t')"
+	read -r release_tag_type release_tag_object <<EOF
+$release_tag_ref
+EOF
+	IFS=$release_old_ifs
+	if [ "$release_tag_type" != tag ] || [ -z "$release_tag_object" ]; then
+		echo "::error::Release tag $release_tag is not an annotated tag."
+		return 1
+	fi
+
+	if ! release_tag_verified=$(gh api "repos/$release_repository/git/tags/$release_tag_object" \
+		--jq '.verification.verified'); then
+		echo "::error::Unable to verify the signature for release tag $release_tag."
+		return 1
+	fi
+	if [ "$release_tag_verified" != true ]; then
+		echo "::error::Release tag $release_tag has no verified GitHub signature."
+		return 1
+	fi
+}

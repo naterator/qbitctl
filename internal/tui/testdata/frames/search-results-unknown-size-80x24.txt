@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+    1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
+  ────────────────────────────────────────────────────────────────────────────
+   Search results
+   2 results  ·  Search order
+      Title                         Size      Seeds ID         Source
+   ›  Ubuntu ISO                    ?         12    101        jackett
+      Unknown size result           ?         0     —          fixture
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ● Ready
+  / search   s sort   f filter   enter add   q quit

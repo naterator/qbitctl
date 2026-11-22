@@ -15,6 +15,10 @@ func runMacSecurity(input string, args ...string) ([]byte, error) {
 }
 
 func saveMacMasterSecret(secret string, run func(string, ...string) ([]byte, error), read func() (string, error)) (string, error) {
+	return saveMacMasterSecretFor(secret, masterKeyService, masterKeyUser, run, read)
+}
+
+func saveMacMasterSecretFor(secret, service, user string, run func(string, ...string) ([]byte, error), read func() (string, error)) (string, error) {
 	output, err := run("", "default-keychain", "-d", "user")
 	path := strings.TrimSpace(string(output))
 	if err != nil || len(path) < 2 || path[0] != '"' || path[len(path)-1] != '"' {
@@ -32,7 +36,7 @@ func saveMacMasterSecret(secret string, run func(string, ...string) ([]byte, err
 	// avoids the system's default-Keychain creation dialog. Omit -U so a
 	// concurrent invocation cannot replace an existing encryption key.
 	quotedPath := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(path)
-	command := fmt.Sprintf("add-generic-password -s %s -a %s -w %s \"%s\"\n", masterKeyService, masterKeyUser, secret, quotedPath)
+	command := fmt.Sprintf("add-generic-password -s %s -a %s -w %s \"%s\"\n", service, user, secret, quotedPath)
 	_, writeErr := run(command, "-i")
 	stored, err := read()
 	if err == nil && stored != "" {

@@ -1,29 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release_targets=(
-  darwin/amd64
-  darwin/arm64
-  dragonfly/amd64
-  freebsd/amd64
-  freebsd/arm64
-  illumos/amd64
-  linux/amd64
-  linux/arm
-  linux/arm64
-  netbsd/amd64
-  netbsd/arm64
-  openbsd/amd64
-  openbsd/arm64
-  plan9/amd64
-  solaris/amd64
-  windows/amd64
-  windows/arm64
-)
-
-# Operating systems whose base install ships xz. They get a .xz asset in
-# addition to .gz; every non-Windows target gets .gz, and Windows gets .zip.
-xz_operating_systems=" linux freebsd netbsd dragonfly illumos solaris "
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=release_assets.sh
+. "$script_dir/release_assets.sh"
 
 if [[ "${1:-}" == "--list-targets" ]]; then
   printf '%s\n' "${release_targets[@]}"
@@ -67,7 +47,7 @@ compress_asset() {
   gzip -dc "$asset.gz" | cmp -s - "$asset" ||
     { printf 'gzip round trip failed for %s\n' "$asset.gz" >&2; exit 1; }
   write_checksum "$asset.gz"
-  if [[ "$xz_operating_systems" == *" $goos "* ]]; then
+  if release_target_has_xz "$goos"; then
     xz -9 -T1 -c "$asset" > "$asset.xz"
     xz -dc "$asset.xz" | cmp -s - "$asset" ||
       { printf 'xz round trip failed for %s\n' "$asset.xz" >&2; exit 1; }

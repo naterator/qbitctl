@@ -245,7 +245,8 @@ func TestSearchResultCanBeAddedByID(t *testing.T) {
 		statusPath   = "/api/v2/search/status"
 		resultsPath  = "/api/v2/search/results"
 		deletePath   = "/api/v2/search/delete"
-		downloadPath = "/api/v2/search/downloadTorrent"
+		metadataPath = "/api/v2/torrents/fetchMetadata"
+		addPath      = "/api/v2/torrents/add"
 		logoutPath   = "/api/v2/auth/logout"
 	)
 	var requests []string
@@ -285,12 +286,14 @@ func TestSearchResultCanBeAddedByID(t *testing.T) {
 				}
 				deleteForm = qbtest.CloneValues(req.Form)
 				resp.StatusCode = http.StatusNoContent
-			case downloadPath:
-				if err := req.ParseForm(); err != nil {
+			case metadataPath:
+				body = `{}`
+			case addPath:
+				if err := req.ParseMultipartForm(32 << 10); err != nil {
 					t.Fatal(err)
 				}
-				downloadForm = qbtest.CloneValues(req.Form)
-				resp.StatusCode = http.StatusNoContent
+				downloadForm = qbtest.CloneValues(req.MultipartForm.Value)
+				body = `{"success_count":1}`
 			case logoutPath:
 				resp.StatusCode = http.StatusNoContent
 			default:
@@ -330,11 +333,12 @@ func TestSearchResultCanBeAddedByID(t *testing.T) {
 	if addErr != nil || addStdout != "" || addStderr != "" {
 		t.Fatalf("add by search ID returned %v, stdout %q, stderr %q", addErr, addStdout, addStderr)
 	}
-	if !reflect.DeepEqual(downloadForm, url.Values{"torrentUrl": {"https://jackett.example/api?apikey=mock-key"}, "pluginName": {"jackett"}}) {
+	if !reflect.DeepEqual(downloadForm, url.Values{"urls": {"https://jackett.example/api?apikey=mock-key"}, "downloader": {"jackett"}}) {
 		t.Fatalf("download form = %v, want cached result URL and plugin", downloadForm)
 	}
-	if !strings.Contains(strings.Join(requests, "\n"), downloadPath) {
-		t.Fatalf("request paths = %v, want search download endpoint", requests)
+	metadataIndex := slices.Index(requests, metadataPath)
+	if metadataIndex < 0 || !slices.Equal(requests[metadataIndex:], []string{metadataPath, addPath, logoutPath}) {
+		t.Fatalf("request paths = %v, want fetch metadata and add before logout", requests)
 	}
 }
 

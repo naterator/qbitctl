@@ -182,6 +182,24 @@ func TestLoginRedactsPasswordEchoes(t *testing.T) {
 	}
 }
 
+func TestLoginRedactsCredentialBeforeDisplayTruncation(t *testing.T) {
+	const password = "partial-echo"
+	prefix := strings.Repeat("x", maxHTTPErrorMessageRunes-4)
+	if got := sanitizeLoginHTTPBody(nil, []byte(prefix+password), password); got != prefix+"[red…" {
+		t.Fatalf("login detail = %q, want a truncated redaction marker", got)
+	}
+	if got := sanitizeLoginHTTPBody(nil, []byte("password: 123"), "123"); got != "password: [redacted]" {
+		t.Fatalf("login detail = %q, want the short password redacted", got)
+	}
+	if got := sanitizeLoginHTTPBody(nil, []byte(`{"password":"\u003csample\u003e"}`), "<sample>"); got != `{"password":"[redacted]"}` {
+		t.Fatalf("login detail = %q, want the JSON-escaped password redacted", got)
+	}
+	largeBody := strings.Repeat("x", maxHTTPErrorBodyBytes-4) + "part"
+	if got := sanitizeLoginHTTPBody(nil, []byte(largeBody), password); got != "" {
+		t.Fatal("login detail included a body that reached the read limit")
+	}
+}
+
 func TestSetTagsLegacyFallbackStillRecognizes404Body(t *testing.T) {
 	hash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)

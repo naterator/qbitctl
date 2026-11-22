@@ -8,9 +8,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
 
 permissions:
   contents: read
+  actions: read
 
 # Cancel superseded pull request runs. Main runs are never canceled, because
 # each commit that may be tagged needs a completed run for the release gate.
@@ -25,18 +28,57 @@ concurrency:
 
 jobs:
   native:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    name: native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, macos-26, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      QBITCTL_MASTER_KEY: ci-only-test-key
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - id: go
+        if: runner.os != 'Windows'
         uses: ./.github/actions/setup-go
         with:
-          cache-name: native
-      - name: Check formatting, tests, smoke, and release helpers
+          cache-name: native-${{ runner.os == 'macOS' && 'macos' || 'linux' }}
+      - id: windows-go
+        if: runner.os == 'Windows'
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Report Go cache result
+        if: always()
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            echo 'Go cache: disabled on Windows' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Go cache exact hit: ${{ steps.go.outputs.cache-hit }}' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Check formatting, tests, smoke, and release helpers on Unix
+        if: runner.os != 'Windows'
         run: make ci
+      - name: Exercise the installer on macOS
+        if: runner.os == 'macOS'
+        run: sh scripts/test_install.sh
+      - name: Check tests and smoke on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go vet ./...
+          go test -race ./...
+          go build -trimpath -o qbitctl-smoke.exe ./cmd/qbitctl
+          python scripts/smoke_native.py ./qbitctl-smoke.exe
+          bash scripts/test_release_helpers.sh
+          bash scripts/test_release_targets.sh
       - name: Save Go cache
-        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        if: runner.os != 'Windows' && github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -56,6 +98,8 @@ jobs:
           # reproducible on the amd64 GitHub-hosted runner.
           - version: 5.0.0
             image: qbittorrentofficial/qbittorrent-nox:5.0.0-1@sha256:03c968cd9d82c92a90b6ddde6c9a7a4093cf072c329090815c355dabeadd1fc9
+          - version: 5.2.4
+            image: qbittorrentofficial/qbittorrent-nox:5.2.4-1@sha256:92bfd78d731e254ba64f62b77b0696add6447a33642ee5feda106a26b285aa7f
           - version: 5.3.0
             image: qbittorrentofficial/qbittorrent-nox:5.3.0-2@sha256:43b2d352cf76330a7ca34c7320b9b74227d6f31e662e0e123d0457206b09a7ea
     steps:
@@ -65,6 +109,10 @@ jobs:
         with:
           # Both legs build the same binary, so they share one cache.
           cache-name: compatibility
+      - name: Report Go cache result
+        if: always()
+        run: |
+          echo 'Go cache exact hit: ${{ steps.go.outputs.cache-hit }}' >> "$GITHUB_STEP_SUMMARY"
       - name: Build compatibility binary
         run: go build -trimpath -o "$RUNNER_TEMP/qbitctl-compat" ./cmd/qbitctl
       - name: Exercise real qBittorrent API
@@ -93,12 +141,17 @@ jobs:
         uses: ./.github/actions/setup-go
         with:
           cache-name: cross-check
+      - name: Report Go cache result
+        if: always()
+        run: |
+          echo 'Go cache exact hit: ${{ steps.go.outputs.cache-hit }}' >> "$GITHUB_STEP_SUMMARY"
       - name: Type-check every release operating system
         run: bash scripts/check_cross_targets.sh
       - name: Check and exercise the installer
         run: |
-          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh
+          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh scripts/lint_actions.sh scripts/check_commit_hygiene.sh scripts/test_commit_hygiene.sh scripts/check_go_toolchain.sh scripts/hooks/commit-msg
           sh scripts/test_install.sh
+          bash scripts/test_commit_hygiene.sh
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -106,20 +159,6 @@ jobs:
         with:
           path: ${{ steps.go.outputs.cache-paths }}
           key: ${{ steps.go.outputs.cache-key }}
-
-  windows-updater:
-    runs-on: windows-2025
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # No build cache here: unpacking the Go cache's many small files took
-      # 22 s on the Windows runner, longer than building this one package.
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Exercise Windows updater replacement and rollback
-        run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|InstallsCompressedAsset|Windows.*)|TestRemovePreviousExecutable|TestExtractZipBinary|TestExtractReleaseBinaryReadsReleaseToolArchives' -count=1
 
   govulncheck:
     runs-on: ubuntu-26.04
@@ -130,6 +169,10 @@ jobs:
         uses: ./.github/actions/setup-go
         with:
           cache-name: govulncheck
+      - name: Report Go cache result
+        if: always()
+        run: |
+          echo 'Go cache exact hit: ${{ steps.go.outputs.cache-hit }}' >> "$GITHUB_STEP_SUMMARY"
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
@@ -138,3 +181,82 @@ jobs:
         with:
           path: ${{ steps.go.outputs.cache-paths }}
           key: ${{ steps.go.outputs.cache-key }}
+
+  workflow-lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: go
+        uses: ./.github/actions/setup-go
+        with:
+          cache-name: workflow-lint
+      - name: Report Go cache result
+        if: always()
+        run: |
+          echo 'Go cache exact hit: ${{ steps.go.outputs.cache-hit }}' >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate GitHub workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: Validate composite action shell
+        run: scripts/lint_actions.sh
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
+
+  commit-hygiene:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check commit messages
+        env:
+          GITHUB_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GITHUB_BEFORE: ${{ github.event.before }}
+          REQUIRE_VERIFIED_COMMITS: ${{ vars.REQUIRE_VERIFIED_COMMITS || '0' }}
+        run: bash scripts/check_commit_hygiene.sh
+
+  ci-summary:
+    if: always()
+    needs: [native, compatibility, cross-check, govulncheck, workflow-lint, commit-hygiene]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Summarize CI jobs and durations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > "$RUNNER_TEMP/ci-jobs.json"
+          python3 - "$RUNNER_TEMP/ci-jobs.json" <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+          data = json.loads(Path(os.environ["RUNNER_TEMP"], "ci-jobs.json").read_text())
+          slow = []
+          lines = ["### CI job summary", "", "| Job | Result | Duration |", "| --- | --- | ---: |"]
+          for job in data.get("jobs", []):
+              started = datetime.fromisoformat(job["startedAt"].replace("Z", "+00:00"))
+              completed = job.get("completedAt")
+              if completed:
+                  seconds = int((datetime.fromisoformat(completed.replace("Z", "+00:00")) - started).total_seconds())
+              else:
+                  seconds = 0
+              if seconds > 180:
+                  slow.append(job["name"])
+              minutes, remainder = divmod(seconds, 60)
+              duration = f"{minutes}m {remainder:02d}s"
+              lines.append(f"| {job['name']} | {job.get('conclusion') or 'in progress'} | {duration} |")
+          if slow:
+              lines.extend(["", ":warning: Jobs over the three-minute budget: " + ", ".join(slow)])
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n")
+          PY

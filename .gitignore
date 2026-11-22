@@ -6,3 +6,6 @@ __pycache__/
 /qbitctl.exe
 /dist/
 /qbitctl-smoke
+.cover/
+/cover.out
+/qbitctl-cover

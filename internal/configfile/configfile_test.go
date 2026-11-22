@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,8 @@ func TestReadMissingAndUpdatePreservesUnknownFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode := info.Mode().Perm(); mode != 0o600 {
+	mode := info.Mode().Perm()
+	if runtime.GOOS != "windows" && mode != 0o600 {
 		t.Fatalf("mode = %04o, want 0600", mode)
 	}
 }

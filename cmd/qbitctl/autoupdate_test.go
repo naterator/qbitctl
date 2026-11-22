@@ -540,3 +540,100 @@ func TestGitHubReleaseUpdaterRejectsAttestationFailure(t *testing.T) {
 		t.Fatalf("executable content = %q, want old-binary", string(got))
 	}
 }
+
+func TestGitHubReleaseUpdaterAttestationGatesReplacement(t *testing.T) {
+	const tag = "v9.9.9"
+	const refChecksum = "0123456789012345678901234567890123456789"
+	binaryBody := []byte("new-binary-content")
+	binaryCandidates, _ := releaseAssetCandidates(runtime.GOOS, runtime.GOARCH)
+	binaryName := binaryCandidates[0]
+	sum := sha256.Sum256(binaryBody)
+	actualChecksum := hex.EncodeToString(sum[:])
+
+	t.Run("accepts matching downloaded bytes", func(t *testing.T) {
+		statement := releaseStatementPayload(tag, "sha1", refChecksum, binaryName, actualChecksum)
+		updater, exePath, factoryCalls := newInjectedAttestationUpdater(t, tag, refChecksum, binaryName, binaryBody, statement)
+		if err := updater.Run(context.Background(), "1.0.0", false, io.Discard); err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+		if *factoryCalls != 1 {
+			t.Fatalf("attestation verifier factory calls = %d, want 1", *factoryCalls)
+		}
+		got, err := os.ReadFile(exePath)
+		if err != nil {
+			t.Fatalf("ReadFile returned error: %v", err)
+		}
+		if string(got) != string(binaryBody) {
+			t.Fatalf("updated executable content = %q, want %q", got, binaryBody)
+		}
+	})
+
+	t.Run("rejects mismatched attestation", func(t *testing.T) {
+		statement := releaseStatementPayload(tag, "sha1", refChecksum, binaryName, strings.Repeat("0", 64))
+		updater, exePath, factoryCalls := newInjectedAttestationUpdater(t, tag, refChecksum, binaryName, binaryBody, statement)
+		err := updater.Run(context.Background(), "1.0.0", false, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "verify release asset attestation") {
+			t.Fatalf("Run error = %v, want attestation failure", err)
+		}
+		if *factoryCalls != 1 {
+			t.Fatalf("attestation verifier factory calls = %d, want 1", *factoryCalls)
+		}
+		got, readErr := os.ReadFile(exePath)
+		if readErr != nil {
+			t.Fatalf("ReadFile returned error: %v", readErr)
+		}
+		if string(got) != "old-binary" {
+			t.Fatalf("executable content = %q, want old-binary after rejection", got)
+		}
+	})
+}
+
+func newInjectedAttestationUpdater(t *testing.T, tag, refChecksum, binaryName string, binaryBody, statement []byte) (*githubReleaseUpdater, string, *int) {
+	t.Helper()
+	exePath := filepath.Join(t.TempDir(), "qbitctl")
+	if err := os.WriteFile(exePath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	checksumName := binaryName + ".sha256"
+	sum := sha256.Sum256(binaryBody)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := releaseTestPath(r)
+		switch {
+		case path == "/releases/latest":
+			_ = json.NewEncoder(w).Encode(githubRelease{
+				TagName: tag,
+				Assets: []githubReleaseAsset{
+					{Name: binaryName, BrowserDownloadURL: releaseTestAPIBase + "/download/" + binaryName},
+					{Name: checksumName, BrowserDownloadURL: releaseTestAPIBase + "/download/" + checksumName},
+				},
+			})
+		case path == "/download/"+binaryName:
+			_, _ = w.Write(binaryBody)
+		case path == "/download/"+checksumName:
+			_, _ = fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), binaryName)
+		case path == "/git/ref/tags/"+tag:
+			_, _ = fmt.Fprintf(w, `{"ref":"refs/tags/%s","object":{"sha":"%s"}}`, tag, refChecksum)
+		case path == "/attestations/sha1:"+refChecksum:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"attestations": []map[string]any{{"initiator": "github", "bundle": json.RawMessage(`{"id":"bundle"}`)}},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	})
+	factoryCalls := 0
+	updater := &githubReleaseUpdater{
+		client:           releaseTestHTTPClient(handler),
+		latestReleaseURL: releaseTestAPIBase + "/repos/naterator/qbitctl/releases/latest",
+		executablePath: func() (string, error) {
+			return exePath, nil
+		},
+		newAttestationVerifier: func(context.Context, *http.Client) (attestationVerifier, error) {
+			factoryCalls++
+			return fakeAttestationVerification{payload: statement}, nil
+		},
+		goos:   runtime.GOOS,
+		goarch: runtime.GOARCH,
+	}
+	return updater, exePath, &factoryCalls
+}

@@ -30,7 +30,7 @@ import (
 var githubRoot []byte
 
 type Verifier struct {
-	trusted *root.TrustedRoot
+	trusted root.TrustedMaterial
 }
 
 func NewVerifier(ctx context.Context, client *http.Client) (*Verifier, error) {

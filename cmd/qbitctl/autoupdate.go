@@ -24,13 +24,14 @@ type releaseUpdater interface {
 }
 
 type githubReleaseUpdater struct {
-	client           *http.Client
-	latestReleaseURL string
-	executablePath   func() (string, error)
-	verifyAsset      func(context.Context, string, string) error
-	renameFile       func(string, string) error
-	goos             string
-	goarch           string
+	client                 *http.Client
+	latestReleaseURL       string
+	executablePath         func() (string, error)
+	verifyAsset            func(context.Context, string, string) error
+	newAttestationVerifier func(context.Context, *http.Client) (attestationVerifier, error)
+	renameFile             func(string, string) error
+	goos                   string
+	goarch                 string
 }
 
 type githubRelease struct {

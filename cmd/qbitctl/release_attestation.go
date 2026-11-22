@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -18,6 +19,14 @@ const (
 	githubReleaseAPI        = "https://api.github.com/repos/" + githubReleaseRepository
 	releasePredicate        = "https://in-toto.io/attestation/release/v0.2"
 )
+
+type attestationVerifier interface {
+	Verify(context.Context, []byte) ([]byte, error)
+}
+
+func defaultAttestationVerifier(ctx context.Context, client *http.Client) (attestationVerifier, error) {
+	return releaseattest.NewVerifier(ctx, client)
+}
 
 func (u *githubReleaseUpdater) verifyReleaseAttestation(ctx context.Context, tag, asset, checksum string) error {
 	var ref struct {
@@ -58,14 +67,18 @@ func (u *githubReleaseUpdater) verifyReleaseAttestation(ctx context.Context, tag
 	if err := u.getReleaseJSON(ctx, attestationsURL, &listing); err != nil {
 		return fmt.Errorf("fetch release attestations for %q: %w", tag, err)
 	}
-	var verifier *releaseattest.Verifier
+	var verifier attestationVerifier
 	var lastErr error
 	for _, attestation := range listing.Attestations {
 		if attestation.Initiator != "github" || len(attestation.Bundle) == 0 || string(attestation.Bundle) == "null" {
 			continue
 		}
 		if verifier == nil {
-			verifier, err = releaseattest.NewVerifier(ctx, u.client)
+			newVerifier := u.newAttestationVerifier
+			if newVerifier == nil {
+				newVerifier = defaultAttestationVerifier
+			}
+			verifier, err = newVerifier(ctx, u.client)
 			if err != nil {
 				return fmt.Errorf("load GitHub release trust roots: %w", err)
 			}

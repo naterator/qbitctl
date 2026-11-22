@@ -5,6 +5,9 @@ script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/qbitctl-govulncheck-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# Keep synthetic findings out of the real Actions job summary.
+unset GITHUB_STEP_SUMMARY
+
 assert_contains() {
 	local needle=$1
 	local file=$2
@@ -54,8 +57,10 @@ assert_contains 'No reachable vulnerabilities were reported.' "$pass_dir/report.
 
 finding_dir="$tmp/finding"
 finding_output="$tmp/finding.output"
+finding_summary="$tmp/finding-summary.md"
 set +e
-GOVULNCHECK_OUTPUT_DIR="$finding_dir" GITHUB_OUTPUT="$finding_output" "$script_dir/run_govulncheck.sh" "$tmp/scanner-finding"
+GOVULNCHECK_OUTPUT_DIR="$finding_dir" GITHUB_OUTPUT="$finding_output" \
+	GITHUB_STEP_SUMMARY="$finding_summary" "$script_dir/run_govulncheck.sh" "$tmp/scanner-finding"
 finding_status=$?
 set -e
 if [[ "$finding_status" -eq 0 ]]; then
@@ -65,6 +70,7 @@ fi
 assert_metadata has_findings true "$finding_output"
 assert_metadata finding_count 1 "$finding_output"
 assert_contains 'GO-2026-0001' "$finding_dir/report.md"
+assert_contains 'GO-2026-0001' "$finding_summary"
 
 failure_dir="$tmp/failure"
 failure_output="$tmp/failure.output"

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -78,7 +77,9 @@ func (u *githubReleaseUpdater) verifyReleaseAttestation(ctx context.Context, tag
 			if newVerifier == nil {
 				newVerifier = defaultAttestationVerifier
 			}
-			verifier, err = newVerifier(ctx, u.client)
+			trustCtx, cancel := context.WithTimeout(ctx, u.trustRootDuration())
+			verifier, err = newVerifier(trustCtx, u.client)
+			cancel()
 			if err != nil {
 				return fmt.Errorf("load GitHub release trust roots: %w", err)
 			}
@@ -100,12 +101,11 @@ func (u *githubReleaseUpdater) verifyReleaseAttestation(ctx context.Context, tag
 }
 
 func (u *githubReleaseUpdater) getReleaseJSON(ctx context.Context, endpoint string, output any) error {
-	response, err := u.get(ctx, endpoint)
+	body, err := u.getMetadataBody(ctx, endpoint, maxReleaseMetadataBytes)
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
-	return json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(output)
+	return json.Unmarshal(body, output)
 }
 
 // matchReleaseAsset binds the verified statement to the requested release, its

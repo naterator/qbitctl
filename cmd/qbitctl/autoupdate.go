@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,10 +15,25 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const githubLatestReleaseURL = githubReleaseAPI + "/releases/latest"
+
+const (
+	defaultMetadataTimeout  = 30 * time.Second
+	defaultTrustRootTimeout = 60 * time.Second
+	defaultStallTimeout     = 60 * time.Second
+	defaultDownloadTimeout  = 15 * time.Minute
+	maxReleaseMetadataBytes = 8 << 20
+	maxChecksumBytes        = 64 << 10
+)
+
+var (
+	errDownloadStalled  = errors.New("no data received")
+	errDownloadExceeded = errors.New("download deadline exceeded")
+)
 
 type releaseUpdater interface {
 	Run(ctx context.Context, currentVersion string, dryRun bool, stdout io.Writer) error
@@ -32,6 +48,10 @@ type githubReleaseUpdater struct {
 	renameFile             func(string, string) error
 	goos                   string
 	goarch                 string
+	metadataTimeout        time.Duration
+	trustRootTimeout       time.Duration
+	stallTimeout           time.Duration
+	downloadTimeout        time.Duration
 }
 
 type githubRelease struct {
@@ -47,9 +67,15 @@ type githubReleaseAsset struct {
 var makeReleaseUpdater = newDefaultReleaseUpdater
 
 func newDefaultReleaseUpdater() releaseUpdater {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		transport = &http.Transport{}
+	}
+	transport = transport.Clone()
+	transport.ResponseHeaderTimeout = defaultMetadataTimeout
 	return &githubReleaseUpdater{
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Transport: transport,
 		},
 		latestReleaseURL: githubLatestReleaseURL,
 		executablePath:   os.Executable,
@@ -125,14 +151,13 @@ func (u *githubReleaseUpdater) Run(ctx context.Context, currentVersion string, d
 }
 
 func (u *githubReleaseUpdater) fetchLatestRelease(ctx context.Context) (githubRelease, error) {
-	resp, err := u.get(ctx, u.latestReleaseURL)
+	body, err := u.getMetadataBody(ctx, u.latestReleaseURL, maxReleaseMetadataBytes)
 	if err != nil {
 		return githubRelease{}, fmt.Errorf("fetch latest release metadata: %w", err)
 	}
-	defer resp.Body.Close()
 
 	var release githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.Unmarshal(body, &release); err != nil {
 		return githubRelease{}, fmt.Errorf("decode latest release metadata: %w", err)
 	}
 	if release.TagName == "" {
@@ -142,15 +167,9 @@ func (u *githubReleaseUpdater) fetchLatestRelease(ctx context.Context) (githubRe
 }
 
 func (u *githubReleaseUpdater) fetchChecksum(ctx context.Context, checksumURL, binaryAssetName string) (string, error) {
-	resp, err := u.get(ctx, checksumURL)
+	body, err := u.getMetadataBody(ctx, checksumURL, maxChecksumBytes)
 	if err != nil {
 		return "", fmt.Errorf("download checksum asset %q: %w", binaryAssetName+".sha256", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read checksum asset %q: %w", binaryAssetName+".sha256", err)
 	}
 
 	checksum, err := parseSHA256File(string(body), binaryAssetName)
@@ -186,15 +205,37 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	}
 	defer tempFile.Close()
 
-	resp, err := u.get(ctx, assetURL)
+	downloadCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	downloadDuration := u.downloadTimeout
+	if downloadDuration <= 0 {
+		downloadDuration = defaultDownloadTimeout
+	}
+	stallDuration := u.stallTimeout
+	if stallDuration <= 0 {
+		stallDuration = defaultStallTimeout
+	}
+	overallTimer := time.AfterFunc(downloadDuration, func() {
+		cancel(errDownloadExceeded)
+	})
+	defer overallTimer.Stop()
+
+	resp, err := u.get(downloadCtx, assetURL)
 	if err != nil {
-		return fmt.Errorf("download release asset: %w", err)
+		return fmt.Errorf("download release asset: %w", downloadError(downloadCtx, err, stallDuration, downloadDuration))
 	}
 	defer resp.Body.Close()
 
 	hash := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tempFile, hash), resp.Body); err != nil {
-		return fmt.Errorf("write downloaded release asset: %w", err)
+	reader := newStallReader(resp.Body, stallDuration, cancel)
+	defer reader.Close()
+	if _, err := io.Copy(io.MultiWriter(tempFile, hash), reader); err != nil {
+		return fmt.Errorf("write downloaded release asset: %w", downloadError(downloadCtx, err, stallDuration, downloadDuration))
+	}
+	reader.Close()
+	overallTimer.Stop()
+	if cause := context.Cause(downloadCtx); cause != nil {
+		return fmt.Errorf("write downloaded release asset: %w", downloadError(downloadCtx, cause, stallDuration, downloadDuration))
 	}
 	if err := tempFile.Sync(); err != nil {
 		return fmt.Errorf("flush downloaded release asset: %w", err)
@@ -225,6 +266,9 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	if err := os.Chmod(tempPath, mode); err != nil {
 		return fmt.Errorf("mark downloaded binary executable: %w", err)
 	}
+	if cause := context.Cause(ctx); cause != nil {
+		return fmt.Errorf("replace downloaded release asset: %w", cause)
+	}
 	renameFile := u.renameFile
 	if renameFile == nil {
 		renameFile = os.Rename
@@ -250,6 +294,103 @@ func (u *githubReleaseUpdater) downloadAndReplace(ctx context.Context, exePath, 
 	_ = os.RemoveAll(tempDir)
 	removeTemp = false
 	return nil
+}
+
+func (u *githubReleaseUpdater) metadataDuration() time.Duration {
+	if u.metadataTimeout > 0 {
+		return u.metadataTimeout
+	}
+	return defaultMetadataTimeout
+}
+
+func (u *githubReleaseUpdater) trustRootDuration() time.Duration {
+	if u.trustRootTimeout > 0 {
+		return u.trustRootTimeout
+	}
+	return defaultTrustRootTimeout
+}
+
+func (u *githubReleaseUpdater) getMetadataBody(ctx context.Context, endpoint string, limit int64) ([]byte, error) {
+	metadataCtx, cancel := context.WithTimeout(ctx, u.metadataDuration())
+	defer cancel()
+	resp, err := u.get(metadataCtx, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return body, nil
+}
+
+func downloadError(ctx context.Context, err error, stallDuration, downloadDuration time.Duration) error {
+	cause := context.Cause(ctx)
+	switch {
+	case errors.Is(cause, errDownloadStalled):
+		return fmt.Errorf("no data received for %s: %w", stallDuration, errDownloadStalled)
+	case errors.Is(cause, errDownloadExceeded):
+		return fmt.Errorf("exceeded %s: %w", downloadDuration, errDownloadExceeded)
+	default:
+		return err
+	}
+}
+
+type stallReader struct {
+	reader     io.Reader
+	cancel     context.CancelCauseFunc
+	timer      *time.Timer
+	timeout    time.Duration
+	generation uint64
+	closed     bool
+	mu         sync.Mutex
+}
+
+func newStallReader(reader io.Reader, timeout time.Duration, cancel context.CancelCauseFunc) *stallReader {
+	s := &stallReader{reader: reader, cancel: cancel, timeout: timeout}
+	s.mu.Lock()
+	s.scheduleLocked()
+	s.mu.Unlock()
+	return s
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.reader.Read(p)
+	if n > 0 {
+		s.mu.Lock()
+		s.generation++
+		if s.timer != nil {
+			s.timer.Stop()
+		}
+		s.scheduleLocked()
+		s.mu.Unlock()
+	}
+	return n, err
+}
+
+func (s *stallReader) Close() {
+	s.mu.Lock()
+	s.closed = true
+	s.generation++
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	s.mu.Unlock()
+}
+
+func (s *stallReader) scheduleLocked() {
+	generation := s.generation
+	s.timer = time.AfterFunc(s.timeout, func() {
+		s.mu.Lock()
+		if !s.closed && s.generation == generation {
+			s.cancel(errDownloadStalled)
+		}
+		s.mu.Unlock()
+	})
 }
 
 func (u *githubReleaseUpdater) get(ctx context.Context, url string) (*http.Response, error) {

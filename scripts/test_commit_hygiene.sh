@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Each test supplies its own event data. Start with no Actions context so a
+# real CI push cannot turn a local test case into a strict signature check.
+unset GITHUB_EVENT_NAME GITHUB_REF GITHUB_SHA GITHUB_BASE_SHA GITHUB_HEAD_SHA \
+	GITHUB_BEFORE GITHUB_REPOSITORY GH_TOKEN
+
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/qbitctl-hygiene.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
@@ -175,9 +180,7 @@ new_repo "$auth_repo"
 new_commit "$auth_repo" 'locally verified commit' >/dev/null
 (
 	cd "$auth_repo"
-	env -u GITHUB_EVENT_NAME -u GITHUB_REF -u GITHUB_SHA -u GITHUB_BASE_SHA \
-		-u GITHUB_HEAD_SHA -u GITHUB_BEFORE -u GH_TOKEN \
-		GITHUB_REPOSITORY=example/repo GH_CALLS="$calls" GH_COUNT_FILE="$count_file" \
+	env GITHUB_REPOSITORY=example/repo GH_CALLS="$calls" GH_COUNT_FILE="$count_file" \
 		GH_SCENARIO=verified COMMIT_HYGIENE_RETRY_DELAY=0 PATH="$fake_bin:$PATH" \
 		"$script_dir/check_commit_hygiene.sh" --range HEAD --require-verified
 )

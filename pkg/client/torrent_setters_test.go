@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,29 @@ func TestSetSequentialDownloadBehaviors(t *testing.T) {
 	})
 }
 
+func TestSetSequentialDownloadAppliesPerTorrent(t *testing.T) {
+	hashA := "0123456789abcdef0123456789abcdef01234567"
+	hashB := "1123456789abcdef0123456789abcdef01234567"
+	hashC := "2123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{
+		{Hash: hashA, SequentialDL: true},
+		{Hash: hashB, SequentialDL: false},
+		{Hash: hashC, SequentialDL: false},
+	}
+	app := server.newApp()
+	if err := app.SetSequentialDownload(strings.Join([]string{hashA, hashB, hashC}, "|"), "true"); err != nil {
+		t.Fatalf("SetSequentialDownload err = %v", err)
+	}
+	forms := server.Forms["/api/v2/torrents/toggleSequentialDownload"]
+	if len(forms) != 1 || forms[0].Get("hashes") != hashB+"|"+hashC {
+		t.Fatalf("toggle forms = %#v, want b|c", forms)
+	}
+	if server.Torrents[0].SequentialDL != true || server.Torrents[1].SequentialDL != true || server.Torrents[2].SequentialDL != true {
+		t.Fatalf("sequential states = %#v, want all true", server.Torrents)
+	}
+}
+
 func TestSetLimitAndShareRequests(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)
@@ -130,8 +154,8 @@ func TestSetLimitAndShareRequests(t *testing.T) {
 	if got := server.Forms["/api/v2/torrents/setShareLimits"][1].Get("ratioLimit"); got != "2.500000" {
 		t.Fatalf("ratioLimit = %q, want 2.500000", got)
 	}
-	if got := server.Forms["/api/v2/torrents/setShareLimits"][1].Get("seedingTimeLimit"); got != "7200" {
-		t.Fatalf("seedingTimeLimit preserved = %q, want 7200", got)
+	if got := server.Forms["/api/v2/torrents/setShareLimits"][1].Get("seedingTimeLimit"); got != "60" {
+		t.Fatalf("seedingTimeLimit preserved = %q, want 60 after the preceding update", got)
 	}
 	if got := server.Forms["/api/v2/torrents/setShareLimits"][1].Get("inactiveSeedingTimeLimit"); got != "14400" {
 		t.Fatalf("inactiveSeedingTimeLimit preserved = %q, want 14400", got)
@@ -181,6 +205,118 @@ func TestSetSeedtimeLimitSentinelsAndPartialMinutes(t *testing.T) {
 	}
 	if got := len(server.Forms["/api/v2/torrents/setShareLimits"]); got != before {
 		t.Fatalf("partial-minute input sent request; count = %d, want %d", got, before)
+	}
+}
+
+func TestStatefulSettersPreservePerTorrentShareLimits(t *testing.T) {
+	hashA := "0123456789abcdef0123456789abcdef01234567"
+	hashB := "1123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{
+		{Hash: hashA, RatioLimit: 1, SeedingTimeLimit: 10, InactiveSeedingTL: 20, ShareLimitsMode: "MatchAll", ShareLimitAction: "Stop"},
+		{Hash: hashB, RatioLimit: 1, SeedingTimeLimit: 30, InactiveSeedingTL: 40, ShareLimitsMode: "MatchAll", ShareLimitAction: "Stop"},
+	}
+	app := server.newApp()
+	selector := hashA + "|" + hashB
+	if err := app.SetRatioLimit(selector, "2"); err != nil {
+		t.Fatalf("SetRatioLimit err = %v", err)
+	}
+	forms := server.Forms["/api/v2/torrents/setShareLimits"]
+	if len(forms) != 2 || forms[0].Get("hashes") != hashA || forms[1].Get("hashes") != hashB {
+		t.Fatalf("ratio forms = %#v, want separate hashes", forms)
+	}
+	if forms[0].Get("seedingTimeLimit") != "10" || forms[1].Get("seedingTimeLimit") != "30" {
+		t.Fatalf("ratio setter overwrote seed limits: %#v", forms)
+	}
+	if err := app.SetSeedtimeLimit(selector, "3600"); err != nil {
+		t.Fatalf("SetSeedtimeLimit err = %v", err)
+	}
+	forms = server.Forms["/api/v2/torrents/setShareLimits"]
+	if forms[2].Get("ratioLimit") != "2.000000" || forms[3].Get("ratioLimit") != "2.000000" {
+		t.Fatalf("seed setter overwrote ratios: %#v", forms)
+	}
+}
+
+func TestStatefulSettersGroupEqualShareLimits(t *testing.T) {
+	hashA := "0123456789abcdef0123456789abcdef01234567"
+	hashB := "1123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{
+		{Hash: hashA, RatioLimit: 1, SeedingTimeLimit: 10, InactiveSeedingTL: 20},
+		{Hash: hashB, RatioLimit: 1, SeedingTimeLimit: 10, InactiveSeedingTL: 20},
+	}
+	app := server.newApp()
+	if err := app.SetRatioLimit(hashA+"|"+hashB, "2"); err != nil {
+		t.Fatalf("SetRatioLimit err = %v", err)
+	}
+	forms := server.Forms["/api/v2/torrents/setShareLimits"]
+	if len(forms) != 1 || forms[0].Get("hashes") != hashA+"|"+hashB {
+		t.Fatalf("equal-limit forms = %#v, want one grouped request", forms)
+	}
+}
+
+func TestLegacyTagsApplyPerTorrent(t *testing.T) {
+	hashA := "0123456789abcdef0123456789abcdef01234567"
+	hashB := "1123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: hashA, Tags: "old"}, {Hash: hashB, Tags: "other"}}
+	server.StatusQueue["/api/v2/torrents/setTags"] = []int{http.StatusNotFound}
+	app := server.newApp()
+	if err := app.SetTags(hashA+"|"+hashB, "new"); err != nil {
+		t.Fatalf("SetTags err = %v", err)
+	}
+	adds := server.Forms["/api/v2/torrents/addTags"]
+	removes := server.Forms["/api/v2/torrents/removeTags"]
+	if len(adds) != 2 || len(removes) != 2 {
+		t.Fatalf("legacy tag forms = add %#v remove %#v, want two groups", adds, removes)
+	}
+	if adds[0].Get("hashes") != hashA || adds[1].Get("hashes") != hashB || removes[0].Get("hashes") != hashA || removes[1].Get("hashes") != hashB {
+		t.Fatalf("legacy tag selectors = add %#v remove %#v", adds, removes)
+	}
+}
+
+func TestStatefulSettersRejectMissingAndInvalidBeforeMutation(t *testing.T) {
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: hash}}
+	app := server.newApp()
+	if err := app.SetRatioLimit(hash+"|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "2"); err == nil {
+		t.Fatal("SetRatioLimit accepted a missing hash")
+	}
+	if len(server.Forms["/api/v2/torrents/setShareLimits"]) != 0 {
+		t.Fatal("missing hash sent a share-limits request")
+	}
+	infoCalls := server.InfoCalls
+	if err := app.SetRatioLimit(hash, "abc"); err == nil {
+		t.Fatal("SetRatioLimit accepted invalid value")
+	}
+	if server.InfoCalls != infoCalls {
+		t.Fatal("invalid ratio fetched torrent state")
+	}
+	for _, selector := range []string{hash + "|all", "all|" + hash, hash + "||", "ALL"} {
+		if err := app.SetRatioLimit(selector, "2"); err == nil {
+			t.Fatalf("SetRatioLimit accepted malformed selector %q", selector)
+		}
+	}
+	if len(server.Forms["/api/v2/torrents/setShareLimits"]) != 0 {
+		t.Fatal("malformed selector sent a share-limits request")
+	}
+}
+
+func TestSettersSupportAllAndGetTorrentInfoRejectsLists(t *testing.T) {
+	hashA := "0123456789abcdef0123456789abcdef01234567"
+	hashB := "1123456789abcdef0123456789abcdef01234567"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Hash: hashA, SequentialDL: false}, {Hash: hashB, SequentialDL: false}}
+	app := server.newApp()
+	if err := app.SetSequentialDownload("all", "true"); err != nil {
+		t.Fatalf("SetSequentialDownload(all) err = %v", err)
+	}
+	if got := server.Forms["/api/v2/torrents/toggleSequentialDownload"][0].Get("hashes"); got != hashA+"|"+hashB {
+		t.Fatalf("all selector = %q, want both hashes", got)
+	}
+	if _, err := app.GetTorrentInfo(hashA + "|" + hashB); err == nil || !strings.Contains(err.Error(), "single hash") {
+		t.Fatalf("GetTorrentInfo list error = %v", err)
 	}
 }
 

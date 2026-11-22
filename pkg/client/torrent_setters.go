@@ -6,9 +6,84 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 )
+
+// splitHashList parses the pipe-separated hash value accepted by qBittorrent.
+// It preserves the special "all" selector and removes duplicate hashes.
+func splitHashList(value string) []string {
+	parts := strings.Split(value, "|")
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil
+		}
+		if part == "all" {
+			if len(parts) != 1 {
+				return nil
+			}
+			return []string{"all"}
+		}
+		part = strings.ToLower(part)
+		if part == "all" {
+			return nil
+		}
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	return result
+}
+
+// torrentsForHashes fetches each selected torrent and rejects missing hashes
+// before a state-changing request is sent.
+func (a *App) torrentsForHashes(hashes []string) ([]TorrentInfo, error) {
+	if len(hashes) == 0 {
+		return nil, codedErrf(ExitBadArgs, "Hash required for this operation")
+	}
+	if len(hashes) == 1 && hashes[0] == "all" {
+		return a.fetchTorrents(nil)
+	}
+	for _, hash := range hashes {
+		if !validateHash(hash) {
+			return nil, codedErrf(ExitBadArgs, "Invalid hash or prefix: '%s'", hash)
+		}
+	}
+	if len(hashes) > 50 {
+		torrents, err := a.fetchTorrents(nil)
+		if err != nil {
+			return nil, err
+		}
+		return orderTorrentsForHashes(torrents, hashes)
+	}
+	torrents, err := a.fetchTorrents(hashes)
+	if err != nil {
+		return nil, err
+	}
+	return orderTorrentsForHashes(torrents, hashes)
+}
+
+func orderTorrentsForHashes(torrents []TorrentInfo, hashes []string) ([]TorrentInfo, error) {
+	byHash := make(map[string]TorrentInfo, len(torrents))
+	for _, torrent := range torrents {
+		byHash[strings.ToLower(torrent.Hash)] = torrent
+	}
+	ordered := make([]TorrentInfo, 0, len(hashes))
+	for _, hash := range hashes {
+		torrent, ok := byHash[hash]
+		if !ok {
+			return nil, codedErrf(ExitBadArgs, "No torrent matches hash: %s", hash)
+		}
+		ordered = append(ordered, torrent)
+	}
+	return ordered, nil
+}
 
 func (a *App) setTransferLimit(hash, limitStr, endpoint, label string) error {
 	value, err := parseLimit(limitStr)
@@ -54,11 +129,6 @@ func (a *App) setShareLimits(hash string, torrent TorrentInfo) error {
 }
 
 func (a *App) SetSeedtimeLimit(hash, seedtimeStr string) error {
-	torrent, err := a.GetTorrentInfo(hash)
-	if err != nil {
-		return err
-	}
-
 	seconds, err := parseSeedtimeLimit(seedtimeStr)
 	if err != nil {
 		return codedErrf(ExitBadArgs, "%v '%s'", err, seedtimeStr)
@@ -67,24 +137,55 @@ func (a *App) SetSeedtimeLimit(hash, seedtimeStr string) error {
 	if err != nil {
 		return codedErrf(ExitBadArgs, "%v '%s'", err, seedtimeStr)
 	}
-
-	torrent.SeedingTimeLimit = minutes
-	return a.setShareLimits(hash, torrent)
-}
-
-func (a *App) SetRatioLimit(hash, ratioStr string) error {
-	torrent, err := a.GetTorrentInfo(hash)
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
 	if err != nil {
 		return err
 	}
 
+	return a.setShareLimitGroups(torrents, func(torrent *TorrentInfo) {
+		torrent.SeedingTimeLimit = minutes
+	})
+}
+
+func (a *App) SetRatioLimit(hash, ratioStr string) error {
 	ratio, err := strconv.ParseFloat(ratioStr, 64)
 	if err != nil || ratio < 0 {
 		return codedErrf(ExitBadArgs, "Invalid ratio value: %s", ratioStr)
 	}
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
+	if err != nil {
+		return err
+	}
 
-	torrent.RatioLimit = ratio
-	return a.setShareLimits(hash, torrent)
+	return a.setShareLimitGroups(torrents, func(torrent *TorrentInfo) {
+		torrent.RatioLimit = ratio
+	})
+}
+
+func (a *App) setShareLimitGroups(torrents []TorrentInfo, update func(*TorrentInfo)) error {
+	type group struct {
+		hashes  []string
+		torrent TorrentInfo
+	}
+	groups := make([]group, 0, len(torrents))
+	indices := make(map[string]int, len(torrents))
+	for _, torrent := range torrents {
+		update(&torrent)
+		key := fmt.Sprintf("%.6f|%d|%d|%s|%s", torrent.RatioLimit, torrent.SeedingTimeLimit, torrent.InactiveSeedingTL, cmp.Or(torrent.ShareLimitsMode, "Default"), cmp.Or(torrent.ShareLimitAction, "Default"))
+		index, exists := indices[key]
+		if !exists {
+			indices[key] = len(groups)
+			groups = append(groups, group{torrent: torrent})
+			index = len(groups) - 1
+		}
+		groups[index].hashes = append(groups[index].hashes, strings.ToLower(torrent.Hash))
+	}
+	for _, group := range groups {
+		if err := a.setShareLimits(strings.Join(group.hashes, "|"), group.torrent); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) SetCategory(hash, category string) error {
@@ -161,43 +262,62 @@ func isUnsupportedSetTagsError(err error) bool {
 }
 
 func (a *App) replaceTagsLegacy(hash, tags string) error {
-	torrent, err := a.GetTorrentInfo(hash)
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
 	if err != nil {
 		return fmt.Errorf("fetch current tags: %w", err)
 	}
-
-	current := splitTags(torrent.Tags)
-	desired := splitTags(tags)
-	currentSet := make(map[string]struct{}, len(current))
-	desiredSet := make(map[string]struct{}, len(desired))
-	for _, tag := range current {
-		currentSet[tag] = struct{}{}
+	type group struct {
+		hashes []string
+		add    []string
+		remove []string
 	}
-	for _, tag := range desired {
-		desiredSet[tag] = struct{}{}
-	}
-
-	toRemove := make([]string, 0, len(current))
-	for _, tag := range current {
-		if _, keep := desiredSet[tag]; !keep {
-			toRemove = append(toRemove, tag)
+	groups := make([]group, 0, len(torrents))
+	indices := make(map[string]int, len(torrents))
+	for _, torrent := range torrents {
+		current := splitTags(torrent.Tags)
+		desired := splitTags(tags)
+		currentSet := make(map[string]struct{}, len(current))
+		desiredSet := make(map[string]struct{}, len(desired))
+		for _, tag := range current {
+			currentSet[tag] = struct{}{}
 		}
-	}
-	toAdd := make([]string, 0, len(desired))
-	for _, tag := range desired {
-		if _, alreadyPresent := currentSet[tag]; !alreadyPresent {
-			toAdd = append(toAdd, tag)
+		for _, tag := range desired {
+			desiredSet[tag] = struct{}{}
 		}
-	}
-
-	if len(toAdd) > 0 {
-		if err := a.updateTagsLegacy(hash, toAdd, "/api/v2/torrents/addTags"); err != nil {
-			return fmt.Errorf("add tags: %w", err)
+		toRemove := make([]string, 0, len(current))
+		for _, tag := range current {
+			if _, keep := desiredSet[tag]; !keep {
+				toRemove = append(toRemove, tag)
+			}
 		}
+		toAdd := make([]string, 0, len(desired))
+		for _, tag := range desired {
+			if _, alreadyPresent := currentSet[tag]; !alreadyPresent {
+				toAdd = append(toAdd, tag)
+			}
+		}
+		sort.Strings(toAdd)
+		sort.Strings(toRemove)
+		key := strings.Join(toAdd, ",") + "\x00" + strings.Join(toRemove, ",")
+		index, exists := indices[key]
+		if !exists {
+			indices[key] = len(groups)
+			groups = append(groups, group{add: toAdd, remove: toRemove})
+			index = len(groups) - 1
+		}
+		groups[index].hashes = append(groups[index].hashes, strings.ToLower(torrent.Hash))
 	}
-	if len(toRemove) > 0 {
-		if err := a.updateTagsLegacy(hash, toRemove, "/api/v2/torrents/removeTags"); err != nil {
-			return fmt.Errorf("remove tags: %w", err)
+	for _, group := range groups {
+		selector := strings.Join(group.hashes, "|")
+		if len(group.add) > 0 {
+			if err := a.updateTagsLegacy(selector, group.add, "/api/v2/torrents/addTags"); err != nil {
+				return fmt.Errorf("add tags: %w", err)
+			}
+		}
+		if len(group.remove) > 0 {
+			if err := a.updateTagsLegacy(selector, group.remove, "/api/v2/torrents/removeTags"); err != nil {
+				return fmt.Errorf("remove tags: %w", err)
+			}
 		}
 	}
 
@@ -279,15 +399,22 @@ func (a *App) SetSequentialDownload(hash, value string) error {
 		return codedErrf(ExitBadArgs, "%v", err)
 	}
 
-	torrent, err := a.GetTorrentInfo(hash)
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
 	if err != nil {
 		return err
 	}
-	if torrent.SequentialDL == desired {
+
+	toToggle := make([]string, 0, len(torrents))
+	for _, torrent := range torrents {
+		if torrent.SequentialDL != desired {
+			toToggle = append(toToggle, strings.ToLower(torrent.Hash))
+		}
+	}
+	if len(toToggle) == 0 {
 		return nil
 	}
 
-	params := url.Values{"hashes": {hash}}
+	params := url.Values{"hashes": {strings.Join(toToggle, "|")}}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/toggleSequentialDownload", params); err != nil {
 		return codedErrWrapf(ExitSetFail, err, "Failed to toggle sequential download: %v", err)
 	}

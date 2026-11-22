@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -220,6 +221,9 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 		"/api/v2/torrents/setForceStart",
 		"/api/v2/torrents/setLocation":
 		s.recordForm(r.URL.Path, r)
+		if r.URL.Path == "/api/v2/torrents/setShareLimits" {
+			s.applyShareLimits(r.Form)
+		}
 	case "/api/v2/torrents/toggleSequentialDownload":
 		s.recordForm(r.URL.Path, r)
 		if !s.SkipSeqToggle {
@@ -252,6 +256,40 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(info)
 	default:
 		s.t.Fatalf("unexpected path: %s", r.URL.Path)
+	}
+}
+
+func (s *Server) applyShareLimits(form url.Values) {
+	value := reflect.ValueOf(s.Torrents)
+	if !value.IsValid() || value.Kind() != reflect.Slice {
+		return
+	}
+	selected := make(map[string]struct{})
+	for _, hash := range strings.Split(form.Get("hashes"), "|") {
+		selected[strings.ToLower(strings.TrimSpace(hash))] = struct{}{}
+	}
+	for i := 0; i < value.Len(); i++ {
+		item := value.Index(i)
+		hashField := item.FieldByName("Hash")
+		if !hashField.IsValid() || hashField.Kind() != reflect.String {
+			continue
+		}
+		if _, ok := selected[strings.ToLower(hashField.String())]; !ok {
+			continue
+		}
+		if field := item.FieldByName("RatioLimit"); field.IsValid() && field.CanSet() {
+			if parsed, err := strconv.ParseFloat(form.Get("ratioLimit"), 64); err == nil {
+				field.SetFloat(parsed)
+			}
+		}
+		for name, formKey := range map[string]string{"SeedingTimeLimit": "seedingTimeLimit", "InactiveSeedingTL": "inactiveSeedingTimeLimit"} {
+			field := item.FieldByName(name)
+			if field.IsValid() && field.CanSet() {
+				if parsed, err := strconv.ParseInt(form.Get(formKey), 10, 64); err == nil {
+					field.SetInt(parsed)
+				}
+			}
+		}
 	}
 }
 

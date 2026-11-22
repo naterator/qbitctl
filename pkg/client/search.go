@@ -77,7 +77,7 @@ func (a *App) partialSearchResults(params url.Values, plugin string, timeout tim
 		return nil, searchError(ctx, "fetch search results", err)
 	}
 	if err != nil {
-		return nil, codedErrf(ExitFetchFail, "Search reached the %s limit and could not fetch results: %v", timeout, err)
+		return nil, codedErrWrapf(ExitFetchFail, err, "Search reached the %s limit and could not fetch results: %v", timeout, err)
 	}
 	fmt.Fprintf(a.Stderr, "[WARN] Search reached the %s limit. Returning the results found so far.\n", timeout)
 	return results, nil
@@ -220,7 +220,7 @@ func (a *App) deleteSearch(params url.Values) {
 	ctx, cancel := context.WithTimeout(context.Background(), searchCleanupTimeout)
 	defer cancel()
 	_, err := a.client.requestContext(ctx, http.MethodPost, "/api/v2/search/delete", params)
-	if err != nil && !errors.Is(err, httpStatusError(http.StatusNotFound)) {
+	if err != nil && !isHTTPStatus(err, http.StatusNotFound) {
 		fmt.Fprintf(a.Stderr, "[WARN] Failed to delete search job %s: %v\n", params.Get("id"), err)
 	}
 }
@@ -232,6 +232,6 @@ func searchError(ctx context.Context, operation string, err error) error {
 	case context.DeadlineExceeded:
 		return codedErrf(ExitFetchFail, "Search timed out")
 	default:
-		return codedErrf(ExitFetchFail, "Failed to %s: %v", operation, err)
+		return codedErrWrapf(ExitFetchFail, err, "Failed to %s: %v", operation, err)
 	}
 }

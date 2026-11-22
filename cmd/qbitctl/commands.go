@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	qbt "github.com/naterator/qbitctl/pkg/client"
 
@@ -262,12 +261,7 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 }
 
 func sanitizeSearchText(value string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, value)
+	return qbt.SanitizeServerText(value)
 }
 
 func newShowCmd(opts *CLIOptions) *cobra.Command {

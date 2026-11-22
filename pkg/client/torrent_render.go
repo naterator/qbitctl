@@ -233,7 +233,7 @@ func (a *App) fetchTrackers(hash string) ([]TrackerEntry, error) {
 	params := url.Values{"hash": {hash}}
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/torrents/trackers", params)
 	if err != nil {
-		return nil, codedErrf(ExitFetchFail, "Failed to fetch tracker list: %v", err)
+		return nil, codedErrWrapf(ExitFetchFail, err, "Failed to fetch tracker list: %v", err)
 	}
 
 	var trackers []TrackerEntry

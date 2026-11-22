@@ -238,7 +238,7 @@ func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 
 	if err := app.client.loginContext(app.context()); err != nil {
 		app.Logout()
-		return nil, codedErrf(ExitLoginFail, "Login failed: %v", err)
+		return nil, codedErrWrapf(ExitLoginFail, err, "Login failed: %v", err)
 	}
 	if err := app.CheckCompatibility(); err != nil {
 		app.Logout()

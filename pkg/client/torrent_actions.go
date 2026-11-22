@@ -50,7 +50,7 @@ func (a *App) qbtAction(hash, endpoint string, params url.Values) error {
 	}
 	params.Set("hashes", hash)
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, endpoint, params); err != nil {
-		return codedErrf(ExitActionFail, "Request failed for %s: %v", endpoint, err)
+		return codedErrWrapf(ExitActionFail, err, "Request failed for %s: %v", endpoint, err)
 	}
 	return nil
 }
@@ -106,7 +106,7 @@ func (a *App) AddSearchResult(id int64) error {
 			"pluginName": {target.Plugin},
 		})
 		if err != nil {
-			return codedErrf(ExitActionFail, "Failed to submit search result %d: %v", id, err)
+			return codedErrWrapf(ExitActionFail, err, "Failed to submit search result %d: %v", id, err)
 		}
 		return nil
 	}
@@ -128,7 +128,7 @@ func (a *App) addTorrentURL(source string, options AddTorrentOptions) error {
 
 	response, err := a.client.requestBodyContext(a.context(), http.MethodPost, "/api/v2/torrents/add", []byte(body.String()), writer.FormDataContentType())
 	if err != nil {
-		return codedErrf(ExitActionFail, "Failed to add torrent from URL or magnet link: %v", err)
+		return codedErrWrapf(ExitActionFail, err, "Failed to add torrent from URL or magnet link: %v", err)
 	}
 	if torrentAddRejected(response) {
 		return codedErrf(ExitActionFail, "Failed to add torrent from URL or magnet link: qBittorrent rejected the request")
@@ -139,14 +139,14 @@ func (a *App) addTorrentURL(source string, options AddTorrentOptions) error {
 func (a *App) addTorrentFile(path string, options AddTorrentOptions) error {
 	ctx := a.context()
 	if err := ctx.Err(); err != nil {
-		return codedErrf(ExitActionFail, "Failed to add torrent file '%s': %v", path, err)
+		return codedErrWrapf(ExitActionFail, err, "Failed to add torrent file '%s': %v", path, err)
 	}
 	upload, err := newTorrentFileUpload(path, options)
 	if err != nil {
 		return codedErrf(ExitFile, "Failed to read torrent file '%s': %v", path, err)
 	}
 
-	response, err := a.client.requestWithBodyContext(ctx, func() ([]byte, int, error) {
+	response, err := a.client.requestWithBodyContext(ctx, func() ([]byte, *http.Response, error) {
 		return a.client.doMultipartStreamRequestContext(ctx, "/api/v2/torrents/add", upload)
 	})
 	if err != nil {
@@ -154,7 +154,7 @@ func (a *App) addTorrentFile(path string, options AddTorrentOptions) error {
 		if errors.As(err, &fileErr) {
 			return codedErrf(ExitFile, "Failed to read torrent file '%s': %v", path, fileErr.err)
 		}
-		return codedErrf(ExitActionFail, "Failed to add torrent file '%s': %v", path, err)
+		return codedErrWrapf(ExitActionFail, err, "Failed to add torrent file '%s': %v", path, err)
 	}
 	if torrentAddRejected(response) {
 		return codedErrf(ExitActionFail, "Failed to add torrent file '%s': qBittorrent rejected the request", path)
@@ -265,14 +265,14 @@ func (u *torrentFileUpload) write(ctx context.Context, dst io.Writer) error {
 	return err
 }
 
-func (c *Client) doMultipartStreamRequestContext(ctx context.Context, endpoint string, upload *torrentFileUpload) ([]byte, int, error) {
+func (c *Client) doMultipartStreamRequestContext(ctx context.Context, endpoint string, upload *torrentFileUpload) ([]byte, *http.Response, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reader, pipeWriter := io.Pipe()
 	defer reader.Close()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpointURL(endpoint), reader)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", upload.contentType)
 	req.ContentLength = upload.contentLength
@@ -291,28 +291,32 @@ func (c *Client) doMultipartStreamRequestContext(ctx context.Context, endpoint s
 		case writerErr := <-writeDone:
 			var fileErr *torrentFileError
 			if errors.As(writerErr, &fileErr) && !errors.Is(writerErr, io.ErrClosedPipe) {
-				return nil, 0, fileErr
+				return nil, nil, fileErr
 			}
 		default:
 		}
-		return nil, 0, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// A server can reply before reading the upload. Close both sides on
 		// return so a 403 can be retried with a fresh body.
-		return nil, resp.StatusCode, nil
+		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes))
+		if readErr != nil {
+			return nil, resp, readErr
+		}
+		return payload, resp, nil
 	}
 	payload, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp, err
 	}
 	_ = reader.Close()
 	select {
 	case err := <-writeDone:
-		return payload, resp.StatusCode, err
+		return payload, resp, err
 	case <-ctx.Done():
-		return nil, resp.StatusCode, ctx.Err()
+		return nil, resp, ctx.Err()
 	}
 }
 

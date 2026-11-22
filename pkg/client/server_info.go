@@ -16,7 +16,7 @@ const (
 func (a *App) fetchAppVersion() (string, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/app/version", nil)
 	if err != nil {
-		return "", codedErrf(ExitFetchFail, "Failed to fetch app version: %v", err)
+		return "", codedErrWrapf(ExitFetchFail, err, "Failed to fetch app version: %v", err)
 	}
 	return strings.TrimSpace(string(body)), nil
 }
@@ -24,7 +24,7 @@ func (a *App) fetchAppVersion() (string, error) {
 func (a *App) fetchAPIVersion() (string, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/app/webapiVersion", nil)
 	if err != nil {
-		return "", codedErrf(ExitFetchFail, "Failed to fetch API version: %v", err)
+		return "", codedErrWrapf(ExitFetchFail, err, "Failed to fetch API version: %v", err)
 	}
 	return strings.TrimSpace(string(body)), nil
 }
@@ -118,7 +118,7 @@ func isDottedVersion(version string) bool {
 func (a *App) fetchTransferInfoRaw() ([]byte, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/transfer/info", nil)
 	if err != nil {
-		return nil, codedErrf(ExitFetchFail, "Failed to fetch transfer info: %v", err)
+		return nil, codedErrWrapf(ExitFetchFail, err, "Failed to fetch transfer info: %v", err)
 	}
 	return body, nil
 }

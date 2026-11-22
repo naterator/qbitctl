@@ -36,12 +36,12 @@ func TestCLISessionCleanup(t *testing.T) {
 		wantErrMessage string
 	}{
 		{name: "success"},
-		{name: "command failed", failPath: transfer, wantCode: exitFetchFail, wantErrMessage: "Failed to fetch transfer info: http error: 500"},
-		{name: "setup failed", failPath: version, wantCode: exitFetchFail, wantErrMessage: "Failed to fetch app version: http error: 500"},
+		{name: "command failed", failPath: transfer, wantCode: exitFetchFail, wantErrMessage: "Failed to fetch transfer info: http error: 500 ({})"},
+		{name: "setup failed", failPath: version, wantCode: exitFetchFail, wantErrMessage: "Failed to fetch app version: http error: 500 (v5.3.0)"},
 		{name: "command canceled", cancelPath: transfer, wantCode: exitFetchFail, wantErrMessage: "context canceled"},
 		{name: "setup canceled", cancelPath: version, wantCode: exitFetchFail, wantErrMessage: "context canceled"},
 		{name: "logout failed", logoutStatus: http.StatusForbidden},
-		{name: "command and logout failed", failPath: transfer, logoutStatus: http.StatusInternalServerError, wantCode: exitFetchFail, wantErrMessage: "Failed to fetch transfer info: http error: 500"},
+		{name: "command and logout failed", failPath: transfer, logoutStatus: http.StatusInternalServerError, wantCode: exitFetchFail, wantErrMessage: "Failed to fetch transfer info: http error: 500 ({})"},
 		{name: "login rejected", rejectLogin: true, wantCode: exitLoginFail, wantErrMessage: "Login failed: login failed, http status: 401"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

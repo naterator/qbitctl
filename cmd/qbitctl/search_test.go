@@ -99,7 +99,7 @@ func TestSearchCommandLifecycle(t *testing.T) {
 		},
 		{
 			name: "status failure", afterStart: []string{statusPath}, statusError: true,
-			wantError: "Failed to check search status: http error: 500",
+			wantError: "Failed to check search status: http error: 500 ([{\"id\":42,\"status\":\"Stopped\"}])",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

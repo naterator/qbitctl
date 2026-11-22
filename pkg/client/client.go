@@ -19,12 +19,6 @@ const (
 	logoutTimeout  = 2 * time.Second
 )
 
-type httpStatusError int
-
-func (err httpStatusError) Error() string {
-	return fmt.Sprintf("http error: %d", int(err))
-}
-
 var httpClientFactory = func(jar http.CookieJar) *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
@@ -103,14 +97,14 @@ func (c *Client) doRawRequestContextWithClient(ctx context.Context, method, requ
 	}
 	defer resp.Body.Close()
 
-	payload, err := io.ReadAll(resp.Body)
+	payload, err := readResponseBody(resp)
 	return payload, resp, err
 }
 
-func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint string, body []byte, contentType string) ([]byte, int, error) {
+func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint string, body []byte, contentType string) ([]byte, *http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.endpointURL(endpoint), bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -119,16 +113,27 @@ func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint stri
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	payload, err := io.ReadAll(resp.Body)
+	payload, err := readResponseBody(resp)
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp, err
 	}
 
-	return payload, resp.StatusCode, nil
+	return payload, resp, nil
+}
+
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, nil
+	}
+	reader := io.Reader(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		reader = io.LimitReader(resp.Body, maxHTTPErrorBodyBytes)
+	}
+	return io.ReadAll(reader)
 }
 
 func setOriginHeaders(req *http.Request) {
@@ -181,7 +186,11 @@ func (c *Client) loginContext(ctx context.Context) error {
 			return fmt.Errorf("login failed: unexpected response body")
 		}
 	default:
-		return fmt.Errorf("login failed, http status: %d", status)
+		message := sanitizeLoginHTTPBody(resp, body, c.creds.Pass)
+		if message == "" {
+			return fmt.Errorf("login failed, http status: %d", status)
+		}
+		return fmt.Errorf("login failed, http status: %d (%s)", status, message)
 	}
 
 	// Use the server reached by login so redirects can still be cleaned up.
@@ -335,37 +344,37 @@ func (c *Client) requestContext(ctx context.Context, method, endpoint string, pa
 	}
 
 	if status := resp.StatusCode; status < 200 || status >= 300 {
-		return nil, httpStatusError(status)
+		return nil, newHTTPError(resp, body)
 	}
 
 	return body, nil
 }
 
 func (c *Client) requestBodyContext(ctx context.Context, method, endpoint string, body []byte, contentType string) ([]byte, error) {
-	return c.requestWithBodyContext(ctx, func() ([]byte, int, error) {
+	return c.requestWithBodyContext(ctx, func() ([]byte, *http.Response, error) {
 		return c.doBodyRequestContext(ctx, method, endpoint, body, contentType)
 	})
 }
 
-func (c *Client) requestWithBodyContext(ctx context.Context, send func() ([]byte, int, error)) ([]byte, error) {
-	payload, status, err := send()
+func (c *Client) requestWithBodyContext(ctx context.Context, send func() ([]byte, *http.Response, error)) ([]byte, error) {
+	payload, resp, err := send()
 	if err != nil {
 		return nil, err
 	}
 
-	if status == http.StatusForbidden {
+	if resp.StatusCode == http.StatusForbidden {
 		fmt.Fprintf(c.stderr, "[INFO] Session expired. Re-authenticating...\n")
 		if err := c.loginContext(ctx); err != nil {
 			return nil, fmt.Errorf("re-login failed: %w", err)
 		}
-		payload, status, err = send()
+		payload, resp, err = send()
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if status < 200 || status >= 300 {
-		return nil, httpStatusError(status)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, newHTTPError(resp, payload)
 	}
 
 	return payload, nil

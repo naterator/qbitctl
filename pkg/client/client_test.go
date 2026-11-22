@@ -300,6 +300,8 @@ func TestClientLoginRejectsCrossOrigin307Redirect(t *testing.T) {
 func TestClientRequestReloginOnForbidden(t *testing.T) {
 	server := newQBTestServer(t)
 	server.StatusQueue["/api/v2/torrents/info"] = []int{http.StatusForbidden}
+	server.BodyQueue["/api/v2/torrents/info"] = []string{"expired session detail"}
+	server.ContentTypeQueue["/api/v2/torrents/info"] = []string{"text/plain"}
 	server.Torrents = []TorrentInfo{{Name: "Ubuntu", Hash: "0123456789abcdef0123456789abcdef01234567"}}
 	withQBServerClientFactory(t, server)
 

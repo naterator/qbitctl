@@ -43,6 +43,8 @@ type Server struct {
 	LoginCalls        int
 	InfoCalls         int
 	StatusQueue       map[string][]int
+	BodyQueue         map[string][]string
+	ContentTypeQueue  map[string][]string
 	InfoRawBody       string
 	TrackersRawBody   string
 	CategoriesRawBody string
@@ -61,10 +63,12 @@ type Server struct {
 func New(t TestingT) *Server {
 	t.Helper()
 	return &Server{
-		t:           t,
-		StatusQueue: map[string][]int{},
-		Categories:  map[string]map[string]any{},
-		Forms:       map[string][]url.Values{},
+		t:                t,
+		StatusQueue:      map[string][]int{},
+		BodyQueue:        map[string][]string{},
+		ContentTypeQueue: map[string][]string{},
+		Categories:       map[string]map[string]any{},
+		Forms:            map[string][]url.Values{},
 	}
 }
 
@@ -84,6 +88,26 @@ func (s *Server) nextStatus(path string) int {
 	status := queue[0]
 	s.StatusQueue[path] = queue[1:]
 	return status
+}
+
+func (s *Server) nextBody(path string) (string, bool) {
+	queue := s.BodyQueue[path]
+	if len(queue) == 0 {
+		return "", false
+	}
+	body := queue[0]
+	s.BodyQueue[path] = queue[1:]
+	return body, true
+}
+
+func (s *Server) nextContentType(path string) (string, bool) {
+	queue := s.ContentTypeQueue[path]
+	if len(queue) == 0 {
+		return "", false
+	}
+	contentType := queue[0]
+	s.ContentTypeQueue[path] = queue[1:]
+	return contentType, true
 }
 
 func CloneValues(in url.Values) url.Values {
@@ -133,8 +157,20 @@ func (s *Server) recordMultipartForm(path string, r *http.Request) {
 }
 
 func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
-	if status := s.nextStatus(r.URL.Path); status != http.StatusOK {
+	status := s.nextStatus(r.URL.Path)
+	body, bodySet := s.nextBody(r.URL.Path)
+	if contentType, ok := s.nextContentType(r.URL.Path); ok {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if status != http.StatusOK {
 		w.WriteHeader(status)
+		if bodySet {
+			_, _ = io.WriteString(w, body)
+		}
+		return
+	}
+	if bodySet {
+		_, _ = io.WriteString(w, body)
 		return
 	}
 

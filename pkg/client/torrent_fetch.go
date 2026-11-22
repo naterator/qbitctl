@@ -122,7 +122,7 @@ func (a *App) ResolveHashes(inputs []string) ([]string, error) {
 func (a *App) fetchAllHashes() ([]string, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/torrents/info", nil)
 	if err != nil {
-		return nil, codedErrf(ExitFetchFail, "Failed to fetch torrent list: %v", err)
+		return nil, codedErrWrapf(ExitFetchFail, err, "Failed to fetch torrent list: %v", err)
 	}
 
 	var torrents []TorrentInfo
@@ -144,7 +144,7 @@ func (a *App) fetchSingleTorrentBody(hash string) ([]byte, error) {
 	params := url.Values{"hashes": {hash}}
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/torrents/info", params)
 	if err != nil {
-		return nil, codedErrf(ExitFetchFail, "Failed to fetch torrent info: %v", err)
+		return nil, codedErrWrapf(ExitFetchFail, err, "Failed to fetch torrent info: %v", err)
 	}
 	return body, nil
 }
@@ -176,7 +176,7 @@ func (a *App) FetchAllTorrentsContext(ctx context.Context) ([]TorrentInfo, []byt
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, nil, fmt.Errorf("failed to fetch torrent list: %w", err)
 		}
-		return nil, nil, codedErrf(ExitFetchFail, "Failed to fetch torrent list: %v", err)
+		return nil, nil, codedErrWrapf(ExitFetchFail, err, "Failed to fetch torrent list: %v", err)
 	}
 
 	var torrents []TorrentInfo

@@ -3,7 +3,6 @@ package client
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,7 +21,7 @@ func (a *App) setTransferLimit(hash, limitStr, endpoint, label string) error {
 		"limit":  {strconv.FormatInt(value, 10)},
 	}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, endpoint, params); err != nil {
-		return codedErrf(ExitSetFail, "Failed to set %s: %v", label, err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set %s: %v", label, err)
 	}
 
 	return nil
@@ -48,7 +47,7 @@ func (a *App) setShareLimits(hash string, torrent TorrentInfo) error {
 		"shareLimitAction":         {cmp.Or(torrent.ShareLimitAction, "Default")},
 	}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setShareLimits", params); err != nil {
-		return codedErrf(ExitSetFail, "Failed to set share limits: %v", err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set share limits: %v", err)
 	}
 
 	return nil
@@ -95,14 +94,14 @@ func (a *App) SetCategory(hash, category string) error {
 			"category": {""},
 		}
 		if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setCategory", params); err != nil {
-			return codedErrf(ExitSetFail, "Failed to clear category: %v", err)
+			return codedErrWrapf(ExitSetFail, err, "Failed to clear category: %v", err)
 		}
 		return nil
 	}
 
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/torrents/categories", nil)
 	if err != nil {
-		return codedErrf(ExitFetchFail, "Failed to fetch categories: %v", err)
+		return codedErrWrapf(ExitFetchFail, err, "Failed to fetch categories: %v", err)
 	}
 
 	var categories map[string]json.RawMessage
@@ -121,7 +120,7 @@ func (a *App) SetCategory(hash, category string) error {
 	if !exists {
 		createParams := url.Values{"category": {category}}
 		if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/createCategory", createParams); err != nil {
-			return codedErrf(ExitSetFail, "Failed to create category '%s': %v", category, err)
+			return codedErrWrapf(ExitSetFail, err, "Failed to create category '%s': %v", category, err)
 		}
 	}
 
@@ -130,7 +129,7 @@ func (a *App) SetCategory(hash, category string) error {
 		"category": {category},
 	}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setCategory", params); err != nil {
-		return codedErrf(ExitSetFail, "Failed to set category '%s': %v", category, err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set category '%s': %v", category, err)
 	}
 
 	return nil
@@ -144,22 +143,21 @@ func (a *App) SetTags(hash, tags string) error {
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setTags", params); err == nil {
 		return nil
 	} else if !isUnsupportedSetTagsError(err) {
-		return codedErrf(ExitSetFail, "Failed to set tags to '%s': %v", tags, err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set tags to '%s': %v", tags, err)
 	}
 
 	// qBittorrent 5.0.0 does not expose setTags. Reconstruct the replacement
 	// operation with the add/remove endpoints available in that release. Newer
 	// servers take the native path above and avoid the extra info request.
 	if err := a.replaceTagsLegacy(hash, tags); err != nil {
-		return codedErrf(ExitSetFail, "Failed to set tags to '%s': %v", tags, err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set tags to '%s': %v", tags, err)
 	}
 
 	return nil
 }
 
 func isUnsupportedSetTagsError(err error) bool {
-	return errors.Is(err, httpStatusError(http.StatusNotFound)) ||
-		errors.Is(err, httpStatusError(http.StatusMethodNotAllowed))
+	return isHTTPStatus(err, http.StatusNotFound) || isHTTPStatus(err, http.StatusMethodNotAllowed)
 }
 
 func (a *App) replaceTagsLegacy(hash, tags string) error {
@@ -248,7 +246,7 @@ func (a *App) setToggle(hash, value, endpoint, label string, params url.Values) 
 	params.Set("value", strconv.FormatBool(desired))
 
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, endpoint, params); err != nil {
-		return codedErrf(ExitSetFail, "Failed to set %s: %v", label, err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set %s: %v", label, err)
 	}
 
 	return nil
@@ -269,7 +267,7 @@ func (a *App) SetAutoTMM(hash, value string) error {
 		"enable": {strconv.FormatBool(desired)},
 	}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setAutoManagement", params); err != nil {
-		return codedErrf(ExitSetFail, "Failed to set autotmm: %v", err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to set autotmm: %v", err)
 	}
 
 	return nil
@@ -291,7 +289,7 @@ func (a *App) SetSequentialDownload(hash, value string) error {
 
 	params := url.Values{"hashes": {hash}}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/toggleSequentialDownload", params); err != nil {
-		return codedErrf(ExitSetFail, "Failed to toggle sequential download: %v", err)
+		return codedErrWrapf(ExitSetFail, err, "Failed to toggle sequential download: %v", err)
 	}
 
 	return nil

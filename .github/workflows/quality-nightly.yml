@@ -64,6 +64,17 @@ jobs:
           path: ${{ matrix.package }}/testdata/fuzz/${{ matrix.target }}/
           if-no-files-found: ignore
 
+  reporter-contract:
+    name: nightly flake reporter contract
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test mocked reporter behavior
+        run: bash scripts/test_nightly_flake_report.sh
+
   uncached:
     name: uncached (${{ matrix.os }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -80,7 +91,17 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Run shuffled race suite without cache
-        run: go test -race -count=3 -shuffle=on ./...
+        id: race
+        shell: bash
+        run: |
+          go test -race -count=3 -shuffle=on ./... 2>&1 | tee "$RUNNER_TEMP/nightly-race-${{ matrix.os }}.txt"
+      - name: Upload shuffled race failure
+        if: failure() && steps.race.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-race-failure-${{ github.run_attempt }}-${{ matrix.os }}
+          path: ${{ runner.temp }}/nightly-race-${{ matrix.os }}.txt
+          if-no-files-found: error
       - name: Run native smoke tests without cache
         run: make smoke
       - name: Build every release target
@@ -95,3 +116,27 @@ jobs:
           for checksum in dist/*.sha256; do
             diff -u "$checksum" "$second/${checksum##*/}"
           done
+
+  report-race-flake:
+    name: report scheduled race failures
+    needs: [uncached]
+    if: always() && github.event_name == 'schedule' && needs.uncached.result == 'failure'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download shuffled race reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nightly-race-failure-${{ github.run_attempt }}-*
+          path: ${{ runner.temp }}/nightly-race-reports
+          merge-multiple: true
+      - name: Report failing runners and shuffle seeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/report_nightly_flake.sh "$RUNNER_TEMP/nightly-race-reports"

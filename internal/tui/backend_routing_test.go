@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/naterator/qbitctl/internal/qbtest"
@@ -118,6 +120,112 @@ func TestTUIClientQueueAndServer(t *testing.T) {
 	}
 	if rows[0].label != "qBittorrent" || rows[1].label != "WebAPI" || rows[2].label != "Connection" {
 		t.Fatalf("server rows = %#v", rows[:min(3, len(rows))])
+	}
+}
+
+func TestTUIClientQueueMergesMainDataAndSortsDeterministically(t *testing.T) {
+	backend, server := newBackendFixture(t)
+	server.MainDataQueue = []string{
+		`{"rid":1,"full_update":true,"torrents":{"b":{"name":"same","state":"seeding"},"a":{"name":"Same","state":"downloading","dlspeed":1}}}`,
+		`{"rid":2,"torrents":{"a":{"dlspeed":7}},"torrents_removed":[]}`,
+		`{"rid":3,"torrents":{},"torrents_removed":["b"]}`,
+		`{"rid":4,"torrents":{"c":{"name":"Charlie","state":"stoppedDL"}},"torrents_removed":[]}`,
+	}
+
+	queue, err := backend.queue(context.Background())
+	if err != nil {
+		t.Fatalf("full maindata queue = %v", err)
+	}
+	if got := []string{queue[0].Hash, queue[1].Hash}; !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("full maindata order = %v", got)
+	}
+	if queue[0].DLSpeed != 1 {
+		t.Fatalf("full maindata dlspeed = %d, want 1", queue[0].DLSpeed)
+	}
+
+	queue, err = backend.queue(context.Background())
+	if err != nil || len(queue) != 2 || queue[0].DLSpeed != 7 || queue[1].Name != "same" {
+		t.Fatalf("partial maindata queue = %#v, error = %v", queue, err)
+	}
+
+	queue, err = backend.queue(context.Background())
+	if err != nil || len(queue) != 1 || queue[0].Hash != "a" {
+		t.Fatalf("removed maindata queue = %#v, error = %v", queue, err)
+	}
+
+	queue, err = backend.queue(context.Background())
+	if err != nil || len(queue) != 2 || queue[0].Hash != "c" || queue[1].Hash != "a" {
+		t.Fatalf("new maindata queue = %#v, error = %v", queue, err)
+	}
+	if !slices.Equal(server.MainDataRIDs, []string{"0", "1", "2", "3"}) {
+		t.Fatalf("maindata rids = %v", server.MainDataRIDs)
+	}
+	if server.InfoCalls != 0 {
+		t.Fatalf("maindata queue unexpectedly used torrents/info %d times", server.InfoCalls)
+	}
+}
+
+func TestTUIClientQueueFallsBackOnceOnMissingMainData(t *testing.T) {
+	backend, server := newBackendFixture(t)
+	server.Torrents = []client.TorrentInfo{{Hash: "a", Name: "Alpha"}}
+
+	for call := 0; call < 2; call++ {
+		queue, err := backend.queue(context.Background())
+		if err != nil || len(queue) != 1 || queue[0].Hash != "a" {
+			t.Fatalf("fallback queue call %d = %#v, error = %v", call+1, queue, err)
+		}
+	}
+	if server.MainDataCalls != 1 || server.InfoCalls != 2 {
+		t.Fatalf("fallback calls = maindata %d, info %d; want 1 and 2", server.MainDataCalls, server.InfoCalls)
+	}
+	if notice := backend.takeQueueNotice(); !strings.Contains(notice, "404") {
+		t.Fatalf("fallback notice = %q, want the 404 reason", notice)
+	}
+	if notice := backend.takeQueueNotice(); notice != "" {
+		t.Fatalf("fallback notice repeated: %q", notice)
+	}
+}
+
+func TestTUIClientQueueFallsBackOnceOnMalformedMainData(t *testing.T) {
+	backend, server := newBackendFixture(t)
+	server.MainDataQueue = []string{"{"}
+	server.Torrents = []client.TorrentInfo{{Hash: "a", Name: "Alpha"}}
+
+	queue, err := backend.queue(context.Background())
+	if err != nil || len(queue) != 1 || queue[0].Hash != "a" {
+		t.Fatalf("decode fallback queue = %#v, error = %v", queue, err)
+	}
+	if server.MainDataCalls != 1 || server.InfoCalls != 1 {
+		t.Fatalf("decode fallback calls = maindata %d, info %d; want 1 and 1", server.MainDataCalls, server.InfoCalls)
+	}
+	if notice := backend.takeQueueNotice(); !strings.Contains(notice, "invalid maindata response") {
+		t.Fatalf("decode fallback notice = %q", notice)
+	}
+	if _, err := backend.queue(context.Background()); err != nil {
+		t.Fatalf("second decode fallback queue = %v", err)
+	}
+	if server.MainDataCalls != 1 {
+		t.Fatalf("maindata retried after decode fallback: %d calls", server.MainDataCalls)
+	}
+}
+
+func TestTUIClientQueueFallsBackOnRIDResetWithoutFullUpdate(t *testing.T) {
+	backend, server := newBackendFixture(t)
+	server.MainDataQueue = []string{
+		`{"rid":5,"full_update":true,"torrents":{"a":{"name":"Alpha"}}}`,
+		`{"rid":4,"torrents":{},"torrents_removed":[]}`,
+	}
+	server.Torrents = []client.TorrentInfo{{Hash: "fallback", Name: "Fallback"}}
+
+	if _, err := backend.queue(context.Background()); err != nil {
+		t.Fatalf("initial full update = %v", err)
+	}
+	queue, err := backend.queue(context.Background())
+	if err != nil || len(queue) != 1 || queue[0].Hash != "fallback" {
+		t.Fatalf("RID reset fallback queue = %#v, error = %v", queue, err)
+	}
+	if notice := backend.takeQueueNotice(); !strings.Contains(notice, "rid reset") {
+		t.Fatalf("RID reset notice = %q", notice)
 	}
 }
 

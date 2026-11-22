@@ -44,6 +44,9 @@ type Server struct {
 	LoginCalls        int
 	InfoCalls         int
 	InfoHashQueries   []string
+	MainDataCalls     int
+	MainDataRIDs      []string
+	MainDataQueue     []string
 	StatusQueue       map[string][]int
 	BodyQueue         map[string][]string
 	ContentTypeQueue  map[string][]string
@@ -159,7 +162,14 @@ func (s *Server) recordMultipartForm(path string, r *http.Request) {
 }
 
 func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
+	hasScriptedStatus := len(s.StatusQueue[r.URL.Path]) > 0
 	status := s.nextStatus(r.URL.Path)
+	if r.URL.Path == "/api/v2/sync/maindata" && len(s.MainDataQueue) == 0 && len(s.BodyQueue[r.URL.Path]) == 0 && !hasScriptedStatus {
+		s.MainDataCalls++
+		s.MainDataRIDs = append(s.MainDataRIDs, r.URL.Query().Get("rid"))
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
 	body, bodySet := s.nextBody(r.URL.Path)
 	if contentType, ok := s.nextContentType(r.URL.Path); ok {
 		w.Header().Set("Content-Type", contentType)
@@ -188,6 +198,15 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	case "/api/v2/torrents/info":
 		s.InfoCalls++
 		s.handleTorrentInfo(w, r)
+	case "/api/v2/sync/maindata":
+		s.MainDataCalls++
+		s.MainDataRIDs = append(s.MainDataRIDs, r.URL.Query().Get("rid"))
+		if len(s.MainDataQueue) > 0 {
+			_, _ = io.WriteString(w, s.MainDataQueue[0])
+			s.MainDataQueue = s.MainDataQueue[1:]
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
 	case "/api/v2/torrents/trackers":
 		if s.TrackersRawBody != "" {
 			_, _ = io.WriteString(w, s.TrackersRawBody)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.cookiejar
 import json
 import os
 import re
@@ -22,6 +23,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib import parse as urlparse
+from urllib import request as urlrequest
 
 
 TEMP_PASSWORD_RE = re.compile(
@@ -262,6 +265,45 @@ def wait_for_ready(
     raise RuntimeError("qBittorrent WebUI did not become ready: " + last_output.strip())
 
 
+def verify_main_data(url: str, password: str) -> None:
+    """Check the maindata envelope and field names on each supported release."""
+
+    cookies = http.cookiejar.CookieJar()
+    opener = urlrequest.build_opener(urlrequest.HTTPCookieProcessor(cookies))
+    login = urlparse.urlencode({"username": "admin", "password": password}).encode()
+    login_request = urlrequest.Request(url.rstrip("/") + "/api/v2/auth/login", data=login)
+    login_request.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with opener.open(login_request, timeout=30) as response:
+        login_body = response.read().strip()
+        if response.status not in (200, 204) or (login_body and login_body != b"Ok."):
+            raise RuntimeError("direct maindata compatibility login failed")
+
+    with opener.open(url.rstrip("/") + "/api/v2/sync/maindata?rid=0", timeout=30) as response:
+        payload = response.read()
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("maindata returned invalid JSON") from error
+    if not isinstance(value, dict):
+        raise RuntimeError("maindata returned a non-object response")
+    required = {"rid", "full_update", "torrents"}
+    missing = sorted(required.difference(value))
+    if missing:
+        raise RuntimeError("maindata response missing fields: " + ", ".join(missing))
+    if not isinstance(value["rid"], int) or not isinstance(value["full_update"], bool):
+        raise RuntimeError("maindata rid/full_update fields have unexpected types")
+    if not isinstance(value["torrents"], dict):
+        raise RuntimeError("maindata torrent fields have unexpected types")
+    removed = value.get("torrents_removed", [])
+    if not isinstance(removed, list):
+        raise RuntimeError("maindata torrents_removed has an unexpected type")
+    print(
+        "maindata compatibility: "
+        f"rid={value['rid']} full_update={value['full_update']} "
+        f"torrents={len(value['torrents'])} removed={len(removed)}"
+    )
+
+
 def wait_for_torrent(
     binary: Path,
     url: str,
@@ -414,6 +456,7 @@ def run(args: argparse.Namespace) -> None:
             torrent_hash = str(torrent["hash"])
             if torrent.get("category") != category or str(torrent.get("save_path")).rstrip("/") != destination:
                 raise RuntimeError("qBittorrent did not apply the add category and save path")
+            verify_main_data(url, password)
 
             completions = complete_show(binary, url, password, root, config_home)
             expected_completion = f"{torrent_hash}\tqbitctl-compat-fixture.bin"

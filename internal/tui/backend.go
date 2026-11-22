@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,12 +39,21 @@ type actionRequest struct {
 	addOptions client.AddTorrentOptions
 }
 
+type queueSync struct {
+	rid      int64
+	torrents map[string]map[string]json.RawMessage
+	decoded  map[string]client.TorrentInfo
+	fallback bool
+	notice   string
+}
+
 // tuiClient adapts the existing client.App API to the TUI. The App is copied
 // for each operation so a model can safely provide a request context and
 // renderer-owned writers without changing the command app. Copying App keeps
 // its underlying Client (and therefore its authenticated cookie jar) shared.
 type tuiClient struct {
-	app *client.App
+	app        *client.App
+	queueState queueSync
 }
 
 func (c *tuiClient) withContext(ctx context.Context, stdout, stderr io.Writer) *client.App {
@@ -56,14 +67,213 @@ func (c *tuiClient) withContext(ctx context.Context, stdout, stderr io.Writer) *
 	return &clone
 }
 
-// queue fetches the complete torrent list using the model's context.
+// queue fetches the torrent list using qBittorrent's incremental sync API.
+// The fallback is deliberately sticky for this session: a server that does
+// not implement maindata should not be probed every five seconds.
 func (c *tuiClient) queue(ctx context.Context) ([]client.TorrentInfo, error) {
 	if c == nil || c.app == nil {
 		return nil, fmt.Errorf("qBittorrent client is not configured")
 	}
 	app := c.withContext(ctx, io.Discard, io.Discard)
+	if c.queueState.fallback {
+		return c.fetchQueueInfo(app)
+	}
+
+	body, err := app.FetchMainData(app.Ctx, c.queueState.rid)
+	if err != nil {
+		if !isMainDataNotFound(err) {
+			return nil, err
+		}
+		return c.fallbackQueue(app, err)
+	}
+	torrents, err := c.applyMainData(body)
+	if err != nil {
+		return c.fallbackQueue(app, err)
+	}
+	return torrents, nil
+}
+
+func (c *tuiClient) fetchQueueInfo(app *client.App) ([]client.TorrentInfo, error) {
 	torrents, _, err := app.FetchAllTorrentsContext(app.Ctx)
 	return torrents, err
+}
+
+func isMainDataNotFound(err error) bool {
+	var httpErr *client.HTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound
+}
+
+func (c *tuiClient) fallbackQueue(app *client.App, reason error) ([]client.TorrentInfo, error) {
+	if !c.queueState.fallback {
+		c.queueState.fallback = true
+		c.queueState.notice = fmt.Sprintf(
+			"Incremental queue refresh unavailable (%v); using full refresh",
+			reason,
+		)
+	}
+	return c.fetchQueueInfo(app)
+}
+
+func (c *tuiClient) takeQueueNotice() string {
+	notice := c.queueState.notice
+	c.queueState.notice = ""
+	return notice
+}
+
+type mainDataResponse struct {
+	RID             *int64                                `json:"rid"`
+	FullUpdate      bool                                  `json:"full_update"`
+	Torrents        map[string]map[string]json.RawMessage `json:"torrents"`
+	TorrentsRemoved []string                              `json:"torrents_removed"`
+}
+
+func (c *tuiClient) applyMainData(body []byte) ([]client.TorrentInfo, error) {
+	var response mainDataResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("invalid maindata response: %w", err)
+	}
+	if response.RID == nil {
+		return nil, fmt.Errorf("maindata response omitted rid")
+	}
+
+	if !response.FullUpdate && (c.queueState.torrents == nil || c.queueState.decoded == nil) {
+		return nil, fmt.Errorf("maindata response was partial before a full update")
+	}
+	if !response.FullUpdate && *response.RID < c.queueState.rid {
+		return nil, fmt.Errorf("maindata rid reset from %d to %d without a full update", c.queueState.rid, *response.RID)
+	}
+
+	if response.FullUpdate {
+		merged := make(map[string]map[string]json.RawMessage, len(response.Torrents))
+		decoded := make(map[string]client.TorrentInfo, len(response.Torrents))
+		for hash, fields := range response.Torrents {
+			if hash == "" {
+				return nil, fmt.Errorf("maindata response contained an empty torrent hash")
+			}
+			current := cloneTorrentFields(fields)
+			torrent, err := decodeMainDataTorrent(hash, current)
+			if err != nil {
+				return nil, err
+			}
+			merged[hash] = current
+			decoded[hash] = torrent
+		}
+		c.queueState.rid = *response.RID
+		c.queueState.torrents = merged
+		c.queueState.decoded = decoded
+		return mainDataTorrentList(decoded), nil
+	}
+
+	// Decode every changed torrent before touching the live maps. This keeps a
+	// malformed partial response from leaving a half-applied queue behind and
+	// avoids re-decoding unchanged entries on every refresh.
+	updates := make(map[string]map[string]json.RawMessage, len(response.Torrents))
+	decodedUpdates := make(map[string]client.TorrentInfo, len(response.Torrents))
+	for hash, fields := range response.Torrents {
+		if hash == "" {
+			return nil, fmt.Errorf("maindata response contained an empty torrent hash")
+		}
+		current := cloneTorrentFields(c.queueState.torrents[hash])
+		if current == nil {
+			current = make(map[string]json.RawMessage, len(fields)+1)
+		}
+		for field, value := range fields {
+			current[field] = append(json.RawMessage(nil), value...)
+		}
+		torrent, err := decodeMainDataTorrent(hash, current)
+		if err != nil {
+			return nil, err
+		}
+		updates[hash] = current
+		decodedUpdates[hash] = torrent
+	}
+	for _, hash := range response.TorrentsRemoved {
+		deleteTorrentHash(c.queueState.torrents, hash)
+		deleteTorrentHashInfo(c.queueState.decoded, hash)
+	}
+	for hash, fields := range updates {
+		c.queueState.torrents[hash] = fields
+		c.queueState.decoded[hash] = decodedUpdates[hash]
+	}
+	c.queueState.rid = *response.RID
+	return mainDataTorrentList(c.queueState.decoded), nil
+}
+
+func cloneTorrentFields(fields map[string]json.RawMessage) map[string]json.RawMessage {
+	if fields == nil {
+		return nil
+	}
+	clone := make(map[string]json.RawMessage, len(fields)+1)
+	for field, value := range fields {
+		clone[field] = append(json.RawMessage(nil), value...)
+	}
+	return clone
+}
+
+func deleteTorrentHash(torrents map[string]map[string]json.RawMessage, hash string) {
+	if _, ok := torrents[hash]; ok {
+		delete(torrents, hash)
+		return
+	}
+	for existing := range torrents {
+		if strings.EqualFold(existing, hash) {
+			delete(torrents, existing)
+			return
+		}
+	}
+}
+
+func deleteTorrentHashInfo(torrents map[string]client.TorrentInfo, hash string) {
+	if _, ok := torrents[hash]; ok {
+		delete(torrents, hash)
+		return
+	}
+	for existing := range torrents {
+		if strings.EqualFold(existing, hash) {
+			delete(torrents, existing)
+			return
+		}
+	}
+}
+
+func decodeMainDataTorrent(hash string, fields map[string]json.RawMessage) (client.TorrentInfo, error) {
+	data := cloneTorrentFields(fields)
+	if data == nil {
+		data = make(map[string]json.RawMessage, 1)
+	}
+	encodedHash, err := json.Marshal(hash)
+	if err != nil {
+		return client.TorrentInfo{}, fmt.Errorf("encode torrent hash: %w", err)
+	}
+	data["hash"] = encodedHash
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		return client.TorrentInfo{}, fmt.Errorf("encode torrent %s: %w", hash, err)
+	}
+	var torrent client.TorrentInfo
+	if err := json.Unmarshal(encoded, &torrent); err != nil {
+		return client.TorrentInfo{}, fmt.Errorf("decode torrent %s: %w", hash, err)
+	}
+	return torrent, nil
+}
+
+func mainDataTorrentList(torrents map[string]client.TorrentInfo) []client.TorrentInfo {
+	list := make([]client.TorrentInfo, 0, len(torrents))
+	for _, torrent := range torrents {
+		list = append(list, torrent)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		leftName, rightName := strings.ToLower(list[i].Name), strings.ToLower(list[j].Name)
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		leftHash, rightHash := strings.ToLower(list[i].Hash), strings.ToLower(list[j].Hash)
+		if leftHash != rightHash {
+			return leftHash < rightHash
+		}
+		return list[i].Hash < list[j].Hash
+	})
+	return list
 }
 
 // search runs one qBittorrent search job, captures client diagnostics, and

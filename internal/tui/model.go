@@ -520,7 +520,13 @@ func (m *model) refresh() tea.Cmd {
 	default:
 		return m.startWork(queueWork, "Refreshing queue", func(ctx context.Context) workDone {
 			torrents, err := m.backend.queue(ctx)
-			return workDone{queue: torrents, err: err}
+			notice := ""
+			if err == nil {
+				if source, ok := m.backend.(interface{ takeQueueNotice() string }); ok {
+					notice = source.takeQueueNotice()
+				}
+			}
+			return workDone{queue: torrents, notice: notice, err: err}
 		})
 	}
 }

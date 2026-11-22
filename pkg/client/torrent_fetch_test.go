@@ -32,6 +32,24 @@ func TestFetchAllTorrentsSupportsLargeResponses(t *testing.T) {
 	}
 }
 
+func TestFetchMainDataPassesRIDAndReturnsRawBody(t *testing.T) {
+	server := newQBTestServer(t)
+	wantBody := `{"rid":42,"full_update":true,"torrents":{}}`
+	server.MainDataQueue = []string{wantBody}
+	app := server.newApp()
+
+	body, err := app.FetchMainData(context.Background(), 41)
+	if err != nil {
+		t.Fatalf("FetchMainData err = %v", err)
+	}
+	if string(body) != wantBody {
+		t.Fatalf("FetchMainData body = %q", body)
+	}
+	if got := server.MainDataRIDs; len(got) != 1 || got[0] != "41" {
+		t.Fatalf("FetchMainData rid = %v, want [41]", got)
+	}
+}
+
 func TestResolveHashScenarios(t *testing.T) {
 	uniqueHash := "0123456789abcdef0123456789abcdef01234567"
 	otherHash := "fedcba9876543210fedcba9876543210fedcba98"

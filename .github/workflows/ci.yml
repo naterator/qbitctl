@@ -58,11 +58,11 @@ jobs:
           go-version-file: go.mod
       - name: Cross-build every release target
         run: bash scripts/build.sh
-      - name: Verify ARMv7 binary and install snippet
+      - name: Verify ARMv7 binary and installer
         run: |
           file dist/qbitctl-linux-arm | grep -q 'ARM, EABI5'
-          shellcheck scripts/install-snippet.sh
-          bash scripts/test_install_snippet.sh
+          shellcheck scripts/install.sh scripts/test_install.sh
+          sh scripts/test_install.sh
 
   windows-updater:
     runs-on: windows-2025

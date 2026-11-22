@@ -189,7 +189,17 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/v2/auth/login":
 		s.LoginCalls++
-		http.SetCookie(w, &http.Cookie{Name: "SID", Value: "test-session", Path: "/"})
+		// Mirror qBittorrent's session cookie: Secure only when the Web UI is
+		// served over HTTPS, so plain-HTTP fixtures still round-trip the
+		// cookie through Go's jar.
+		http.SetCookie(w, &http.Cookie{
+			Name:     "SID",
+			Value:    "test-session",
+			Path:     "/",
+			Secure:   r.TLS != nil,
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
 		_, _ = io.WriteString(w, "Ok.")
 	case "/api/v2/auth/logout":
 		// The fixture accepts logout so tests that exercise the real client

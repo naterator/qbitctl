@@ -37,96 +37,57 @@ Supports both the older HTTP 200 login response and the HTTP 204 response used b
 
 ## Install
 
-Download the latest release for your platform. The installer downloads into
-a private temporary directory and installs the binary after verifying the
-published SHA-256 checksum.
-
 ```bash
-bash <<'QBITCTL_INSTALL'
-set -euo pipefail
-
-os=$(uname -s | tr '[:upper:]' '[:lower:]')
-case "$os" in
-  darwin|dragonfly|freebsd|illumos|linux|netbsd|openbsd|solaris) ;;
-  *)
-    printf 'unsupported operating system: %s\n' "$os" >&2
-    exit 1
-    ;;
-esac
-
-machine=$(uname -m)
-case "$machine" in
-  x86_64|amd64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
-  armv7|armv7l) arch=arm ;;
-  *)
-    printf 'unsupported architecture: %s\n' "$machine" >&2
-    exit 1
-    ;;
-esac
-
-asset="qbitctl-$os-$arch"
-base="${QBITCTL_DOWNLOAD_BASE:-https://github.com/naterator/qbitctl/releases/latest/download}"
-base=${base%/}
-target="${QBITCTL_INSTALL_PATH:-/usr/local/bin/qbitctl}"
-checksum_asset="$asset.sha256"
-
-tmp_parent=${TMPDIR:-/tmp}
-tmp_dir=$(mktemp -d "$tmp_parent/qbitctl-install.XXXXXX")
-trap 'rm -rf "$tmp_dir"' EXIT
-
-binary_path="$tmp_dir/$asset"
-checksum_path="$tmp_dir/$checksum_asset"
-curl --fail --location --retry 3 --retry-delay 1 --silent --show-error \
-  --output "$binary_path" "$base/$asset"
-curl --fail --location --retry 3 --retry-delay 1 --silent --show-error \
-  --output "$checksum_path" "$base/$checksum_asset"
-
-# Check that the downloaded checksum names this exact asset before invoking
-# the platform checksum tool, so a malformed file cannot name another path.
-if ! LC_ALL=C awk -v asset="$asset" '
-  NF == 0 { next }
-  {
-    records++
-    if (NF == 2 && length($1) == 64 && $1 !~ /[^[:xdigit:]]/ && $2 == asset) {
-      matching++
-    }
-  }
-  END { exit records == 1 && matching == 1 ? 0 : 1 }
-' "$checksum_path"; then
-  printf 'checksum file does not name %s\n' "$asset" >&2
-  exit 1
-fi
-
-if command -v sha256sum >/dev/null 2>&1; then
-  (cd "$tmp_dir" && sha256sum -c "$checksum_asset")
-elif command -v shasum >/dev/null 2>&1; then
-  (cd "$tmp_dir" && shasum -a 256 -c "$checksum_asset")
-else
-  printf 'neither sha256sum nor shasum is available\n' >&2
-  exit 1
-fi
-
-chmod 0755 "$binary_path"
-target_dir=$(dirname "$target")
-if [[ -d "$target_dir" && -w "$target_dir" ]]; then
-  install -m 0755 "$binary_path" "$target"
-else
-  sudo install -m 0755 "$binary_path" "$target"
-fi
-printf 'installed %s to %s\n' "$asset" "$target"
-QBITCTL_INSTALL
+curl -fsSL https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.sh | bash
 ```
 
-The same installer is kept in [scripts/install-snippet.sh](scripts/install-snippet.sh)
-and checked by CI with ShellCheck.
+The [installer](scripts/install.sh) downloads the latest release for your
+platform, verifies its published SHA-256 checksum, and installs `qbitctl`:
+
+- **Regular user:** `~/.local/bin/qbitctl`. If that directory isn't on your
+  `PATH`, the installer adds it in your shell's startup file (`~/.zshrc`,
+  `~/.bashrc` or, on macOS, `~/.bash_profile`, fish's `conf.d`, or
+  `~/.profile`). Open a new terminal afterwards.
+- **Root, or a user who can already write to `/usr/local/bin`:**
+  `/usr/local/bin/qbitctl`, with no startup file changes.
+
+The installer never runs `sudo` itself. For a system-wide install, run it as
+root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.sh | sudo bash
+```
+
+A root-owned install then needs `sudo qbitctl update` to update. A per-user
+install updates without `sudo`.
+
+| Variable | Effect |
+|---|---|
+| `QBITCTL_VERSION` | Install a specific release, such as `1.3.1`, instead of the latest |
+| `QBITCTL_INSTALL_DIR` | Install into this directory instead of the default |
+| `QBITCTL_NO_MODIFY_PATH=1` | Leave shell startup files unchanged |
+
+Set variables on `bash`, not `curl`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.sh | QBITCTL_VERSION=1.3.1 bash
+```
+
+To read the script before running it, download it with
+`curl -fsSLO https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.sh`,
+then run `bash install.sh`.
+
+The installer supports macOS, Linux, FreeBSD, NetBSD, OpenBSD, and DragonFly
+on the architectures that `uname -m` reports as `x86_64`/`amd64`,
+`aarch64`/`arm64`, or `armv7l`. For Windows, illumos, Solaris, Plan 9, and
+NetBSD on ARM (which reports `evbarm`), download the matching asset and its
+`.sha256` file from the [releases page](https://github.com/naterator/qbitctl/releases/latest).
 
 ARMv7 (`armv7l`) is the minimum for the prebuilt 32-bit Linux asset. ARMv6
 devices such as the original Pi Zero and Pi 1 need a build for their CPU.
-Use a newer release or build from source if the selected release lacks
-`qbitctl-linux-arm`. GitHub CLI users can verify the installed release asset
-with `gh release verify-asset <release-tag> /usr/local/bin/qbitctl --repo naterator/qbitctl`.
-[GitHub CLI reference](https://cli.github.com/manual/gh_release_verify-asset)
+GitHub CLI users can also verify the installed binary against its release with
+`gh release verify-asset <release-tag> ~/.local/bin/qbitctl --repo naterator/qbitctl`
+([reference](https://cli.github.com/manual/gh_release_verify-asset)).
 
 Once installed, keep it up to date with:
 
@@ -134,11 +95,11 @@ Once installed, keep it up to date with:
 qbitctl update
 ```
 
-qbitctl checks the SHA-256 checksum and verifies GitHub's signed release attestation before replacing the executable. Self-update works without a separate CLI or sign-in. The release must be immutable and published with all assets already attached.
+qbitctl checks the SHA-256 checksum and verifies GitHub's signed release attestation before replacing the executable. Self-update works without a separate CLI or sign-in. The release must be immutable and published with all assets already attached. On Windows, the replaced executable is kept as `qbitctl.exe.old` until the next launch removes it.
 
 ## Build from source
 
-Requires Go 1.26.11 or newer.
+Requires Go 1.27.4 or newer.
 
 ```bash
 go build -o qbitctl ./cmd/qbitctl
@@ -187,7 +148,7 @@ cmd/qbitctl/             Cobra CLI, self-update, and terminal helpers
 internal/configfile/     Locked, atomic config and cache file updates
 internal/qbtest/         In-memory qBittorrent API fixture
 internal/releaseattest/  Sigstore and TUF release attestation verification
-internal/searchresults/ Shared search sorting, filtering, and size parsing
+internal/searchresults/  Shared search sorting, filtering, and size parsing
 internal/tui/            Interactive queue, search, server, and configuration
 pkg/client/              Importable qBittorrent API client library
 scripts/                 Build, smoke, compatibility, and demo scripts
@@ -264,7 +225,7 @@ An existing `enc:v2` config requires the key that encrypted it.
 qbitctl config
 ```
 
-Prompts for URL (default `http://localhost:8080`), username (default `admin`), password, and save path. Use `qbitctl --config /path/to/config.json config` to choose the save path in advance. The text setup checks authentication and API compatibility before saving.
+Prompts for URL, username, password, and save path. The URL and username default to the saved values, or to `http://localhost:8080` and `admin` when nothing valid is saved. Use `qbitctl --config /path/to/config.json config` to choose the save path in advance. The text setup checks authentication and API compatibility before saving, and stops with an error if input ends before every prompt is answered.
 
 ### Non-interactive config write
 
@@ -283,8 +244,8 @@ Run `qbitctl help <command>` to see its flags and any aliases.
 -c, --config <path>   Alternate config file path
 -u, --url <url>       qBittorrent WebUI URL
 -U, --user <user>     qBittorrent username
--p, --pass <pass>     qBittorrent password in process arguments
-    --pass-stdin     Read the qBittorrent password from standard input
+-p, --pass <pass>     qBittorrent password (visible in process arguments)
+    --pass-stdin      Read the qBittorrent password from standard input
 -v, --version         Show version
 -h, --help            Show help
 ```
@@ -298,8 +259,12 @@ config as the other commands. The Config tab guides you through first-time
 setup and lets you change the server address or credentials later. A blank
 password field keeps the saved password for the same server. Enter a password
 when switching to a different server. The Config tab shows whether a password
-is saved and masks new passwords as you type. From the workspace view, press
-`Esc` during connection to cancel and open Config.
+is saved and masks new passwords as you type. The workspace opens immediately
+and shows its progress while it connects. Press `Esc` during the connection to
+cancel and open Config. If the connection fails, Config opens with the error.
+The exception is when there is no usable saved config and the URL, username,
+and password all came from `--url`, `--user`, and `-p` or `QBITCTL_PASSWORD`.
+In that case the TUI exits with the error.
 
 - Press `Tab` or `1`, `2`, `3`, and `4` to switch between Queue, Search,
   Server, and Config.
@@ -402,9 +367,10 @@ Search through qBittorrent's installed search plugins. The default plugin is
 qbitctl returns the results found so far and prints a notice to stderr. With
 `--json`, stdout is still an array, including `[]` when there are no results.
 qbitctl attempts to delete its search job before logging out, including after Ctrl-C.
-Each result includes the name, size in bytes, seeder and leecher counts, and
-source hostname. Downloadable results also include an ID in the table and in
-the JSON `id` field. Use that ID with `qbitctl add --search-id`.
+Each result includes the name, size, seeder and leecher counts, and source
+hostname. Sizes are in bytes in JSON and piped output. Downloadable results
+also include an ID in the table and in the JSON `id` field. Use that ID with
+`qbitctl add --search-id`.
 
 qbitctl keeps download links in a private local cache. IDs remain available for up to 24 hours for the same qBittorrent URL and user. The cache keeps the most recent eight searches per profile, with a limit of 64 searches across profiles.
 
@@ -420,10 +386,14 @@ Search results can be ordered with `--sort` (`original`, `seeders-desc`,
 `seeders-asc`, `size-desc`, or `size-asc`) and narrowed with `--filter`,
 `--min-seeders`, `--min-size`, and `--max-size`. The filter uses
 whitespace-separated terms that must match the result name, source, or ID.
+Size bounds accept bytes or a unit. `KB`, `MB`, `GB`, `TB`, and `PB` are
+decimal, and `KiB`, `MiB`, `GiB`, `TiB`, and `PiB` are binary.
 `--limit` applies after filtering and sorting; `0` (the default) shows every
-matching result. Piped output keeps the tab-separated byte-size format for
-scripts, while an interactive terminal uses aligned columns and human-readable
-binary sizes.
+matching result. These options apply to `--json` output too. Every result is
+still cached, so an ID from an earlier unfiltered run still works with
+`add --search-id`. Piped output keeps the tab-separated byte-size format for
+scripts, while an interactive terminal uses aligned columns and binary units
+such as `1.4 GiB`.
 
 #### show (aliases: s, sh)
 
@@ -544,28 +514,34 @@ qbitctl completion bash        # generate shell completions (alias: com)
 qbitctl help                   # help (aliases: h, he)
 ```
 
-### Shell completion
-
-Install the generated completion script for your shell:
-
-```bash
-# bash
-qbitctl completion bash > ~/.local/share/bash-completion/completions/qbitctl
-
-# zsh
-qbitctl completion zsh > "${fpath[1]}/_qbitctl"
-
-# fish
-qbitctl completion fish > ~/.config/fish/completions/qbitctl.fish
-```
-
-Hash completion uses the saved qBittorrent configuration to query the server
-and gives up after three seconds. Other command and field completions are
-available without a server connection.
-
 The help view groups commands and flags by section. In a color-capable terminal,
 section headings, command names, and descriptions use separate colors. Set
 `NO_COLOR=1` for the same help content without styling.
+
+### Shell completion
+
+Install the generated completion script for your shell. `qbitctl completion
+powershell` is also available.
+
+```bash
+# bash (requires bash-completion)
+mkdir -p ~/.local/share/bash-completion/completions
+qbitctl completion bash > ~/.local/share/bash-completion/completions/qbitctl
+
+# zsh: also add `fpath=(~/.zfunc $fpath)` before `compinit` in ~/.zshrc
+mkdir -p ~/.zfunc
+qbitctl completion zsh > ~/.zfunc/_qbitctl
+
+# fish
+mkdir -p ~/.config/fish/completions
+qbitctl completion fish > ~/.config/fish/completions/qbitctl.fish
+```
+
+Hash completion connects to the server with the active configuration,
+including `--config`, `--url`, `--user`, and `QBITCTL_PASSWORD`. It never
+prompts or reads stdin, and gives up after three seconds. Completions for
+commands, field names, set values, and `.torrent` files for `add` work
+without a server connection.
 
 ### Output format flags
 
@@ -683,13 +659,16 @@ make smoke             # Native CLI and PTY smoke tests with Python 3
 make ci                # The same native checks used in GitHub Actions
 ```
 
-The compatibility test runs a disposable qBittorrent container and needs Docker.
+The compatibility test runs a disposable qBittorrent container and needs
+Docker. CI runs it against 5.0.0 and 5.3.0 using the digest-pinned images in
+[ci.yml](.github/workflows/ci.yml).
 
 ```bash
 compat_dir=$(mktemp -d)
 go build -trimpath -o "$compat_dir/qbitctl" ./cmd/qbitctl
 python3 scripts/integration_qbittorrent.py --binary "$compat_dir/qbitctl" \
-  --image qbittorrentofficial/qbittorrent-nox:5.3.0-2 --version 5.3.0
+  --image 'qbittorrentofficial/qbittorrent-nox:5.3.0-2@sha256:43b2d352cf76330a7ca34c7320b9b74227d6f31e662e0e123d0457206b09a7ea' \
+  --version 5.3.0
 ```
 
 ## License

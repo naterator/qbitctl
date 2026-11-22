@@ -35,14 +35,25 @@ func validateOutputArgs(cmd *cobra.Command, tmpl, fields string, noHeader bool) 
 	return nil
 }
 
-func validateOutputModeFlags(cmd *cobra.Command, args []string) error {
-	if err := cobra.ExactArgs(2)(cmd, args); err != nil {
-		return err
-	}
+// validateJSONModeFlags runs from Args, before the root PersistentPreRunE can
+// read --pass-stdin input and before login. Cobra's own flag groups are checked
+// only after the pre-run hooks.
+func validateJSONModeFlags(cmd *cobra.Command) error {
 	if cmd.Flags().Changed("server-json") && cmd.Flags().Changed("json") {
 		return codedErr(exitBadArgs, "Use only one of --json or --server-json")
 	}
 	return nil
+}
+
+// jsonModeArgs combines a positional-argument check with the JSON mode check
+// for commands that offer only --json and --server-json.
+func jsonModeArgs(positional cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := positional(cmd, args); err != nil {
+			return err
+		}
+		return validateJSONModeFlags(cmd)
+	}
 }
 
 func validateFieldArg(index int, isKnown func(string) bool, canonical func(string) string, help string) func(*cobra.Command, []string) error {

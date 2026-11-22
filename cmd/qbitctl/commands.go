@@ -111,7 +111,7 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"i", "in"},
 		Short:   "Show qBittorrent server info and transfer stats",
 		GroupID: "view",
-		Args:    cobra.NoArgs,
+		Args:    jsonModeArgs(cobra.NoArgs),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
@@ -124,6 +124,7 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
+	cmd.MarkFlagsMutuallyExclusive("server-json", "json")
 	return cmd
 }
 
@@ -342,7 +343,7 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 		Long: "Read one torrent property.\n\nAvailable fields:\n" +
 			wrapFields(getFieldNames, "  ", 72),
 		GroupID:           "view",
-		Args:              validateOutputModeFlags,
+		Args:              jsonModeArgs(cobra.ExactArgs(2)),
 		ValidArgsFunction: completeGetArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			hash, err := app.ResolveHash(args[1])

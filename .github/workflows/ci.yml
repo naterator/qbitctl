@@ -18,17 +18,29 @@ concurrency:
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Each job restores its own Go build and module cache (.github/actions/setup-go).
+# Only main saves caches, and only when the exact key missed, so a cache is
+# written once per dependency or Go version change. Pull requests read main's
+# caches but never write their own.
+
 jobs:
   native:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - id: go
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache-name: native
       - name: Check formatting, tests, smoke, and release helpers
         run: make ci
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
 
   compatibility:
     name: qBittorrent compatibility (${{ matrix.version }})
@@ -47,9 +59,11 @@ jobs:
             image: qbittorrentofficial/qbittorrent-nox:5.3.0-2@sha256:43b2d352cf76330a7ca34c7320b9b74227d6f31e662e0e123d0457206b09a7ea
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - id: go
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          # Both legs build the same binary, so they share one cache.
+          cache-name: compatibility
       - name: Build compatibility binary
         run: go build -trimpath -o "$RUNNER_TEMP/qbitctl-compat" ./cmd/qbitctl
       - name: Exercise real qBittorrent API
@@ -58,6 +72,12 @@ jobs:
             --binary "$RUNNER_TEMP/qbitctl-compat" \
             --image '${{ matrix.image }}' \
             --version '${{ matrix.version }}'
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true' && matrix.version == '5.3.0'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
 
   # Release binaries are built only by the release workflow. CI type-checks
   # each release OS instead, which catches platform-specific breakage
@@ -67,33 +87,54 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - id: go
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache-name: cross-check
       - name: Type-check every release operating system
         run: bash scripts/check_cross_targets.sh
       - name: Check and exercise the installer
         run: |
           shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh
           sh scripts/test_install.sh
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
 
   windows-updater:
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - id: go
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache-name: windows-updater
       - name: Exercise Windows updater replacement and rollback
         run: go test -v ./cmd/qbitctl -run 'TestGitHubReleaseUpdater(ReplacesExecutable|Windows.*)|TestRemovePreviousExecutable' -count=1
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}
 
   govulncheck:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      - id: go
+        uses: ./.github/actions/setup-go
         with:
-          go-version-file: go.mod
+          cache-name: govulncheck
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.go.outputs.cache-paths }}
+          key: ${{ steps.go.outputs.cache-key }}

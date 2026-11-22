@@ -1,0 +1,55 @@
+name: Set up Go with a per-job cache
+description: >
+  Install the Go version from go.mod and restore a build and module cache that
+  belongs to one job. actions/setup-go's built-in cache shares a single key
+  across jobs, so the first job to finish saves it and later jobs never add
+  their own build output. Save with actions/cache/save at the end of the job,
+  using this action's cache-key and cache-paths outputs.
+
+inputs:
+  cache-name:
+    description: Unique cache name for the calling job (and matrix leg)
+    required: true
+
+outputs:
+  cache-hit:
+    description: Whether the exact cache key was restored
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: Exact cache key to save at the end of the job
+    value: ${{ steps.key.outputs.key }}
+  cache-paths:
+    description: GOCACHE and GOMODCACHE paths, one per line
+    value: ${{ steps.paths.outputs.paths }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+      with:
+        go-version-file: go.mod
+        cache: false
+    - id: paths
+      shell: bash
+      run: |
+        {
+          echo 'paths<<GO_CACHE_PATHS'
+          go env GOCACHE
+          go env GOMODCACHE
+          echo 'GO_CACHE_PATHS'
+        } >> "$GITHUB_OUTPUT"
+    # The key changes with dependencies or the Go version (both in go.mod), so
+    # main saves a cache once per change. Code-only changes recompile just
+    # qbitctl's own packages on top of the restored cache.
+    - id: key
+      shell: bash
+      run: |
+        prefix="go-${{ inputs.cache-name }}-${{ runner.os }}-${{ runner.arch }}-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=$prefix${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.paths.outputs.paths }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}

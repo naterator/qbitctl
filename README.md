@@ -130,13 +130,13 @@ VERSION=v1.2.3 bash scripts/build.sh
 
 Binaries and individual SHA-256 files are written to `dist/`. Windows binaries use `.exe`; other targets use `qbitctl-<os>-<arch>`. The release target list is checked against the installed Go toolchain before building.
 
-CI and release packaging run on `ubuntu-26.04`, with a focused `windows-2025` job for self-update recovery. CI runs formatting, vet, race tests, CLI and terminal smoke tests, a qBittorrent API compatibility matrix, a vulnerability scan, and all release cross-builds.
+CI and release packaging run on `ubuntu-26.04`, with a focused `windows-2025` job for self-update recovery. CI runs on pushes to `main`, pull requests, and manual dispatch. It runs formatting, vet, race tests, CLI and terminal smoke tests, a qBittorrent API compatibility matrix, a vulnerability scan, the installer tests, and a type-check of every release operating system (`scripts/check_cross_targets.sh`). Only the release workflow builds the release binaries.
 
 To publish releases that support verified updates:
 
 1. Enable **Release immutability** in the repository's GitHub settings before publishing new releases.
 2. Create a signed version tag with `git tag -s` and push it, or manually run **Draft release assets** with an existing signed tag. Both `vMAJOR.MINOR.PATCH` and `MAJOR.MINOR.PATCH` are accepted.
-3. The workflow waits for the latest push-triggered CI run for the exact release commit to pass before cross-building assets. It checks the native release binary and verifies the tag again before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
+3. The workflow waits for the CI run from the push to `main` for the exact release commit to pass before cross-building assets, so tag only commits that are on `main`. It checks the native release binary and verifies the tag again before attaching assets to a draft. It can resume an existing draft but refuses to change an already published release.
 4. Review and publish the completed draft. GitHub locks the tag and assets and creates the release attestation for self-updates.
 
 See GitHub's [immutable release publishing guidance](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases). Attaching binaries after publication is incompatible with immutable releases.

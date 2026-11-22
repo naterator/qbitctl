@@ -1,11 +1,22 @@
 name: CI
 
 on:
+  # Tag pushes are not listed: the release workflow waits for this workflow's
+  # push run on main for the tagged commit, so rerunning it for the tag only
+  # repeated work. Other branches are covered by their pull requests.
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Cancel superseded pull request runs. Main runs are never canceled, because
+# each commit that may be tagged needs a completed run for the release gate.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native:
@@ -48,20 +59,22 @@ jobs:
             --image '${{ matrix.image }}' \
             --version '${{ matrix.version }}'
 
-  cross-build:
+  # Release binaries are built only by the release workflow. CI type-checks
+  # each release OS instead, which catches platform-specific breakage
+  # without linking 17 binaries on every push.
+  cross-check:
     runs-on: ubuntu-26.04
-    timeout-minutes: 35
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - name: Cross-build every release target
-        run: bash scripts/build.sh
-      - name: Verify ARMv7 binary and installer
+      - name: Type-check every release operating system
+        run: bash scripts/check_cross_targets.sh
+      - name: Check and exercise the installer
         run: |
-          file dist/qbitctl-linux-arm | grep -q 'ARM, EABI5'
-          shellcheck scripts/install.sh scripts/test_install.sh
+          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh
           sh scripts/test_install.sh
 
   windows-updater:

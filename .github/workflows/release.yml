@@ -72,6 +72,8 @@ jobs:
         shell: bash
       - name: Build every release target
         run: VERSION="$RELEASE_TAG" bash .release-workflow/scripts/build.sh
+      - name: Verify ARMv7 binary format
+        run: file dist/qbitctl-linux-arm | grep -q 'ARM, EABI5'
       - name: Smoke release binary
         run: python3 scripts/smoke_native.py "./dist/qbitctl-$(go env GOOS)-$(go env GOARCH)"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -57,6 +57,9 @@ func parseLimit(input string) (int64, error) {
 		if start+1 != len(input) || strings.ToLower(input[start:]) != "k" {
 			return 0, fmt.Errorf("invalid limit suffix")
 		}
+		if value > math.MaxInt64/1024 || value < math.MinInt64/1024 {
+			return 0, fmt.Errorf("limit is outside the supported range")
+		}
 		value *= 1024
 	}
 

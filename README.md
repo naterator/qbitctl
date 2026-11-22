@@ -85,8 +85,9 @@ or use `--config` to pick a file. qbitctl falls back to `./config.json` when
 it can't find the default file.
 
 Saved passwords are encrypted with a key in your OS keyring. On macOS that
-key lives in your default Keychain. For a headless setup, supply the same
-`QBITCTL_MASTER_KEY` when saving the config and on later runs.
+key lives in your default Keychain. Over SSH, qbitctl can use your unlocked
+login Keychain while your macOS login session is active. For a headless setup,
+supply the same `QBITCTL_MASTER_KEY` when saving the config and on later runs.
 
 To use a different server or account, pass `--url` and `--user` with an
 explicit password. URLs can include a reverse-proxy path prefix. For scripts,

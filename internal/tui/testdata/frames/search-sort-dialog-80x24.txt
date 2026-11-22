@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+    1 Queue    ▸ 2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+   Search results
+   0 results  ·  Search order
+      Title                         Size      Seeds ID         Source
+
+    Sort search results
+
+    › Search order
+      Most seeders
+      Fewest seeders
+      Largest size
+      Smallest size
+
+    ↑/↓ move   enter select   esc close
+
+
+
+
+
+
+  ● Ready
+  / search   s sort   f filter   enter add   q quit

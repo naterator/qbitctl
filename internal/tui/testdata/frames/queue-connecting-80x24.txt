@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+   Transfers  ·  0
+      Name                                      Done            State
+   Connecting to qbt.test…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ◌ Connecting to qbt.test
+  / filter   o sort   enter details   space mark   a add   q quit

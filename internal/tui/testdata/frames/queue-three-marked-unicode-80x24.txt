@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+   Transfers  ·  3 · 1 marked
+      Name                                      Done            State
+   ›* Ubuntu 24.04 LTS                          ━━━━┄┄┄┄┄┄  42% downloading
+      long-directory-name/long-directory-name/… ┄┄┄┄┄┄┄┄┄┄   7% error
+      日本語 🌐 release                         ━━━━━━━━━━ 100% stalledUP
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ● Ready
+  / filter   o sort   enter details   space mark   a add   q quit

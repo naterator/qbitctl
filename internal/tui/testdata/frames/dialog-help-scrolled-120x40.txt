@@ -1,0 +1,40 @@
+  ⇅ qbitctl
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Keyboard shortcuts
+
+  Navigate                               Config                                 Queue
+  ↑/↓ · j/k  Move                        enter  Edit connection                 /      Filter queue
+  pgup/pgdn  Page                        d      Toggle TUI default              o      Sort queue
+  home/end   Top / bottom                c      Choose color scheme             enter  Torrent details
+  tab/⇧tab   Switch tabs                                                        space  Mark torrent
+  1/2/3/4    Jump to a tab                                                      esc    Clear marks
+                                                                                a      Add torrent
+
+  Torrent actions                        Search                                 Dialogs
+  s   Start                              /      New search                      tab/⇧tab  Change field
+  p   Pause                              s      Sort results                    enter     Submit
+  f   Force start                        f      Filter results                  esc       Cancel
+  m   Move                               enter  Add result
+  t   Trackers                           esc    Cancel / clear filter
+  e   Edit focused / marked
+  x   Remove
+  ⇧d  Delete files
+
+  Session
+  ctrl+p · :  Command palette
+  ?           Keyboard shortcuts
+  r           Refresh
+  ctrl+c      Cancel search / quit
+  q · ctrl+q  Quit
+
+
+
+
+
+
+
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc back   ↑/↓ scroll   pgup/pgdn page

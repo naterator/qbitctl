@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+    1 Queue    ▸ 2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+   Search results
+   0 results  ·  Search order
+      Title                         Size      Seeds ID         Source
+   Press / to search Jackett.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ● Ready
+  / search   s sort   f filter   enter add   q quit

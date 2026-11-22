@@ -1,0 +1,12 @@
+  ⇅ qbitctl                ? shortcuts
+  ▸ 1 Queue      2 Search      3 Serv…
+  ────────────────────────────────────
+   Transfers  ·  1
+      Name         Done State
+   ›  日本語 🌐 l…  50% downloading
+
+
+
+
+  ● Ready
+  / filter   o sort   enter details

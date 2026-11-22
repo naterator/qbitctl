@@ -1,0 +1,24 @@
+  ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
+    1 Queue      2 Search    ▸ 3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────
+   Server & transfers
+   No server information loaded. Press r to refresh.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ● Error  ·  server request failed
+  enter details   r refresh   q quit

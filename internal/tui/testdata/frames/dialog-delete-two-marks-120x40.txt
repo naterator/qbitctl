@@ -1,0 +1,40 @@
+  ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
+  ▸ 1 Queue      2 Search      3 Server      4 Config
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Transfers  ·  2 · 2 marked                                                  │ Selected torrent
+      Name                                       Done            State         │ two
+   *  one                                        ┄┄┄┄┄┄┄┄┄┄   0%               │   ·  0 B
+   ›* two                                        ┄┄┄┄┄┄┄┄┄┄   0%               │
+                                                                               │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄   0%
+                                                                               │
+                                                                               │ Down      —
+                                                                               │ Up        —
+                                                                               │ Ratio     0.00
+                                                                               │ Tracker
+                                                                               │ Path
+
+                      Delete torrents and files
+
+                      Delete 2 torrents?
+                        · one
+                        · two
+                      This permanently deletes the selected torrent files. Type DELETE to continu…
+                      › Confirmation: DELETE
+
+                      enter delete   esc cancel
+
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+                                                                               │
+  ● Ready
+  / filter   o sort   enter details   space mark   a add   q quit

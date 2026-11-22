@@ -1,0 +1,40 @@
+  ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
+    1 Queue      2 Search      3 Server    ▸ 4 Config
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Configuration
+   Connection
+    Server address         │ Not configured
+    Username               │ Not configured
+    Password               │ Not configured
+
+   Startup
+    TUI by default         │ Disabled
+    Color scheme           │ Default
+
+   Config file
+                      Configure qBittorrent
+
+                      › Server: http://localhost:8080
+                        qBittorrent Web API address
+                        Username: admin
+                        Web API username
+                        Password: Password required for first connection
+                        Typed characters are hidden; a password is required
+                        TUI default: no
+                        Start qbitctl in the TUI by default
+
+                      tab next   enter submit   esc cancel
+
+
+
+
+
+
+
+
+
+
+
+
+  ● Ready
+  enter edit   d toggle default   c colors   q quit

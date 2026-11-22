@@ -11,8 +11,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// These seams keep the bare-command startup policy testable without claiming
+// that a test process owns an interactive terminal or starting Bubble Tea.
+var (
+	isInteractive = interactiveWorkspace
+	runTUIFunc    = runTUI
+)
+
 func runDefault(cmd *cobra.Command, opts CLIOptions) error {
-	if !interactiveWorkspace(cmd) {
+	if !isInteractive(cmd) {
 		return cmd.Help()
 	}
 	setup, err := qbt.ReadSetup(opts)
@@ -20,7 +27,7 @@ func runDefault(cmd *cobra.Command, opts CLIOptions) error {
 		return result(cmd, err)
 	}
 	if setup.TUIDefault {
-		return runTUI(cmd, opts)
+		return runTUIFunc(cmd, opts)
 	}
 	if !setup.Ready() {
 		finished, err := firstRunSetup(cmd, &opts, setup.Path)
@@ -50,7 +57,7 @@ func firstRunSetup(cmd *cobra.Command, opts *CLIOptions, path string) (bool, err
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "", "1", "tui":
-			return true, runTUI(cmd, *opts)
+			return true, runTUIFunc(cmd, *opts)
 		case "2", "text":
 			savedPath, err := qbt.InteractiveConfigContext(cmd.Context(), reader, out, makeHiddenInput(in, out), path)
 			if err != nil {

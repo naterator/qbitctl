@@ -44,7 +44,7 @@ jobs:
         run: go build -trimpath -o "$RUNNER_TEMP/qbitctl-compat" ./cmd/qbitctl
       - name: Exercise the new qBittorrent image
         env:
-          QBITCTL_NGINX_IMAGE: nginx:1.29-alpine
+          QBITCTL_NGINX_IMAGE: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
         run: |
           python3 scripts/integration_qbittorrent.py \
             --binary "$RUNNER_TEMP/qbitctl-compat" \

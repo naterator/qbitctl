@@ -150,14 +150,15 @@ For a stripped static binary:
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o qbitctl ./cmd/qbitctl
 ```
 
-The version is injected at build time via `-ldflags`. The Makefile handles this automatically with `VERSION`, defaulting to `dev-<short-sha>`:
+The version is injected at build time via `-ldflags`. The Makefile handles
+this automatically with `VERSION`, which defaults to `dev-<short-sha>`.
 
 ```bash
-make            # build with VERSION or dev-<short-sha>
-make run        # go run
-make test       # go test ./...
-make check      # test + vet + fmt-check
-make fmt        # gofmt -w
+make            # Build with VERSION or dev-<short-sha>
+make check      # Run the quick test, vet, and formatting checks
+make test-race  # Run the tests with the race detector
+make smoke      # Build and exercise the CLI and TUI
+make ci         # Run the native CI checks locally
 ```
 
 Build the release targets declared in [scripts/build.sh](scripts/build.sh):
@@ -182,10 +183,15 @@ See GitHub's [immutable release publishing guidance](https://docs.github.com/en/
 ## Project layout
 
 ```text
-cmd/qbitctl/     Cobra CLI, command definitions, terminal helpers
-internal/tui/    Interactive queue, search, and server workspace
-pkg/client/      qBittorrent API client library (importable by external projects)
-Makefile         Build, test, and format targets
+cmd/qbitctl/             Cobra CLI, self-update, and terminal helpers
+internal/configfile/     Locked, atomic config and cache file updates
+internal/qbtest/         In-memory qBittorrent API fixture
+internal/releaseattest/  Sigstore and TUF release attestation verification
+internal/searchresults/ Shared search sorting, filtering, and size parsing
+internal/tui/            Interactive queue, search, server, and configuration
+pkg/client/              Importable qBittorrent API client library
+scripts/                 Build, smoke, compatibility, and demo scripts
+Makefile                 Build, test, CI, and formatting targets
 ```
 
 ## Quick start
@@ -292,7 +298,8 @@ config as the other commands. The Config tab guides you through first-time
 setup and lets you change the server address or credentials later. A blank
 password field keeps the saved password for the same server. Enter a password
 when switching to a different server. The Config tab shows whether a password
-is saved and masks new passwords as you type.
+is saved and masks new passwords as you type. From the workspace view, press
+`Esc` during connection to cancel and open Config.
 
 - Press `Tab` or `1`, `2`, `3`, and `4` to switch between Queue, Search,
   Server, and Config.
@@ -314,6 +321,8 @@ is saved and masks new passwords as you type.
 - In Queue, press `o` or choose **Sort queue** in the palette to sort by name,
   progress, or state in either direction. Choose **Active first**
   to restore the default order. Press `s` to start selected torrents.
+- The Queue uses incremental updates. It falls back to full refreshes for
+  the rest of the session if the server cannot supply usable sync data.
 - In Search, `/` opens the search form. It defaults to Jackett and 30 seconds.
   Press `Enter` on a result to open the add dialog, then `Enter` to submit it.
   Press `Esc` to cancel a running search.
@@ -472,6 +481,8 @@ qbitctl set up-limit 1024 9c328901
 qbitctl set dl-limit 2048 9c328901
 qbitctl set ratio-limit 2.0 9c328901
 qbitctl set seedtime-limit 3600 9c328901
+qbitctl set seedtime-limit 3d 9c328901
+qbitctl set -- seedtime-limit -1 9c328901
 qbitctl set seqdl true 9c328901
 qbitctl set autotmm false 9c328901
 qbitctl set superseed true 9c328901
@@ -559,7 +570,8 @@ section headings, command names, and descriptions use separate colors. Set
 ### Output format flags
 
 These flags apply to `info`, `list`, `show`, and `get` as indicated.
-`search` also supports `--json` (`-j`).
+`search` also supports `--json` (`-j`). Choose one output format per
+invocation. `--no-header` requires `--fields`.
 
 | Flag | Short | Description |
 |------|-------|-------------|
@@ -657,15 +669,27 @@ Key library types:
 - `client.TorrentInfo` — torrent metadata (JSON-mapped)
 - `client.TransferInfo` — server transfer statistics
 - `client.CodedError` — error with exit code for CLI integration
+- `client.HTTPError` — HTTP status and a bounded server error excerpt
 - `client.HiddenInputFunc` — password echo control for interactive config
 
 ## Test
 
 ```bash
-go test ./...              # all tests
-go test ./pkg/client/      # client library tests
-go test ./cmd/qbitctl      # CLI tests
-make check                 # test + vet + fmt-check
+go test ./...          # All Go tests
+go test ./pkg/client/  # Client library tests
+go test ./cmd/qbitctl  # CLI tests
+make test-race         # Go tests with the race detector
+make smoke             # Native CLI and PTY smoke tests with Python 3
+make ci                # The same native checks used in GitHub Actions
+```
+
+The compatibility test runs a disposable qBittorrent container and needs Docker.
+
+```bash
+compat_dir=$(mktemp -d)
+go build -trimpath -o "$compat_dir/qbitctl" ./cmd/qbitctl
+python3 scripts/integration_qbittorrent.py --binary "$compat_dir/qbitctl" \
+  --image qbittorrentofficial/qbittorrent-nox:5.3.0-2 --version 5.3.0
 ```
 
 ## License

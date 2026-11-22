@@ -36,7 +36,7 @@ printf '%s\n' \
 EOF
 cat >"$tmp/scanner-empty" <<'EOF'
 #!/usr/bin/env bash
-: > /dev/stdout
+exit 0
 EOF
 cat >"$tmp/scanner-failure" <<'EOF'
 #!/usr/bin/env bash
@@ -77,6 +77,7 @@ if [[ "$failure_status" -eq 0 ]]; then
 	exit 1
 fi
 assert_metadata has_findings false "$failure_output"
+assert_metadata scanner_status 42 "$failure_output"
 
 empty_dir="$tmp/empty"
 empty_output="$tmp/empty.output"
@@ -89,6 +90,7 @@ if [[ "$empty_status" -eq 0 ]]; then
 	exit 1
 fi
 assert_metadata has_findings false "$empty_output"
+assert_metadata scanner_status 0 "$empty_output"
 
 cat >"$tmp/gh" <<'EOF'
 #!/usr/bin/env bash

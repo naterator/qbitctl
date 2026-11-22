@@ -147,7 +147,7 @@ jobs:
         run: bash scripts/check_cross_targets.sh
       - name: Check and exercise the installer
         run: |
-          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh scripts/lint_actions.sh scripts/check_commit_hygiene.sh scripts/test_commit_hygiene.sh scripts/check_go_toolchain.sh scripts/hooks/commit-msg
+          shellcheck scripts/install.sh scripts/test_install.sh scripts/check_cross_targets.sh scripts/lint_actions.sh scripts/check_commit_hygiene.sh scripts/test_commit_hygiene.sh scripts/check_go_toolchain.sh scripts/hooks/commit-msg scripts/report_qbittorrent_compatibility.sh scripts/test_qbittorrent_compatibility.sh
           sh scripts/test_install.sh
           bash scripts/test_commit_hygiene.sh
       - name: Save Go cache
@@ -199,6 +199,8 @@ jobs:
         run: scripts/lint_actions.sh
       - name: Test scheduled vulnerability reporting
         run: bash scripts/test_govulncheck.sh
+      - name: Test qBittorrent compatibility reporting
+        run: bash scripts/test_qbittorrent_compatibility.sh
       - name: Save Go cache
         if: github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
         continue-on-error: true

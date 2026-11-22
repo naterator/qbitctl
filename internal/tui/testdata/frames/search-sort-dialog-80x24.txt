@@ -1,9 +1,9 @@
   ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
     1 Queue    ▸ 2 Search      3 Server      4 Config
   ────────────────────────────────────────────────────────────────────────────
-   Search results
-   Provider: Enabled search plugins
+   Search results                            Provider: Enabled search plugins
    0 results  ·  Search order
+      Title                         Size      Seeds ID         Source
 
     Sort search results
 

@@ -34,6 +34,7 @@ const (
 	searchPluginsWork
 	serverWork
 	detailWork
+	detailRefreshWork
 	actionWork
 	configWork
 	connectWork
@@ -55,19 +56,32 @@ type searchPluginService interface {
 	searchPlugins(context.Context) ([]searchPluginInfo, error)
 }
 
+// searchCatalogService lets the TUI pass the catalog it just fetched to the
+// search adapter. This keeps a validated default from causing a second
+// /search/plugins request before the actual search starts. Test backends do
+// not need to implement it; service.search remains the compatibility path.
+type searchCatalogService interface {
+	searchWithCatalog(context.Context, string, string, time.Duration, []searchPluginInfo) ([]client.SearchResult, string, error)
+}
+
 type workDone struct {
-	kind             workKind
-	queue            []client.TorrentInfo
-	results          []client.SearchResult
-	rows             []detailRow
-	title            string
-	notice           string
-	app              *client.App
-	setup            setupState
-	setDefault       *bool
-	plugins          []searchPluginInfo
-	pluginGeneration uint64
-	err              error
+	kind                      workKind
+	queue                     []client.TorrentInfo
+	results                   []client.SearchResult
+	rows                      []detailRow
+	title                     string
+	detailTarget              *torrentDetailTarget
+	detailUpdate              *torrentDetailUpdate
+	notice                    string
+	app                       *client.App
+	setup                     setupState
+	setDefault                *bool
+	plugins                   []searchPluginInfo
+	pluginGeneration          uint64
+	pluginSelectionGeneration uint64
+	effectivePlugin           string
+	searchPluginWasDefault    bool
+	err                       error
 }
 
 type refreshTick struct{}
@@ -96,35 +110,38 @@ type model struct {
 	theme           themeID
 	themePreview    themeID
 
-	page                   page
-	width, height          int
-	allTorrents            []client.TorrentInfo
-	queue                  []client.TorrentInfo
-	allResults             []client.SearchResult
-	results                []client.SearchResult
-	serverRows             []detailRow
-	queueIndex             int
-	resultIndex            int
-	marked                 map[string]bool
-	filter                 string
-	stateFilter            string
-	queueSort              queueSort
-	resultFilter           resultFilter
-	resultSort             resultSort
-	resultEditor           *resultFilterEditor
-	query                  string
-	searchPlugin           string
-	searchTimeout          time.Duration
-	searchPlugins          []searchPluginInfo
-	searchPluginsAttempted bool
-	searchPluginsLoading   bool
-	searchPluginCancel     context.CancelFunc
-	searchPluginsStale     bool
-	searchPluginsError     string
-	searchPluginGeneration uint64
-	dialog                 *dialog
-	busy, notice           string
-	failed                 bool
+	page                            page
+	width, height                   int
+	allTorrents                     []client.TorrentInfo
+	queue                           []client.TorrentInfo
+	allResults                      []client.SearchResult
+	results                         []client.SearchResult
+	serverRows                      []detailRow
+	queueIndex                      int
+	resultIndex                     int
+	marked                          map[string]bool
+	filter                          string
+	stateFilter                     string
+	queueSort                       queueSort
+	resultFilter                    resultFilter
+	resultSort                      resultSort
+	resultEditor                    *resultFilterEditor
+	query                           string
+	searchPlugin                    string
+	savedSearchPlugin               string
+	searchPluginDefaultActive       bool
+	searchTimeout                   time.Duration
+	searchPlugins                   []searchPluginInfo
+	searchPluginsAttempted          bool
+	searchPluginsLoading            bool
+	searchPluginCancel              context.CancelFunc
+	searchPluginsStale              bool
+	searchPluginsError              string
+	searchPluginGeneration          uint64
+	searchPluginSelectionGeneration uint64
+	dialog                          *dialog
+	busy, notice                    string
+	failed                          bool
 
 	noticeID uint64
 }
@@ -138,7 +155,9 @@ func newModel(ctx context.Context, backend service) *model {
 		ctx: ctx, backend: backend, width: 80, height: 24,
 		marked: make(map[string]bool), stateFilter: "all",
 		queueSort: queueActiveFirst, resultSort: resultOriginal,
-		searchPlugin: defaultSearchPluginSelection, searchTimeout: 30 * time.Second,
+		searchPlugin:              defaultSearchPluginSelection,
+		savedSearchPlugin:         defaultSearchPluginSelection,
+		searchPluginDefaultActive: true, searchTimeout: 30 * time.Second,
 		theme: defaultThemeID,
 	}
 }
@@ -202,8 +221,13 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case refreshTick:
-		if m.busy == "" && m.dialog == nil && m.page != searchPage && m.page != configPage && !m.quitting {
-			return tea.Batch(m.refresh(), nextTick())
+		if m.busy == "" && !m.quitting {
+			if m.dialog != nil {
+				return tea.Batch(m.refreshTorrentDetails(), nextTick())
+			}
+			if m.page != searchPage && m.page != configPage {
+				return tea.Batch(m.refresh(), nextTick())
+			}
 		}
 		return nextTick()
 	case tea.KeyPressMsg:
@@ -392,13 +416,20 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		if m.quitting {
 			return tea.Quit
 		}
+		selectionChanged := done.pluginSelectionGeneration != m.searchPluginSelectionGeneration
 		if errors.Is(done.err, context.Canceled) {
 			m.searchPluginsStale = len(m.searchPlugins) > 0
+			if !selectionChanged {
+				m.revalidateSavedSearchPlugin(true)
+			}
 			return nil
 		}
 		if done.err != nil {
 			m.searchPluginsStale = len(m.searchPlugins) > 0
 			m.searchPluginsError = done.err.Error()
+			if !selectionChanged {
+				m.revalidateSavedSearchPlugin(true)
+			}
 			m.refreshSearchDialogPlugin()
 			return nil
 		}
@@ -406,6 +437,9 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		m.searchPluginsAttempted = true
 		m.searchPluginsStale = false
 		m.searchPluginsError = ""
+		if !selectionChanged {
+			m.revalidateSavedSearchPlugin(false)
+		}
 		m.refreshSearchDialogPlugin()
 		m.refreshSearchPluginPicker()
 		return nil
@@ -453,7 +487,14 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		m.adoptApp(done.app, done.setup)
 		return m.refresh()
 	}
+	if done.kind == detailRefreshWork {
+		m.finishTorrentDetailsRefresh(done)
+		return nil
+	}
 	if done.err != nil {
+		if done.kind == searchWork {
+			m.applySearchPluginResult(done)
+		}
 		if done.app != nil {
 			done.app.Logout()
 		}
@@ -467,12 +508,14 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	case queueWork:
 		m.replaceQueue(done.queue)
 	case searchWork:
+		m.applySearchPluginResult(done)
 		m.replaceSearchResults(done.results)
 	case serverWork:
 		m.serverRows = done.rows
 	case detailWork:
-		if m.dialog == nil {
+		if m.dialog == nil && m.page == queuePage {
 			m.openDetailDialog(done.title, done.rows)
+			m.dialog.torrentDetails = done.detailTarget
 		}
 	case actionWork:
 		if m.page == queuePage {
@@ -499,6 +542,21 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		return m.refresh()
 	}
 	return nil
+}
+
+func (m *model) applySearchPluginResult(done workDone) {
+	if !done.searchPluginWasDefault || done.pluginSelectionGeneration != m.searchPluginSelectionGeneration {
+		return
+	}
+	if done.plugins != nil {
+		m.searchPlugins = normalizeSearchPlugins(done.plugins)
+		m.searchPluginsAttempted = true
+		m.searchPluginsStale = false
+		m.searchPluginsError = ""
+	}
+	if done.effectivePlugin != "" {
+		m.searchPlugin = done.effectivePlugin
+	}
 }
 
 func (m *model) finishCanceledConnection(app *client.App) tea.Cmd {
@@ -574,15 +632,9 @@ func (m *model) refresh() tea.Cmd {
 	case configPage:
 		return nil
 	default:
+		backend := m.backend
 		return m.startWork(queueWork, "Refreshing queue", func(ctx context.Context) workDone {
-			torrents, err := m.backend.queue(ctx)
-			notice := ""
-			if err == nil {
-				if source, ok := m.backend.(interface{ takeQueueNotice() string }); ok {
-					notice = source.takeQueueNotice()
-				}
-			}
-			return workDone{queue: torrents, notice: notice, err: err}
+			return fetchQueueUpdate(ctx, backend)
 		})
 	}
 }
@@ -590,7 +642,10 @@ func (m *model) refresh() tea.Cmd {
 func (m *model) goTo(next page) tea.Cmd {
 	m.page = next
 	if next == searchPage {
-		return m.ensureSearchPlugins()
+		// A named saved provider is checked against the current server catalog
+		// every time Search is entered. The catalog is still loaded lazily, so
+		// the saved name remains visible while the request is in flight.
+		return m.ensureSearchPlugins(m.needsDefaultSearchValidation())
 	}
 	if next == configPage || m.backend == nil {
 		return nil
@@ -606,6 +661,7 @@ func (m *model) ensureSearchPlugins(force ...bool) tea.Cmd {
 	provider, ok := m.backend.(searchPluginService)
 	if !ok {
 		m.searchPluginsAttempted = true
+		m.revalidateSavedSearchPlugin(true)
 		return nil
 	}
 	if refresh {
@@ -613,6 +669,7 @@ func (m *model) ensureSearchPlugins(force ...bool) tea.Cmd {
 		m.searchPluginsError = ""
 	}
 	generation := m.searchPluginGeneration
+	selectionGeneration := m.searchPluginSelectionGeneration
 	parent := m.ctx
 	if parent == nil {
 		parent = context.Background()
@@ -626,7 +683,7 @@ func (m *model) ensureSearchPlugins(force ...bool) tea.Cmd {
 		defer m.workers.Done()
 		defer cancel()
 		plugins, err := provider.searchPlugins(ctx)
-		done <- workDone{kind: searchPluginsWork, plugins: plugins, pluginGeneration: generation, err: err}
+		done <- workDone{kind: searchPluginsWork, plugins: plugins, pluginGeneration: generation, pluginSelectionGeneration: selectionGeneration, err: err}
 	}()
 	return func() tea.Msg { return <-done }
 }
@@ -635,28 +692,105 @@ func (m *model) launchSearch(query, plugin string, timeout time.Duration) tea.Cm
 	if m.busy != "" {
 		return nil
 	}
+	query = strings.TrimSpace(query)
+	plugin = strings.TrimSpace(plugin)
+	if plugin == "" {
+		plugin = defaultSearchPluginSelection
+	}
 	if query != m.query || plugin != m.searchPlugin {
 		// A new search starts with the same numeric criteria and no text filter.
 		m.resultFilter = m.resultFilter.numeric()
 	}
+	followsDefault := m.searchSelectionFollowsDefault(plugin)
+	validateSaved := followsDefault && m.needsDefaultSearchValidation()
+	savedSelection := normalizeSavedSearchPlugin(m.savedSearchPlugin)
+	selectionGeneration := m.searchPluginSelectionGeneration
+	backend := m.backend
+	provider, hasProvider := backend.(searchPluginService)
+	searcher, hasCatalogSearcher := backend.(searchCatalogService)
 	m.page, m.query, m.searchPlugin, m.searchTimeout = searchPage, query, plugin, timeout
+	m.searchPluginDefaultActive = followsDefault
 	m.replaceSearchResults(nil)
 	m.setNotice("", false)
 	return m.startWork(searchWork, "Searching "+m.searchPluginLabel(plugin), func(ctx context.Context) workDone {
-		results, notice, err := m.backend.search(ctx, query, plugin, timeout)
+		effectivePlugin := plugin
+		var freshCatalog []searchPluginInfo
+		if validateSaved {
+			if hasProvider {
+				plugins, discoveryErr := provider.searchPlugins(ctx)
+				if ctx.Err() != nil {
+					return workDone{notice: "Search canceled"}
+				}
+				if discoveryErr == nil {
+					freshCatalog = normalizeSearchPlugins(plugins)
+					effectivePlugin = client.ValidateDefaultSearchPlugin(savedSelection, freshCatalog)
+				} else {
+					effectivePlugin = defaultSearchPluginSelection
+				}
+			} else {
+				effectivePlugin = defaultSearchPluginSelection
+			}
+		}
+		var results []client.SearchResult
+		var notice string
+		var err error
+		if hasCatalogSearcher && freshCatalog != nil && len(freshCatalog) > 0 {
+			results, notice, err = searcher.searchWithCatalog(ctx, query, effectivePlugin, timeout, freshCatalog)
+		} else {
+			results, notice, err = backend.search(ctx, query, effectivePlugin, timeout)
+		}
+		metadata := workDone{
+			results: results, notice: notice, err: err,
+			effectivePlugin:           effectivePlugin,
+			searchPluginWasDefault:    followsDefault,
+			pluginSelectionGeneration: selectionGeneration,
+		}
+		if freshCatalog != nil {
+			metadata.plugins = freshCatalog
+		}
 		if ctx.Err() != nil {
 			if notice != "" {
 				notice = "Search canceled · " + notice
 			} else {
 				notice = "Search canceled"
 			}
-			return workDone{notice: notice}
+			metadata.notice = notice
+			metadata.err = nil
+			return metadata
 		}
 		if notice == "" && len(results) == 0 {
 			notice = "Search finished with no results"
 		}
-		return workDone{results: results, notice: notice, err: err}
+		metadata.notice = notice
+		return metadata
 	})
+}
+
+func (m *model) searchSelectionFollowsDefault(selection string) bool {
+	selection = normalizeSavedSearchPlugin(selection)
+	if m.searchPluginDefaultActive && selection == normalizeSavedSearchPlugin(m.searchPlugin) {
+		return true
+	}
+	return selection == normalizeSavedSearchPlugin(m.savedSearchPlugin)
+}
+
+func (m *model) needsDefaultSearchValidation() bool {
+	saved := normalizeSavedSearchPlugin(m.savedSearchPlugin)
+	return saved != defaultSearchPluginSelection && saved != "all"
+}
+
+// revalidateSavedSearchPlugin updates only the effective provider. The saved
+// value is deliberately left untouched when a plugin is missing, disabled, or
+// the catalog request failed, so a later refresh can recover it automatically.
+func (m *model) revalidateSavedSearchPlugin(unavailable bool) {
+	if !m.searchPluginDefaultActive {
+		return
+	}
+	var catalog []searchPluginInfo
+	if !unavailable && m.searchPluginsAttempted && !m.searchPluginsStale {
+		catalog = m.searchPlugins
+	}
+	m.searchPlugin = client.ValidateDefaultSearchPlugin(m.savedSearchPlugin, catalog)
 }
 
 func (m *model) cancelSearch() {
@@ -706,16 +840,18 @@ func (m *model) requestQuit() tea.Cmd {
 
 func (m *model) loadDetails(trackers bool) tea.Cmd {
 	torrent, ok := m.focusedTorrent()
-	if !ok || m.page != queuePage {
+	if !ok || m.page != queuePage || m.backend == nil {
 		return nil
 	}
-	label, title := "Loading torrent details", torrent.Name
+	label := "Loading torrent details"
 	if trackers {
-		label, title = "Loading trackers", "Trackers · "+torrent.Name
+		label = "Loading trackers"
 	}
+	backend := m.backend
+	target := torrentDetailTarget{hash: torrent.Hash, trackers: trackers}
 	return m.startWork(detailWork, label, func(ctx context.Context) workDone {
-		rows, err := m.backend.details(ctx, torrent.Hash, trackers)
-		return workDone{title: title, rows: rows, err: err}
+		rows, err := backend.details(ctx, target.hash, target.trackers)
+		return workDone{title: target.title(torrent.Name), rows: rows, detailTarget: &target, err: err}
 	})
 }
 

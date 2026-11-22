@@ -1,14 +1,14 @@
   ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
-    1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
+    1 Queue    ▸ 2 Search      3 Server      4 Config
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Search results                                                              │ Selected result
-   Provider: Enabled search plugins                                            │ Ubuntu ISO
-   2 results  ·  Search order                                                  │ ?  ·  jackett
-      Title                          Size      Seeds ID         Source         │
-   ›  Ubuntu ISO                     ?         12    101        jackett        │ Seeders   12
-      Unknown size result            ?         0     —          fixture        │ Leechers  3
+   Search results   Query: Ubuntu                                                    Provider: Enabled search plugins
+   2 results  ·  Search order                                                  │ Selected result
+      Title                          Size      Seeds ID         Source         │ Ubuntu ISO
+   ›  Ubuntu ISO                     ?         12    101        jackett        │ ?  ·  jackett
+      Unknown size result            ?         0     —          fixture        │
+                                                                               │ Seeders   12
+                                                                               │ Leechers  3
                                                                                │ Result ID 101
-                                                                               │
                                                                                │
                                                                                │
                                                                                │

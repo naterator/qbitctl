@@ -217,7 +217,8 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 	minSize, maxSize, filterValue := "", "", ""
 	limit := 0
 	var searchOptions searchCommandOptions
-	cmd := &cobra.Command{
+	var cmd *cobra.Command
+	cmd = &cobra.Command{
 		Use:     "search <pattern> | --list-plugins",
 		Short:   "Search torrents or list qBittorrent search plugins",
 		GroupID: "view",
@@ -270,7 +271,7 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 				}
 				return renderSearchPlugins(app.Stdout, plugins, jsonOutput)
 			}
-			resolvedPlugins, err := app.ResolveSearchPlugins(plugin)
+			resolvedPlugins, err := resolveSearchPluginsForCommand(cmd, app, plugin)
 			if err != nil {
 				return err
 			}
@@ -291,7 +292,7 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 			return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout))
 		}),
 	}
-	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin ID or full name; use | to combine, or enabled/all")
+	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin ID or full name; omit to use the saved default; use | to combine, or enabled/all")
 	cmd.Flags().BoolVar(&listPlugins, "list-plugins", false, "List available search plugins (use --json for JSON)")
 	cmd.Flags().DurationVar(&searchTimeout, "timeout", searchTimeout, "Time to wait before returning available results, for example 30s or 2m")
 	cmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output search results or plugin listing as JSON")

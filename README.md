@@ -36,12 +36,16 @@ qbitctl add ./ubuntu.torrent
 
 Use `Tab` to switch between Queue, Search, Server, and Config. Press `?` for
 shortcuts or `Ctrl+P` for the command palette. Mark torrents with `Space` to
-edit them together. Set `qbitctl tui-default on` to open the TUI when you run
-`qbitctl` by itself.
+edit them together. Press Enter in the Queue to open live torrent details.
+The details and the queue refresh every five seconds. Set
+`qbitctl tui-default on` to open the TUI when you run `qbitctl` by itself.
 
-On the Search tab, press `p` (**Providers**) to pick an installed plugin or
-search all enabled plugins. The current selection stays visible above the
-results. Press `/` to start a search.
+On the Search tab, the query and current provider are just below the tabs.
+Press `p` (**Providers**) to choose **Enabled search plugins** (the default),
+**All search plugins**, or an individual enabled plugin. Disabled plugins appear
+grayed out at the bottom of the picker. The choice is saved in `config.json`
+and used for TUI and CLI searches. If a saved plugin is no longer available or
+enabled, qbitctl uses **Enabled search plugins**. Press `/` to start a search.
 
 ![qbitctl TUI showing setup, the search provider picker, and torrent controls](assets/demo.gif)
 
@@ -73,8 +77,8 @@ qbitctl pause 9c328901 fedcba98
 qbitctl completion bash
 ```
 
-Search uses the plugins enabled in qBittorrent and waits up to 30 seconds by
-default. Run `qbitctl search --list-plugins` to see what your server has
+Search uses your saved provider and waits up to 30 seconds by default.
+Run `qbitctl search --list-plugins` to see what your server has
 installed. Use `--plugin` with a name or ID, join several with `|` in a quoted
 value, or use `--plugin all` to include disabled plugins. Change the wait with
 `--timeout`.

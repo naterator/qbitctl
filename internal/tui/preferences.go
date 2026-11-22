@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/naterator/qbitctl/internal/configfile"
+	"github.com/naterator/qbitctl/pkg/client"
 )
 
 func tuiPreferencesDir() (string, error) {
@@ -27,6 +29,7 @@ func tuiPreferencesDir() (string, error) {
 
 func (m *model) loadPreferences(path string) {
 	m.preferencesPath = path
+	m.loadSavedSearchPlugin(path)
 	if path == "" {
 		return
 	}
@@ -44,6 +47,45 @@ func (m *model) loadPreferences(path string) {
 		m.preferenceNotice(fmt.Errorf("search preferences: %w", err))
 	}
 	m.loadTheme(path)
+}
+
+// loadSavedSearchPlugin reads the provider preference independently of the
+// server catalog. A manual provider selection made during this session is
+// preserved when preferences are reloaded; a fresh model follows the saved
+// default until it is validated against the connected server.
+func (m *model) loadSavedSearchPlugin(path string) {
+	if strings.TrimSpace(path) == "" {
+		if m.searchPluginDefaultActive {
+			m.savedSearchPlugin = defaultSearchPluginSelection
+			m.searchPlugin = defaultSearchPluginSelection
+		}
+		return
+	}
+	selection, err := client.ReadDefaultSearchPlugin(path)
+	if err != nil {
+		m.preferenceNotice(fmt.Errorf("default search plugin: %w", err))
+		selection = defaultSearchPluginSelection
+	}
+	selection = normalizeSavedSearchPlugin(selection)
+	if selection != m.savedSearchPlugin {
+		m.searchPluginSelectionGeneration++
+	}
+	m.savedSearchPlugin = selection
+	if m.searchPluginDefaultActive {
+		m.searchPlugin = selection
+	}
+}
+
+func normalizeSavedSearchPlugin(selection string) string {
+	selection = strings.TrimSpace(selection)
+	switch strings.ToLower(selection) {
+	case "", defaultSearchPluginSelection:
+		return defaultSearchPluginSelection
+	case "all":
+		return "all"
+	default:
+		return selection
+	}
 }
 
 func usesDefaultPreferences(path, dir string) bool {

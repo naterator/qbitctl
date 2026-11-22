@@ -91,8 +91,6 @@ func (m *model) tableHeight() int {
 	// The panel title and table headings each take one row.
 	rows := height - viewHeaderLines - viewFooterLines - 2
 	if m.page == searchPage {
-		// The search page always reserves one line for the selected provider.
-		rows--
 		// Search results always have a filter and sort summary. While the
 		// result filter editor is open that summary grows by one line for the
 		// field tabs and the focused input.
@@ -157,20 +155,9 @@ func (m *model) viewHeader(width int) []string {
 		m.viewTab("3 Server", serverPage),
 		m.viewTab("4 Config", configPage),
 	}
-	context := ""
-	switch m.page {
-	case queuePage:
-		if strings.TrimSpace(m.filter) != "" {
-			context = "filter: /" + viewSafe(m.filter)
-		}
-	case searchPage:
-		if strings.TrimSpace(m.query) != "" {
-			context = "query: " + viewSafe(m.query)
-		}
-	}
 	second := strings.Join(tabs, "   ")
-	if context != "" && lipgloss.Width(second)+3 < width {
-		second += "   " + viewMutedStyle.Render(viewFit(context, width-lipgloss.Width(second)-3))
+	if m.page == queuePage && strings.TrimSpace(m.filter) != "" && lipgloss.Width(second)+3 < width {
+		second += "   " + viewMutedStyle.Render(viewFit("filter: /"+viewSafe(m.filter), width-lipgloss.Width(second)-3))
 	}
 	return []string{first, second, viewRule(width)}
 }
@@ -325,22 +312,36 @@ func (m *model) viewTorrentDetail(width int) []string {
 }
 
 func (m *model) viewSearch(width, height int) []string {
+	heading := viewPanelRows([]string{m.viewSearchHeading(width - 2)}, width, 1)
+	bodyHeight := max(0, height-1)
 	if viewHasDetail(width) {
 		rightWidth := viewDetailWidth(width)
 		leftWidth := max(1, width-rightWidth-1)
-		left := viewPanel("Search results", m.viewSearchList(leftWidth-2, height-1), leftWidth, height)
-		right := viewPanel("Selected result", m.viewResultDetail(rightWidth-2), rightWidth, height)
-		return viewColumns(left, right, leftWidth, rightWidth, height)
+		left := viewPanelRows(m.viewSearchList(leftWidth-2, bodyHeight), leftWidth, bodyHeight)
+		right := viewPanel("Selected result", m.viewResultDetail(rightWidth-2), rightWidth, bodyHeight)
+		return append(heading, viewColumns(left, right, leftWidth, rightWidth, bodyHeight)...)
 	}
-	return viewPanel("Search results", m.viewSearchList(width-2, height-1), width, height)
+	return append(heading, viewPanelRows(m.viewSearchList(width-2, bodyHeight), width, bodyHeight)...)
+}
+
+func (m *model) viewSearchHeading(width int) string {
+	title := "Search results"
+	if query := strings.TrimSpace(m.query); query != "" {
+		title = "Query: " + viewSafe(query)
+		if width >= 60 {
+			title = "Search results   " + title
+		}
+	}
+	const gap = 3
+	minTitleWidth := min(lipgloss.Width(title), width/2)
+	provider := viewFit("Provider: "+m.searchPluginLabel(m.searchPlugin), width-minTitleWidth-gap)
+	title = viewFit(title, width-lipgloss.Width(provider)-gap)
+	return viewRightAligned(width, viewTitleStyle.Render(title), viewAccentStyle.Render(provider))
 }
 
 func (m *model) viewSearchList(width, height int) []string {
 	width = max(1, width)
-	rows := []string{
-		viewAccentStyle.Render(viewFit("Provider: "+m.searchPluginLabel(m.searchPlugin), width)),
-		m.viewResultControls(),
-	}
+	rows := []string{m.viewResultControls()}
 	if m.resultEditor != nil {
 		rows = append(rows, m.viewResultFilterEditor(width)...)
 	}
@@ -628,7 +629,10 @@ func viewKeys(width int, pairs ...string) string {
 
 func viewPanel(title string, body []string, width, height int) []string {
 	lines := []string{viewTitleStyle.Render(viewFit(title, width-2))}
-	lines = append(lines, body...)
+	return viewPanelRows(append(lines, body...), width, height)
+}
+
+func viewPanelRows(lines []string, width, height int) []string {
 	for i := range lines {
 		lines[i] = " " + viewColumn(lines[i], width-2) + " "
 	}

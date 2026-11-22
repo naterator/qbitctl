@@ -142,6 +142,9 @@ func (m *model) resetRemoteState() {
 	m.resultFilter = resultFilter{}
 	m.resultEditor = nil
 	m.searchPlugin = defaultSearchPluginSelection
+	m.savedSearchPlugin = defaultSearchPluginSelection
+	m.searchPluginDefaultActive = true
+	m.searchPluginSelectionGeneration++
 	m.searchPlugins = nil
 	m.searchPluginsAttempted = false
 	m.searchPluginsLoading = false
@@ -149,6 +152,45 @@ func (m *model) resetRemoteState() {
 	m.searchPluginsStale = false
 	m.searchPluginsError = ""
 	m.dialog = nil
+}
+
+// setDefaultSearchPlugin applies the provider chosen in the explicit picker
+// and persists it beside the qBittorrent credentials when a config path is
+// available. Search-dialog edits intentionally do not call this method: they
+// remain session-only overrides.
+func (m *model) setDefaultSearchPlugin(selection string) error {
+	selection = normalizeSavedSearchPlugin(selection)
+	if strings.Contains(selection, "|") || strings.EqualFold(selection, "multi") {
+		err := errors.New("default search provider must be one provider or enabled/all")
+		m.setNotice("Default search provider: "+err.Error(), true)
+		return err
+	}
+
+	path := strings.TrimSpace(m.configPath)
+	if path == "" {
+		path = strings.TrimSpace(m.preferencesPath)
+	}
+	var err error
+	if path != "" {
+		err = client.SetDefaultSearchPlugin(path, selection)
+	}
+	// Apply the in-memory choice even when persistence fails. The user can
+	// continue this session, while the notice makes the persistence failure
+	// visible and the next launch will retain the previous saved value.
+	m.savedSearchPlugin = selection
+	m.searchPlugin = selection
+	m.searchPluginDefaultActive = true
+	m.searchPluginSelectionGeneration++
+	if err != nil {
+		m.setNotice("Default search provider: "+err.Error(), true)
+		return err
+	}
+	if path == "" {
+		m.setNotice("Search provider selected for this session", false)
+	} else {
+		m.setNotice("Default search provider saved", false)
+	}
+	return nil
 }
 
 // RunConfigurable is the public TUI entry point used by the root command. It

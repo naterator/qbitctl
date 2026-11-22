@@ -5,6 +5,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +149,6 @@ func TestSearchPluginPickerSetsNextSearchWithoutChangingResults(t *testing.T) {
 		{Name: "jackett", FullName: "Jackett", Enabled: false},
 	}
 	m.searchPluginsAttempted = true
-	m.searchPlugin = client.DefaultSearchPlugins
 	m.query = "Ubuntu"
 	m.replaceSearchResults([]client.SearchResult{{ID: 101, Name: "Ubuntu ISO", Source: "prowlarr"}})
 
@@ -188,13 +189,85 @@ func TestSearchPluginPickerSetsNextSearchWithoutChangingResults(t *testing.T) {
 	if len(m.results) != 1 || m.results[0].Name != "Ubuntu ISO" {
 		t.Fatalf("provider selection changed results: %+v", m.results)
 	}
-	if view := strings.Join(m.viewSearchList(80, 20), "\n"); !strings.Contains(view, "Provider: Prowlarr") {
-		t.Fatalf("search page omitted selected provider: %q", view)
-	}
 	m.searchPlugin = "PROWLARR"
 	m.handleKey("p")
 	if got := m.dialog.items[m.dialog.selected].action; got != "prowlarr" {
 		t.Fatalf("picker highlighted %q for the selected alias, want prowlarr", got)
+	}
+}
+
+func TestSearchPluginPickerOrdersAndSkipsDisabledProviders(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.page = searchPage
+	m.searchPlugins = []searchPluginInfo{
+		{Name: "a", FullName: "Zulu", Enabled: true},
+		{Name: "b", FullName: "omega"},
+		{Name: "c", FullName: "Beta", Enabled: true},
+		{Name: "d", FullName: "Alpha"},
+	}
+	m.openSearchPluginPicker()
+	var labels []string
+	for i, item := range m.dialog.items {
+		labels = append(labels, item.label)
+		if item.disabled != (i >= 4) {
+			t.Fatalf("picker item %q has disabled=%v", item.label, item.disabled)
+		}
+	}
+	want := []string{"Enabled search plugins", "All search plugins", "Beta", "Zulu", "Alpha", "omega"}
+	if !slices.Equal(labels, want) {
+		t.Fatalf("picker order = %v, want %v", labels, want)
+	}
+	if m.dialog.selected != 0 || m.searchPlugin != client.DefaultSearchPlugins {
+		t.Fatalf("starting selection = row %d, provider %q", m.dialog.selected, m.searchPlugin)
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.dialog.selected != 3 {
+		t.Fatalf("wrap up landed on row %d, want last enabled row", m.dialog.selected)
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.dialog.selected != 0 {
+		t.Fatalf("wrap down landed on row %d, want default group", m.dialog.selected)
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.dialog.selected != 3 {
+		t.Fatalf("page down landed on row %d, want last enabled row", m.dialog.selected)
+	}
+	m.dialog.selected = 4
+	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.dialog == nil || m.searchPlugin != client.DefaultSearchPlugins {
+		t.Fatal("Enter accepted a disabled provider")
+	}
+	m.searchPlugin = "d"
+	m.openSearchPluginPicker()
+	if m.dialog.selected != 0 {
+		t.Fatal("picker opened with a disabled provider highlighted")
+	}
+}
+
+func TestSearchPluginPickerCanBrowseLongDisabledTail(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.page = searchPage
+	m.height = 12
+	for i := range 10 {
+		m.searchPlugins = append(m.searchPlugins, searchPluginInfo{
+			Name:     fmt.Sprintf("disabled-%02d", i),
+			FullName: fmt.Sprintf("Disabled provider %02d", i),
+		})
+	}
+	m.openSearchPluginPicker()
+	for range 5 {
+		m.update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+	if frame := m.dialogView(80, m.height); !strings.Contains(frame, "Disabled provider 09") {
+		t.Fatalf("last disabled provider is unreachable: %q", frame)
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.dialog == nil || m.searchPlugin != client.DefaultSearchPlugins {
+		t.Fatal("Enter while browsing applied an off-screen provider")
+	}
+	m.update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.dialog.selected != 0 || m.dialog.scroll != 0 {
+		t.Fatalf("arrow movement did not return to the choices: row %d, scroll %d", m.dialog.selected, m.dialog.scroll)
 	}
 }
 

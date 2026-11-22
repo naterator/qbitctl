@@ -1,14 +1,14 @@
   ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
-    1 Queue    ▸ 2 Search      3 Server      4 Config    query: Ubuntu
+    1 Queue    ▸ 2 Search      3 Server      4 Config
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Search results                                                              │ Selected result
-   Provider: Enabled search plugins                                            │ Ubuntu ISO
-   1 results  ·  Search order                                                  │ 4.0 MiB  ·  jackett
-   › Text    Min seeders    Min size    Max size                               │
-   Filter Text title, source, or ID                                            │ Seeders   12
-      Title                          Size      Seeds ID         Source         │ Leechers  0
-   ›  Ubuntu ISO                     4.0 MiB   12    101        jackett        │ Result ID 101
-                                                                               │
+   Search results   Query: Ubuntu                                                    Provider: Enabled search plugins
+   1 results  ·  Search order                                                  │ Selected result
+   › Text    Min seeders    Min size    Max size                               │ Ubuntu ISO
+   Filter Text title, source, or ID                                            │ 4.0 MiB  ·  jackett
+      Title                          Size      Seeds ID         Source         │
+   ›  Ubuntu ISO                     4.0 MiB   12    101        jackett        │ Seeders   12
+                                                                               │ Leechers  0
+                                                                               │ Result ID 101
                                                                                │
                                                                                │
                                                                                │

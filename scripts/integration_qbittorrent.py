@@ -454,6 +454,29 @@ def run_cli(
     return result
 
 
+def set_saved_default_search_plugin(config_home: Path, plugin: str) -> None:
+    """Update the temporary config's saved qBittorrent provider preference.
+
+    The compatibility run has already created this file with ``config write``.
+    Editing that isolated fixture config keeps this regression independent of
+    host credentials and avoids changing a developer's real qbitctl config.
+    """
+
+    path = config_home / "qbitctl" / "config.json"
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"could not read temporary qbitctl config {path}") from error
+    if not isinstance(config, dict):
+        raise RuntimeError(f"temporary qbitctl config {path} is not a JSON object")
+
+    config["default_search_plugin"] = plugin
+    try:
+        path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"could not update temporary qbitctl config {path}") from error
+
+
 def complete_show(
     binary: Path, url: str, password: str, workdir: Path, config_home: Path
 ) -> list[str]:
@@ -835,9 +858,22 @@ def run(args: argparse.Namespace) -> None:
                 if plugin.get("enabled") is not True:
                     raise RuntimeError(f"qbitctl search plugin {short_name!r} was not enabled")
 
-            # The default provider selection is enabled plugins only.  Disable the
-            # alternate fixture to prove a disabled provider is not searched, then
-            # restore it before testing explicit full-name and multi-provider input.
+            # A saved provider ID is used when it is installed and enabled.  Set
+            # the alternate fixture as the saved default first so an invocation
+            # without --plugin selects it instead of the normal enabled group.
+            set_saved_default_search_plugin(config_home, "qbitctl_fixture_alt")
+            saved_default_results = search_results(
+                binary, url, password, root, config_home
+            )
+            search_result_named(saved_default_results, "qbitctl alt search torrent")
+            if any(
+                row.get("name") == "qbitctl search torrent"
+                for row in saved_default_results
+            ):
+                raise RuntimeError("qbitctl ignored the enabled saved search provider")
+
+            # A disabled saved provider must fall back to the normal enabled
+            # group.  This also preserves the original default-provider check.
             set_search_plugin_enabled(
                 url,
                 password,
@@ -852,13 +888,29 @@ def run(args: argparse.Namespace) -> None:
             )
             if disabled_alt is None or disabled_alt.get("enabled") is not False:
                 raise RuntimeError("qbitctl search fixture alternate plugin was not disabled")
-            default_results = search_results(binary, url, password, root, config_home)
-            search_result_named(default_results, "qbitctl search torrent")
+            disabled_saved_results = search_results(
+                binary, url, password, root, config_home
+            )
+            search_result_named(disabled_saved_results, "qbitctl search torrent")
             if any(
-                str(row.get("name", "")).startswith("qbitctl alt search")
-                for row in default_results
+                row.get("name") == "qbitctl alt search torrent"
+                for row in disabled_saved_results
             ):
-                raise RuntimeError("qbitctl default search included a disabled provider")
+                raise RuntimeError("qbitctl searched a disabled saved provider")
+
+            # A stale preference for an uninstalled provider must also fall
+            # back to the normal enabled group rather than yielding no rows.
+            set_saved_default_search_plugin(config_home, "qbitctl_uninstalled_fixture")
+            missing_saved_results = search_results(
+                binary, url, password, root, config_home
+            )
+            search_result_named(missing_saved_results, "qbitctl search torrent")
+            if any(
+                row.get("name") == "qbitctl alt search torrent"
+                for row in missing_saved_results
+            ):
+                raise RuntimeError("qbitctl stale saved provider did not use enabled plugins")
+
             all_results = search_results(binary, url, password, root, config_home, "all")
             search_result_named(all_results, "qbitctl search torrent")
             search_result_named(all_results, "qbitctl alt search torrent")
@@ -875,10 +927,17 @@ def run(args: argparse.Namespace) -> None:
                 "Qbitctl Fixture Alt",
                 True,
             )
+            # An explicit provider must win over a conflicting saved default.
+            set_saved_default_search_plugin(config_home, "qbitctl_fixture")
             explicit_full_results = search_results(
                 binary, url, password, root, config_home, "Qbitctl Fixture Alt"
             )
             search_result_named(explicit_full_results, "qbitctl alt search torrent")
+            if any(
+                row.get("name") == "qbitctl search torrent"
+                for row in explicit_full_results
+            ):
+                raise RuntimeError("qbitctl explicit provider was overridden by saved default")
 
             multi_results = search_results(
                 binary,

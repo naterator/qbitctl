@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -114,6 +116,113 @@ func TestSearchListPlugins(t *testing.T) {
 			wantPaths := []string{"/api/v2/auth/login", "/api/v2/app/version", "/api/v2/app/webapiVersion", "/api/v2/search/plugins", "/api/v2/auth/logout"}
 			if !slices.Equal(requests, wantPaths) {
 				t.Fatalf("plugin listing requests = %v, want %v", requests, wantPaths)
+			}
+		})
+	}
+}
+
+func TestSearchUsesSavedDefaultProvider(t *testing.T) {
+	const catalog = `[{"name":"jackett","fullName":"Jackett","enabled":true},{"name":"disabled","fullName":"Disabled","enabled":false}]`
+	for _, tt := range []struct {
+		name             string
+		saved            string
+		explicit         string
+		catalogStatus    int
+		catalogBody      string
+		wantPlugin       string
+		wantCatalogCalls int
+	}{
+		{name: "missing uses enabled", wantPlugin: qbt.DefaultSearchPlugins},
+		{name: "enabled group skips discovery", saved: qbt.DefaultSearchPlugins, wantPlugin: qbt.DefaultSearchPlugins},
+		{name: "all group skips discovery", saved: "all", wantPlugin: "all"},
+		{name: "saved ID is validated", saved: "jackett", catalogBody: catalog, wantPlugin: "jackett", wantCatalogCalls: 1},
+		{name: "disabled saved ID falls back", saved: "disabled", catalogBody: catalog, wantPlugin: qbt.DefaultSearchPlugins, wantCatalogCalls: 1},
+		{name: "stale saved ID falls back", saved: "missing", catalogBody: catalog, wantPlugin: qbt.DefaultSearchPlugins, wantCatalogCalls: 1},
+		{name: "catalog failure falls back", saved: "jackett", catalogStatus: http.StatusInternalServerError, wantPlugin: qbt.DefaultSearchPlugins, wantCatalogCalls: 1},
+		{name: "explicit plugin overrides saved", saved: "jackett", explicit: "all", wantPlugin: "all"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tt.saved != "" {
+				if err := qbt.SetDefaultSearchPlugin(configPath, tt.saved); err != nil {
+					t.Fatalf("SetDefaultSearchPlugin(%q): %v", tt.saved, err)
+				}
+			}
+
+			var requests []string
+			catalogCalls := 0
+			restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+				return &http.Client{Jar: jar, Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+					path := req.URL.Path
+					requests = append(requests, path)
+					resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody, Request: req}
+					var body string
+					switch path {
+					case "/api/v2/auth/login":
+						resp.StatusCode = http.StatusNoContent
+						resp.Header.Set("Set-Cookie", "QBT_SID_8080=saved-provider-session; Path=/")
+					case "/api/v2/app/version":
+						body = "v5.3.0"
+					case "/api/v2/app/webapiVersion":
+						body = "2.16.2"
+					case "/api/v2/search/plugins":
+						catalogCalls++
+						if tt.catalogStatus != 0 {
+							resp.StatusCode = tt.catalogStatus
+						}
+						body = tt.catalogBody
+					case "/api/v2/search/start":
+						if err := req.ParseForm(); err != nil {
+							t.Fatal(err)
+						}
+						if got := req.Form.Get("plugins"); got != tt.wantPlugin {
+							t.Errorf("search plugin = %q, want %q", got, tt.wantPlugin)
+						}
+						body = `{"id":42}`
+					case "/api/v2/search/status":
+						body = `[{"id":42,"status":"Stopped"}]`
+					case "/api/v2/search/results":
+						body = `{"results":[],"status":"Stopped","total":0}`
+					case "/api/v2/search/delete":
+						resp.StatusCode = http.StatusNotFound
+					case "/api/v2/auth/logout":
+						resp.StatusCode = http.StatusNoContent
+					default:
+						t.Fatalf("unexpected path: %s", path)
+					}
+					resp.Body = io.NopCloser(strings.NewReader(body))
+					return resp, nil
+				})}
+			})
+			t.Cleanup(restore)
+
+			root := newRootCmd()
+			args := []string{"--config", configPath, "--url", "http://qbt.test", "--user", "admin", "--pass", "secret", "search", "plugins"}
+			if tt.explicit != "" {
+				args = append(args, "--plugin", tt.explicit)
+			}
+			args = append(args, "--json")
+			root.SetArgs(args)
+			var commandErr error
+			stdout, stderr := captureOutput(t, func() { commandErr = root.ExecuteContext(t.Context()) })
+			if commandErr != nil || stdout != "[]\n" || stderr != "" {
+				t.Fatalf("saved provider search returned %v, stdout %q, stderr %q", commandErr, stdout, stderr)
+			}
+
+			wantPaths := []string{"/api/v2/auth/login", "/api/v2/app/version", "/api/v2/app/webapiVersion"}
+			if tt.wantCatalogCalls > 0 {
+				wantPaths = append(wantPaths, "/api/v2/search/plugins")
+			}
+			wantPaths = append(wantPaths, "/api/v2/search/start", "/api/v2/search/status", "/api/v2/search/results", "/api/v2/search/delete", "/api/v2/auth/logout")
+			if !slices.Equal(requests, wantPaths) {
+				t.Fatalf("saved provider requests = %v, want %v", requests, wantPaths)
+			}
+			if catalogCalls != tt.wantCatalogCalls {
+				t.Fatalf("catalog calls = %d, want %d", catalogCalls, tt.wantCatalogCalls)
 			}
 		})
 	}

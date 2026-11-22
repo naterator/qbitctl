@@ -1,11 +1,11 @@
   ⇅ qbitctl                                                                              ? shortcuts   ctrl+p commands
     1 Queue    ▸ 2 Search      3 Server      4 Config
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-   Search results                                                              │ Selected result
-   Provider: Enabled search plugins                                            │ Select a result to inspect it.
-   0 results  ·  Search order                                                  │
-      Title                          Size      Seeds ID         Source         │ Enter adds the selected result.
+   Search results                                                                    Provider: Enabled search plugins
+   0 results  ·  Search order                                                  │ Selected result
+      Title                          Size      Seeds ID         Source         │ Select a result to inspect it.
    Press / to search Enabled search plugins.                                   │
+                                                                               │ Enter adds the selected result.
                                                                                │
                                                                                │
                                                                                │

@@ -11,7 +11,37 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/naterator/qbitctl/internal/searchresults"
 	qbt "github.com/naterator/qbitctl/pkg/client"
+	"github.com/spf13/cobra"
 )
+
+func resolveSearchPluginsForCommand(cmd *cobra.Command, app *App, requested string) (string, error) {
+	if cmd.Flags().Changed("plugin") {
+		return app.ResolveSearchPlugins(requested)
+	}
+
+	selection := qbt.DefaultSearchPlugins
+	if saved, err := qbt.ReadDefaultSearchPlugin(app.ConfigPath()); err == nil && strings.TrimSpace(saved) != "" {
+		selection = saved
+	}
+	if isDefaultSearchPluginGroup(selection) {
+		return qbt.ValidateDefaultSearchPlugin(selection, nil), nil
+	}
+
+	plugins, err := app.SearchPlugins()
+	if err != nil {
+		return qbt.DefaultSearchPlugins, nil
+	}
+	return qbt.ValidateDefaultSearchPlugin(selection, plugins), nil
+}
+
+func isDefaultSearchPluginGroup(selection string) bool {
+	switch strings.ToLower(strings.TrimSpace(selection)) {
+	case qbt.DefaultSearchPlugins, "all":
+		return true
+	default:
+		return false
+	}
+}
 
 func renderSearchPlugins(w io.Writer, plugins []qbt.SearchPlugin, asJSON bool) error {
 	if asJSON {

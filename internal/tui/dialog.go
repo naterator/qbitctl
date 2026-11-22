@@ -56,6 +56,7 @@ type dialogItem struct {
 	action      string
 	description string
 	keys        string
+	disabled    bool
 }
 
 type dialog struct {
@@ -71,8 +72,9 @@ type dialog struct {
 	items    []dialogItem
 	selected int
 
-	rows   []detailRow
-	scroll int
+	rows           []detailRow
+	scroll         int
+	torrentDetails *torrentDetailTarget
 
 	request actionRequest
 	// torrents are captured when the edit dialog opens. Marked rows are edited
@@ -146,30 +148,65 @@ func (d *dialog) cycleField(backward bool) tea.Cmd {
 }
 
 func (d *dialog) stepSelection(delta int) {
-	if d == nil || len(d.items) == 0 {
+	if d == nil {
 		return
 	}
+	count := d.selectableCount()
+	if count == 0 {
+		return
+	}
+	d.scroll = 0
 	d.selected += delta
 	if d.selected < 0 {
-		d.selected = len(d.items) - 1
+		d.selected = count - 1
 	}
-	if d.selected >= len(d.items) {
+	if d.selected >= count {
 		d.selected = 0
 	}
 }
 
 func (d *dialog) pageSelection(delta int) {
-	if d == nil || len(d.items) == 0 {
+	if d == nil {
 		return
 	}
-	step := 8
-	d.selected += delta * step
-	if d.selected < 0 {
-		d.selected = 0
+	d.selected = max(0, min(d.selected+delta*8, d.selectableCount()-1))
+}
+
+// Disabled providers are kept at the end of the picker for browsing.
+func (d *dialog) selectableCount() int {
+	count := len(d.items)
+	for count > 0 && d.items[count-1].disabled {
+		count--
 	}
-	if d.selected >= len(d.items) {
-		d.selected = len(d.items) - 1
+	return count
+}
+
+func (d *dialog) listStart(visible int) int {
+	return min(max(d.scroll, d.selected-visible/2), max(0, len(d.items)-visible))
+}
+
+func (d *dialog) bodyHeight(height int) int {
+	visible := dialogBodyHeight(height)
+	if d.status != "" {
+		visible = max(1, visible-1)
 	}
+	return visible
+}
+
+func (m *model) pageDialogItems(delta int) {
+	d := m.dialog
+	if d.kind == dialogSearchPlugins && (d.scroll > 0 || (delta > 0 && d.selected == d.selectableCount()-1)) {
+		visible := d.bodyHeight(m.heightForDialog())
+		// Page through a long disabled tail without moving the selection.
+		centered := min(max(0, d.selected-visible/2), max(0, len(d.items)-visible))
+		next := min(max(0, d.listStart(visible)+delta*max(1, visible-1)), max(0, len(d.items)-visible))
+		d.scroll = 0
+		if next > centered {
+			d.scroll = next
+		}
+		return
+	}
+	d.pageSelection(delta)
 }
 
 func (d *dialog) stepScroll(delta, visible, count int) {
@@ -317,21 +354,11 @@ func (m *model) openSearchDialog() tea.Cmd {
 // search. The selected value is applied to the next search and the current
 // result set remains untouched.
 func (m *model) openSearchPluginPicker() tea.Cmd {
-	items := m.searchPluginPickerItems()
-	selected := 0
-	current := m.searchPluginSelection(m.searchPlugin)
-	for i, item := range items {
-		if item.action == current {
-			selected = i
-			break
-		}
-	}
 	m.dialog = &dialog{
-		kind:     dialogSearchPlugins,
-		title:    "Choose search provider",
-		items:    items,
-		selected: selected,
+		kind:  dialogSearchPlugins,
+		title: "Choose search provider",
 	}
+	m.refreshSearchPluginPicker()
 	// Keep the current catalog visible while refreshing it. This also makes
 	// reopening the picker useful when another qBittorrent client changed the
 	// installed plugins after the first Search-page visit.
@@ -345,6 +372,9 @@ func (m *model) searchPluginPickerItems() []dialogItem {
 	}
 	plugins := append([]searchPluginInfo(nil), m.searchPlugins...)
 	sort.SliceStable(plugins, func(i, j int) bool {
+		if plugins[i].Enabled != plugins[j].Enabled {
+			return plugins[i].Enabled
+		}
 		left := strings.ToLower(searchPluginFullName(plugins[i]))
 		right := strings.ToLower(searchPluginFullName(plugins[j]))
 		if left == right {
@@ -367,6 +397,7 @@ func (m *model) searchPluginPickerItems() []dialogItem {
 			label:       searchPluginFullName(plugin),
 			action:      name,
 			description: description,
+			disabled:    !plugin.Enabled,
 		})
 	}
 	return items
@@ -385,7 +416,8 @@ func (m *model) refreshSearchPluginPicker() {
 	}
 	m.dialog.items = m.searchPluginPickerItems()
 	m.dialog.selected = 0
-	for i, item := range m.dialog.items {
+	m.dialog.scroll = 0
+	for i, item := range m.dialog.items[:m.dialog.selectableCount()] {
 		if item.action == selectedAction {
 			m.dialog.selected = i
 			break
@@ -844,13 +876,13 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			}
 			return nil
 		case "pgup", "ctrl+u":
-			d.pageSelection(-1)
+			m.pageDialogItems(-1)
 			if d.kind == dialogTheme {
 				m.previewThemeFromDialog()
 			}
 			return nil
 		case "pgdown", "ctrl+d":
-			d.pageSelection(1)
+			m.pageDialogItems(1)
 			if d.kind == dialogTheme {
 				m.previewThemeFromDialog()
 			}
@@ -885,8 +917,11 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 			if d.kind == dialogSearchPlugins {
-				m.searchPlugin = d.items[d.selected].action
+				if d.items[d.selected].disabled || d.selected < d.listStart(d.bodyHeight(m.heightForDialog())) {
+					return nil
+				}
 				m.dialog = nil
+				m.setDefaultSearchPlugin(d.items[d.selected].action)
 				return nil
 			}
 			field := client.CanonicalSetField(d.items[d.selected].action)
@@ -1204,12 +1239,9 @@ func (m *model) dialogView(width, height int) string {
 		width = min(66, width)
 	}
 	innerWidth, padX := dialogDimensions(width)
-	visible := dialogBodyHeight(height)
+	visible := d.bodyHeight(height)
 	var body []string
 	footer := viewKeys(innerWidth, "tab", "next", "enter", "submit", "esc", "cancel")
-	if d.status != "" {
-		visible = max(1, visible-1)
-	}
 
 	switch d.kind {
 	case dialogPalette:
@@ -1217,18 +1249,20 @@ func (m *model) dialogView(width, height int) string {
 		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "run")
 
 	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins:
-		start := min(max(0, d.selected-visible/2), max(0, len(d.items)-visible))
+		start := d.listStart(visible)
 		for i := start; i < min(len(d.items), start+visible); i++ {
 			item := d.items[i]
 			line := "  " + item.label
-			if i == d.selected {
+			if i == d.selected && !item.disabled {
 				line = "› " + item.label
 			}
 			if item.description != "" {
 				line += " · " + item.description
 			}
 			line = viewFit(line, innerWidth)
-			if i == d.selected {
+			if item.disabled {
+				line = viewMutedStyle.Faint(true).Render(line)
+			} else if i == d.selected {
 				line = viewSelectedSty.Width(innerWidth).Render(line)
 			}
 			body = append(body, line)
@@ -1236,6 +1270,9 @@ func (m *model) dialogView(width, height int) string {
 		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "select", "esc", "close")
 		if d.kind == dialogTheme {
 			footer = viewKeys(innerWidth, "↑/↓", "preview", "enter", "save", "esc", "cancel")
+		}
+		if d.kind == dialogSearchPlugins && len(d.items) > visible {
+			footer = viewKeys(innerWidth, "↑/↓", "move", "pgup/pgdn", "browse", "enter", "select", "esc", "close")
 		}
 
 	case dialogDetails:

@@ -299,6 +299,30 @@ func (c *tuiClient) search(ctx context.Context, query, plugin string, timeout ti
 	if err != nil {
 		return nil, joinDiagnostics(stderr.String(), stdout.String()), err
 	}
+	return c.searchResolved(app, &stdout, &stderr, query, resolved, timeout)
+}
+
+// searchWithCatalog resolves against a catalog that was already fetched by
+// the TUI. Unknown selectors fall back to App.ResolveSearchPlugins so older
+// servers and a catalog changed outside qbitctl retain the existing behavior.
+func (c *tuiClient) searchWithCatalog(ctx context.Context, query, plugin string, timeout time.Duration, catalog []searchPluginInfo) ([]client.SearchResult, string, error) {
+	if c == nil || c.app == nil {
+		return nil, "", fmt.Errorf("qBittorrent client is not configured")
+	}
+
+	var stdout, stderr bytes.Buffer
+	app := c.withContext(ctx, &stdout, &stderr)
+	resolved, err := client.ResolveSearchPluginSelection(plugin, catalog)
+	if err != nil {
+		resolved, err = app.ResolveSearchPlugins(plugin)
+		if err != nil {
+			return nil, joinDiagnostics(stderr.String(), stdout.String()), err
+		}
+	}
+	return c.searchResolved(app, &stdout, &stderr, query, resolved, timeout)
+}
+
+func (c *tuiClient) searchResolved(app *client.App, stdout, stderr *bytes.Buffer, query, resolved string, timeout time.Duration) ([]client.SearchResult, string, error) {
 	results, err := app.Search(query, resolved, timeout)
 	warning := joinDiagnostics(stderr.String(), stdout.String())
 	if err != nil {

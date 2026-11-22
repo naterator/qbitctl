@@ -38,6 +38,7 @@ GIB = 1 << 30
 ALPHA = "a" * 40
 BRAVO = "b" * 40
 SEARCH_PLUGINS = [
+    {"name": "communityarchive", "fullName": "Community Archive", "enabled": False},
     {"name": "distroarchive", "fullName": "Distro Archive", "enabled": True},
     {"name": "linuxreleases", "fullName": "Linux Releases", "enabled": True},
 ]
@@ -478,9 +479,14 @@ def main():
             recording.key(b"escape")
             recording.key(b"1")
 
-            # Inspect the selected transfer.
+            # Let the open transfer details show progress from the next poll.
             recording.key(b"enter", "Full Path")
-            recording.hold(1.5)
+            refresh_start = len(recording.output)
+            fixture.torrents[0] = torrent(
+                "Ubuntu 24.04 LTS", ALPHA, "downloading", 0.685317, 4 * GIB, "ISO", "linux release"
+            )
+            recording.wait("685317", refresh_start)
+            recording.hold(0.8)
             recording.key(b"escape")
             recording.hold(0.5)
 
@@ -517,11 +523,15 @@ def main():
             recording.key(b"escape")
             picker_start = len(recording.output)
             recording.key(b"p", "Choose search provider")
-            recording.wait("Distro Archive", picker_start)
+            recording.wait("Community Archive", picker_start)
+            recording.hold(1.3)
+            recording.key(b"down")
+            recording.key(b"down")
+            recording.key(b"enter", "Provider: Distro Archive")
+            saved_config = json.loads((base / "config.json").read_text())
+            if saved_config.get("default_search_plugin") != "distroarchive":
+                raise RuntimeError("the picker did not save the provider's plugin ID")
             recording.hold(0.7)
-            recording.key(b"down")
-            recording.key(b"down")
-            recording.key(b"enter", "Distro Archive")
             recording.key(b"/", "Search Distro Archive")
             recording.key(b"\x15")  # Ctrl+U clears the previous query.
             recording.type_text("Debian")

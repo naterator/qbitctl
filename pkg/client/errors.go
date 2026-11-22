@@ -1,12 +1,12 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"unicode"
 )
@@ -66,7 +66,7 @@ func newHTTPError(resp *http.Response, body []byte) *HTTPError {
 	if resp != nil {
 		status = resp.StatusCode
 	}
-	return &HTTPError{StatusCode: status, Message: sanitizeHTTPBody(resp, body)}
+	return &HTTPError{StatusCode: status, Message: truncateHTTPMessage(sanitizeHTTPBody(resp, body))}
 }
 
 func sanitizeHTTPBody(resp *http.Response, body []byte) string {
@@ -83,7 +83,10 @@ func sanitizeHTTPBody(resp *http.Response, body []byte) string {
 	if strings.HasPrefix(trimmed, "<") {
 		return ""
 	}
-	message := collapseServerWhitespace(SanitizeServerText(trimmed))
+	return collapseServerWhitespace(SanitizeServerText(trimmed))
+}
+
+func truncateHTTPMessage(message string) string {
 	runes := []rune(message)
 	if len(runes) <= maxHTTPErrorMessageRunes {
 		return message
@@ -92,28 +95,33 @@ func sanitizeHTTPBody(resp *http.Response, body []byte) string {
 }
 
 func sanitizeLoginHTTPBody(resp *http.Response, body []byte, password string) string {
+	// The body may end mid-credential if it reached the read limit.
+	if len(body) >= maxHTTPErrorBodyBytes {
+		return ""
+	}
 	message := sanitizeHTTPBody(resp, body)
 	if message == "" || password == "" {
-		return message
+		return truncateHTTPMessage(message)
 	}
 
 	// A login failure body is server-controlled and occasionally echoes a
 	// submitted password in a JSON or URL-encoded diagnostic. Redact the
 	// literal and common escaped forms without changing ordinary ban text.
+	escaped, _ := json.Marshal(password)
 	candidates := []string{
-		password,
-		collapseServerWhitespace(SanitizeServerText(password)),
+		string(escaped[1 : len(escaped)-1]),
 		url.QueryEscape(password),
 		url.PathEscape(password),
-		strconv.Quote(password),
+		collapseServerWhitespace(SanitizeServerText(password)),
+		password,
 	}
+	replacements := make([]string, 0, len(candidates)*2)
 	for _, candidate := range candidates {
-		if candidate == "" || (candidate == password && len([]rune(candidate)) < 4) {
-			continue
+		if candidate != "" {
+			replacements = append(replacements, candidate, "[redacted]")
 		}
-		message = strings.ReplaceAll(message, candidate, "[redacted]")
 	}
-	return message
+	return truncateHTTPMessage(strings.NewReplacer(replacements...).Replace(message))
 }
 
 // SanitizeServerText makes text safe for terminal and structured CLI output.

@@ -326,28 +326,33 @@ func (c *Client) verifyAuthBypass(ctx context.Context, loginResp *http.Response,
 }
 
 func (c *Client) requestContext(ctx context.Context, method, endpoint string, params url.Values) ([]byte, error) {
+	body, _, err := c.requestWithStatusContext(ctx, method, endpoint, params)
+	return body, err
+}
+
+func (c *Client) requestWithStatusContext(ctx context.Context, method, endpoint string, params url.Values) ([]byte, int, error) {
 	requestURL := c.endpointURL(endpoint)
 	body, resp, err := c.doRawRequestContext(ctx, method, requestURL, params)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	if resp.StatusCode == http.StatusForbidden {
 		fmt.Fprintf(c.stderr, "[INFO] Session expired. Re-authenticating...\n")
 		if err := c.loginContext(ctx); err != nil {
-			return nil, fmt.Errorf("re-login failed: %w", err)
+			return nil, 0, fmt.Errorf("re-login failed: %w", err)
 		}
 		body, resp, err = c.doRawRequestContext(ctx, method, requestURL, params)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 	}
 
 	if status := resp.StatusCode; status < 200 || status >= 300 {
-		return nil, newHTTPError(resp, body)
+		return nil, status, newHTTPError(resp, body)
 	}
 
-	return body, nil
+	return body, resp.StatusCode, nil
 }
 
 func (c *Client) requestBodyContext(ctx context.Context, method, endpoint string, body []byte, contentType string) ([]byte, error) {

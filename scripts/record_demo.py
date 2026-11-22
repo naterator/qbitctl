@@ -11,6 +11,8 @@ Usage:
 """
 
 import codecs
+from email import policy
+from email.parser import BytesParser
 import fcntl
 import json
 import os
@@ -153,7 +155,17 @@ class Fixture(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlsplit(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
-        form = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
+        raw = self.rfile.read(length)
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.startswith("multipart/form-data"):
+            headers = f"Content-Type: {content_type}\r\n\r\n".encode("ascii")
+            message = BytesParser(policy=policy.default).parsebytes(headers + raw)
+            form = {}
+            for part in message.iter_parts():
+                field = part.get_param("name", header="Content-Disposition")
+                form.setdefault(field, []).append(part.get_content())
+        else:
+            form = parse_qs(raw.decode("utf-8"), keep_blank_values=True)
         if path == "/api/v2/auth/login":
             if form.get("username", [""])[0] != self.fixture.username or form.get("password", [""])[0] != self.fixture.password:
                 self.reply(401, body=b"Fails.", content_type="text/plain")
@@ -172,11 +184,13 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/api/v2/torrents/delete":
             self.fixture.deleted_torrents.append(form)
             self.reply(204)
-        elif path == "/api/v2/search/downloadTorrent":
+        elif path == "/api/v2/torrents/fetchMetadata":
+            self.reply(body={})
+        elif path == "/api/v2/torrents/add":
             # Keep the fixture queue stable so the recording stays focused on
             # the search workflow. The TUI still shows its submitted notice.
             self.fixture.downloads.append(form)
-            self.reply(204)
+            self.reply(body={"success_count": 1})
         elif path == "/api/v2/auth/logout":
             self.fixture.logouts += 1
             self.reply(204)
@@ -510,8 +524,8 @@ def main():
             if recording.proc.returncode != 0:
                 raise RuntimeError(f"qbitctl tui exited with status {recording.proc.returncode}")
             expected_download = {
-                "torrentUrl": [ubuntu_results[-1]["fileUrl"]],
-                "pluginName": ["jackett"],
+                "urls": [ubuntu_results[-1]["fileUrl"]],
+                "downloader": ["jackett"],
             }
             if (
                 fixture.search_jobs != {1: "Ubuntu 24.04", 2: "Debian"}

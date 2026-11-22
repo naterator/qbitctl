@@ -200,6 +200,7 @@ class Recording:
         env = os.environ.copy()
         for key in (
             "QBITCTL_MASTER_KEY",
+            "QBITCTL_PASSWORD",
             "XDG_CONFIG_HOME",
             "XDG_CACHE_HOME",
             "NO_COLOR",

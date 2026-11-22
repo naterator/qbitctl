@@ -15,11 +15,12 @@ import (
 
 func newTUICmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:     "tui",
-		Short:   "Open the interactive qBittorrent workspace",
-		Long:    "Open the interactive qBittorrent workspace. Press Ctrl+P to find actions or open Config to set up a connection.",
-		GroupID: "view",
-		Args:    cobra.NoArgs,
+		Use:         "tui",
+		Short:       "Open the interactive qBittorrent workspace",
+		Long:        "Open the interactive qBittorrent workspace. Press Ctrl+P to find actions or open Config to set up a connection.",
+		GroupID:     "view",
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{stdinModeAnnotation: stdinInteractive},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runTUI(cmd, *opts)
 		},

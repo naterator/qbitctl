@@ -125,6 +125,7 @@ func makeHiddenInput(in io.Reader, out io.Writer) qbt.HiddenInputFunc {
 
 func newRootCmd() *cobra.Command {
 	var opts CLIOptions
+	var passStdin bool
 
 	rootCmd := &cobra.Command{
 		Use:           "qbitctl",
@@ -133,6 +134,10 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
+		Annotations:   map[string]string{stdinModeAnnotation: stdinInteractive},
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			return result(cmd, resolvePassword(cmd, &opts, passStdin))
+		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runDefault(cmd, opts)
 		},
@@ -150,7 +155,9 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().StringVarP(&opts.ConfigPath, "config", "c", "", "Alternate config file path")
 	rootCmd.PersistentFlags().StringVarP(&opts.URL, "url", "u", "", "qBittorrent WebUI URL")
 	rootCmd.PersistentFlags().StringVarP(&opts.User, "user", "U", "", "qBittorrent username")
-	rootCmd.PersistentFlags().StringVarP(&opts.Pass, "pass", "p", "", "qBittorrent password")
+	rootCmd.PersistentFlags().StringVarP(&opts.Pass, "pass", "p", "", "qBittorrent password (visible in process arguments; prefer --pass-stdin or QBITCTL_PASSWORD)")
+	rootCmd.PersistentFlags().BoolVar(&passStdin, "pass-stdin", false, "Read the qBittorrent password from standard input")
+	rootCmd.MarkFlagsMutuallyExclusive("pass", "pass-stdin")
 
 	rootCmd.AddCommand(
 		newConfigCmd(&opts),

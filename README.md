@@ -126,13 +126,36 @@ qbitctl needs qBittorrent Web API credentials. It loads the first matching confi
 2. `$XDG_CONFIG_HOME/qbitctl/config.json` (defaults to `~/.config/qbitctl/config.json`)
 3. `./config.json`
 
-Command-line overrides use `-u/--url`, `-U/--user`, and `-p/--pass`. Supply an explicit password when overriding the URL to point at a different server origin. Server URLs can include a reverse-proxy path prefix. Use an HTTP or HTTPS URL without embedded credentials, a query, or a fragment.
+Override the server URL with `-u/--url` and the username with `-U/--user`. Supply an explicit password when overriding the URL to point at a different server origin. Server URLs can include a reverse-proxy path prefix. Use an HTTP or HTTPS URL without embedded credentials, a query, or a fragment.
 
 qbitctl encrypts saved credentials with a private master key from the OS keyring or `QBITCTL_MASTER_KEY`. On a headless host, supply a stable secret through the environment before saving credentials and on later runs. If qbitctl cannot read an existing saved password, run `qbitctl config` to enter it again.
 
 Each authenticated command uses its own Web UI session. qbitctl attempts to
 log out when the command finishes, including after errors or Ctrl-C. A failed
 logout leaves the command's output and exit status intact.
+
+### Supplying the password
+
+Use `--pass-stdin` or `QBITCTL_PASSWORD` to keep the Web UI password out of
+process arguments. `QBITCTL_MASTER_KEY` is the separate key used to encrypt
+and decrypt saved passwords.
+
+| Precedence | Source |
+|---|---|
+| 1 | `--pass-stdin` or `-p/--pass`. Use only one. |
+| 2 | A non-empty `QBITCTL_PASSWORD` environment variable. |
+| 3 | The saved password for the configured server origin. |
+
+`--pass-stdin` reads the first line from piped or redirected input, up to
+4096 bytes. Bare `qbitctl`, `qbitctl config`, and `qbitctl tui` reserve stdin
+for interactive input. An exported `QBITCTL_PASSWORD` can be sent to the
+server selected by `--url` or the active config, so prefer setting it for
+each invocation.
+
+```bash
+printf '%s\n' "$QBT_PASS" | qbitctl -u http://nas:8080 -U admin --pass-stdin list
+QBITCTL_PASSWORD="$QBT_PASS" qbitctl -u http://nas:8080 -U admin list
+```
 
 ### macOS Keychain
 
@@ -157,8 +180,8 @@ Prompts for URL (default `http://localhost:8080`), username (default `admin`), p
 ### Non-interactive config write
 
 ```bash
-qbitctl -u http://localhost:8080 -U admin -p secret config write
-qbitctl -u http://localhost:8080 -U admin -p secret config write -o ./config.json
+printf '%s\n' "$QBT_PASS" | qbitctl -u http://localhost:8080 -U admin --pass-stdin config write
+QBITCTL_PASSWORD="$QBT_PASS" qbitctl -u http://localhost:8080 -U admin config write -o ./config.json
 ```
 
 ## Commands
@@ -171,7 +194,8 @@ Run `qbitctl help <command>` to see its flags and any aliases.
 -c, --config <path>   Alternate config file path
 -u, --url <url>       qBittorrent WebUI URL
 -U, --user <user>     qBittorrent username
--p, --pass <pass>     qBittorrent password
+-p, --pass <pass>     qBittorrent password in process arguments
+    --pass-stdin     Read the qBittorrent password from standard input
 -v, --version         Show version
 -h, --help            Show help
 ```
@@ -401,7 +425,7 @@ qbitctl pause 9c32 fedc           # short hashes work too
 
 ```bash
 qbitctl config                 # interactive setup (aliases: c, co)
-qbitctl config write           # non-interactive (requires -p)
+qbitctl config write           # non-interactive (requires a supplied password)
 ```
 
 ### Additional commands

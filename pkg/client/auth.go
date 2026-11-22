@@ -548,7 +548,7 @@ func (a *App) Logout() {
 
 func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) error {
 	if opts.Pass == "" {
-		return codedErrf(ExitBadArgs, "Password required for non-interactive config write. Use --pass")
+		return codedErrf(ExitBadArgs, "Password required for non-interactive config write. Use --pass-stdin, QBITCTL_PASSWORD, or --pass")
 	}
 
 	urlValue := opts.URL

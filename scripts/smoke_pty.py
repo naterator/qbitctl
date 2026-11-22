@@ -37,7 +37,7 @@ class Session:
         self.master, slave = pty.openpty()
         fcntl_winsize(slave, WIDTH, HEIGHT)
         env = os.environ.copy()
-        for key in ("QBITCTL_MASTER_KEY", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "NO_COLOR"):
+        for key in ("QBITCTL_MASTER_KEY", "QBITCTL_PASSWORD", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "NO_COLOR"):
             env.pop(key, None)
         env.update(
             {

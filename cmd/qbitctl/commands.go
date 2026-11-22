@@ -15,11 +15,12 @@ import (
 
 func newConfigCmd(opts *CLIOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "config",
-		Aliases: []string{"c", "co"},
-		Short:   "Manage qBittorrent credentials",
-		GroupID: "setup",
-		Args:    cobra.NoArgs,
+		Use:         "config",
+		Aliases:     []string{"c", "co"},
+		Short:       "Manage qBittorrent credentials",
+		GroupID:     "setup",
+		Args:        cobra.NoArgs,
+		Annotations: map[string]string{stdinModeAnnotation: stdinInteractive},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in, out := cmd.InOrStdin(), cmd.OutOrStdout()
 			path, err := qbt.InteractiveConfigContext(cmd.Context(), in, out, makeHiddenInput(in, out), opts.ConfigPath)

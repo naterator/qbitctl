@@ -50,9 +50,10 @@ def main():
     binary = str(Path(sys.argv[1]).resolve())
     with tempfile.TemporaryDirectory(prefix="qbitctl-smoke-") as temp, HTTPServer(("127.0.0.1", 0), Handler) as server:
         env = dict(os.environ, XDG_CONFIG_HOME=str(Path(temp) / "config"))
+        env.pop("QBITCTL_PASSWORD", None)
 
-        def run(*args):
-            return subprocess.run([binary, *args], cwd=temp, env=env, check=True, capture_output=True, text=True, timeout=15).stdout
+        def run(*args, input_text=None):
+            return subprocess.run([binary, *args], input=input_text, cwd=temp, env=env, check=True, capture_output=True, text=True, timeout=15).stdout
 
         version = run("version").strip()
         if env.get("RELEASE_TAG") and version != "qbitctl " + env["RELEASE_TAG"]:
@@ -65,10 +66,10 @@ def main():
         try:
             for status, cookie in ((200, "SID"), (204, "QBT_SID_8080")):
                 server.login_status, server.cookie_name = status, cookie
-                flags = ("--url", f"http://127.0.0.1:{server.server_port}", "--user", "nate", "--pass", "a&b+c= d")
-                if "connected" not in run(*flags, "info"):
+                flags = ("--url", f"http://127.0.0.1:{server.server_port}", "--user", "nate")
+                if "connected" not in run(*flags, "--pass", "a&b+c= d", "info"):
                     raise RuntimeError(f"server info failed with login HTTP {status}")
-                torrents = json.loads(run(*flags, "list", "--server-json"))
+                torrents = json.loads(run(*flags, "--pass-stdin", "list", "--server-json", input_text="a&b+c= d\n"))
                 if torrents[0]["name"] != "Smoke torrent":
                     raise RuntimeError(f"torrent list failed with login HTTP {status}")
         finally:

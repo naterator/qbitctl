@@ -2,6 +2,7 @@ package client
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -255,6 +256,73 @@ func TestStatefulSettersGroupEqualShareLimits(t *testing.T) {
 	}
 }
 
+func TestStatefulSetterFetchesTargetedAtFiftyAndAllOverCap(t *testing.T) {
+	makeHash := func(index int) string {
+		return fmt.Sprintf("%040x", index)
+	}
+
+	for _, test := range []struct {
+		name      string
+		count     int
+		wantQuery string
+	}{
+		{name: "fifty targeted", count: 50},
+		{name: "fifty one bulk", count: 51, wantQuery: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newQBTestServer(t)
+			hashes := make([]string, test.count)
+			for index := range hashes {
+				hashes[index] = makeHash(index)
+			}
+			server.Torrents = make([]TorrentInfo, test.count)
+			for index, hash := range hashes {
+				server.Torrents[index] = TorrentInfo{Hash: hash, RatioLimit: 1}
+			}
+
+			if err := server.newApp().SetRatioLimit(strings.Join(hashes, "|"), "2"); err != nil {
+				t.Fatalf("SetRatioLimit err = %v", err)
+			}
+			if len(server.InfoHashQueries) != 1 {
+				t.Fatalf("info queries = %#v, want one query", server.InfoHashQueries)
+			}
+			wantQuery := test.wantQuery
+			if wantQuery == "" && test.count == 50 {
+				wantQuery = strings.Join(hashes, "|")
+			}
+			if got := server.InfoHashQueries[0]; got != wantQuery {
+				t.Fatalf("info query = %q, want %q", got, wantQuery)
+			}
+			if got := len(server.Forms["/api/v2/torrents/setShareLimits"]); got != 1 {
+				t.Fatalf("share-limit forms = %d, want one grouped mutation", got)
+			}
+		})
+	}
+}
+
+func TestStatefulSetterBulkFetchErrorPreventsMutation(t *testing.T) {
+	server := newQBTestServer(t)
+	hashes := make([]string, 51)
+	server.Torrents = make([]TorrentInfo, len(hashes))
+	for index := range hashes {
+		hashes[index] = fmt.Sprintf("%040x", index)
+		server.Torrents[index] = TorrentInfo{Hash: hashes[index], RatioLimit: 1}
+	}
+	server.StatusQueue["/api/v2/torrents/info"] = []int{http.StatusInternalServerError}
+
+	err := server.newApp().SetRatioLimit(strings.Join(hashes, "|"), "2")
+	if err == nil {
+		t.Fatal("SetRatioLimit unexpectedly succeeded after bulk fetch error")
+	}
+	var coded *CodedError
+	if !errors.As(err, &coded) || coded.Code != ExitFetchFail {
+		t.Fatalf("SetRatioLimit error = %v, want ExitFetchFail", err)
+	}
+	if got := len(server.Forms["/api/v2/torrents/setShareLimits"]); got != 0 {
+		t.Fatalf("share-limit forms = %d after fetch error, want none", got)
+	}
+}
+
 func TestLegacyTagsApplyPerTorrent(t *testing.T) {
 	hashA := "0123456789abcdef0123456789abcdef01234567"
 	hashB := "1123456789abcdef0123456789abcdef01234567"
@@ -370,6 +438,69 @@ func TestSetTagsFallsBackToAddAndRemoveOnLegacyServer(t *testing.T) {
 	}
 	if got := server.Forms["/api/v2/torrents/addTags"][0].Get("tags"); got != "new" {
 		t.Fatalf("addTags tags = %q, want new", got)
+	}
+}
+
+func TestLegacyTagReplacementSkipsEmptyOperations(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	for _, test := range []struct {
+		name        string
+		current     string
+		desired     string
+		wantAdds    int
+		wantRemoves int
+	}{
+		{name: "add only", desired: "new", wantAdds: 1},
+		{name: "remove only", current: "old", wantRemoves: 1},
+		{name: "no-op", current: "old,new", desired: "new,old"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newQBTestServer(t)
+			server.Torrents = []TorrentInfo{{Hash: fullHash, Tags: test.current}}
+			server.StatusQueue["/api/v2/torrents/setTags"] = []int{http.StatusNotFound}
+
+			if err := server.newApp().SetTags(fullHash, test.desired); err != nil {
+				t.Fatalf("SetTags err = %v", err)
+			}
+			if got := len(server.Forms["/api/v2/torrents/addTags"]); got != test.wantAdds {
+				t.Fatalf("addTags forms = %d, want %d", got, test.wantAdds)
+			}
+			if got := len(server.Forms["/api/v2/torrents/removeTags"]); got != test.wantRemoves {
+				t.Fatalf("removeTags forms = %d, want %d", got, test.wantRemoves)
+			}
+		})
+	}
+}
+
+func TestLegacyTagReplacementPropagatesMutationErrors(t *testing.T) {
+	fullHash := "0123456789abcdef0123456789abcdef01234567"
+	for _, test := range []struct {
+		name       string
+		current    string
+		desired    string
+		failedPath string
+	}{
+		{name: "add error", desired: "new", failedPath: "/api/v2/torrents/addTags"},
+		{name: "remove error", current: "old", failedPath: "/api/v2/torrents/removeTags"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := newQBTestServer(t)
+			server.Torrents = []TorrentInfo{{Hash: fullHash, Tags: test.current}}
+			server.StatusQueue["/api/v2/torrents/setTags"] = []int{http.StatusNotFound}
+			server.StatusQueue[test.failedPath] = []int{http.StatusInternalServerError}
+
+			err := server.newApp().SetTags(fullHash, test.desired)
+			if err == nil {
+				t.Fatal("SetTags unexpectedly succeeded after legacy mutation error")
+			}
+			var coded *CodedError
+			if !errors.As(err, &coded) || coded.Code != ExitSetFail {
+				t.Fatalf("SetTags error = %v, want ExitSetFail", err)
+			}
+			if got := len(server.Forms[test.failedPath]); got != 0 {
+				t.Fatalf("failed %s recorded %d successful forms", test.failedPath, got)
+			}
+		})
 	}
 }
 

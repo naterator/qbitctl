@@ -43,7 +43,7 @@ func (m *model) configSettings() []configSetting {
 		{configSettingTUIDefault, "View", "TUI by default", configToggleStatus(m.setup.tuiDefault)},
 		{configSettingTheme, "View", "Color scheme", configThemeStatus(m)},
 		{configSettingDataUnits, "View", "Data units", m.dataUnitsLabel()},
-		{configSettingSearchProvider, "Search", "Default provider", m.configSearchProviderStatus()},
+		{configSettingSearchProvider, "Search", "Default provider", m.searchPluginLabel(m.savedSearchPlugin)},
 		{configSettingConfigFile, "Files", "Config file", m.configFileStatus()},
 		{configSettingSearchCache, "Files", "Search cache", searchCacheFileStatus()},
 	}
@@ -74,17 +74,6 @@ func absoluteConfigPagePath(path string) string {
 		return absolute
 	}
 	return path
-}
-
-func (m *model) configSearchProviderStatus() string {
-	selection := normalizeSavedSearchPlugin(m.savedSearchPlugin)
-	// Keep the group label stable in Config. searchPluginLabel intentionally
-	// expands a sole enabled provider for search headings, which would make
-	// the meaning of this saved setting ambiguous here.
-	if selection == client.DefaultSearchPlugins {
-		return "Enabled search plugins"
-	}
-	return m.searchPluginLabel(selection)
 }
 
 // viewConfigSettings renders the complete Config panel. width and height are

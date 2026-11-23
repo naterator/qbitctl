@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -76,8 +77,11 @@ func TestSearchPluginDiscoveryUsesCurrentConnectionAndUpdatesDialog(t *testing.T
 		t.Fatalf("discovery command returned %T, want workDone", message)
 	}
 	m.finishWork(done)
-	if m.dialog.title != "Search Jackett" {
-		t.Fatalf("discovered search dialog title = %q, want full provider name", m.dialog.title)
+	if heading := ansi.Strip(m.viewSearch(76, 12)[0]); !strings.HasSuffix(heading, "Provider: Enabled search plugins ") {
+		t.Fatalf("search heading after discovering one enabled plugin = %q", heading)
+	}
+	if m.dialog.title != "Search Enabled search plugins" {
+		t.Fatalf("discovered search dialog title = %q, want enabled group name", m.dialog.title)
 	}
 	if !strings.Contains(m.dialog.fields[1].help, "Disabled provider") {
 		t.Fatalf("provider help = %q, want installed catalog", m.dialog.fields[1].help)
@@ -136,8 +140,11 @@ func TestSearchPluginLabelsAndSelections(t *testing.T) {
 	}
 
 	m.searchPlugins = []searchPluginInfo{{Name: "prowlarr", FullName: "Prowlarr", Enabled: true}}
-	if got := m.searchPluginLabel(client.DefaultSearchPlugins); got != "Prowlarr" {
-		t.Fatalf("sole enabled label = %q, want full name", got)
+	if got := m.searchPluginLabel(client.DefaultSearchPlugins); got != "Enabled search plugins" {
+		t.Fatalf("enabled group label with one enabled plugin = %q", got)
+	}
+	if got := m.searchPluginLabel("prowlarr"); got != "Prowlarr" {
+		t.Fatalf("explicit plugin label with one enabled plugin = %q", got)
 	}
 }
 

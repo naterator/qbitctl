@@ -502,14 +502,7 @@ func searchPluginLabel(plugin string) string {
 
 func (m *model) searchPluginLabel(plugin string) string {
 	selection := m.searchPluginSelection(plugin)
-	if selection == "" {
-		selection = defaultSearchPluginSelection
-	}
-	if selection == defaultSearchPluginSelection {
-		enabled := m.enabledSearchPlugins()
-		if len(enabled) == 1 {
-			return searchPluginFullName(enabled[0])
-		}
+	if selection == "" || selection == defaultSearchPluginSelection {
 		return "Enabled search plugins"
 	}
 	if strings.EqualFold(selection, "all") {
@@ -542,16 +535,6 @@ func (m *model) searchPluginName(name string) string {
 		}
 	}
 	return searchPluginLabel(name)
-}
-
-func (m *model) enabledSearchPlugins() []searchPluginInfo {
-	plugins := make([]searchPluginInfo, 0, len(m.searchPlugins))
-	for _, plugin := range m.searchPlugins {
-		if plugin.Enabled && strings.TrimSpace(plugin.Name) != "" {
-			plugins = append(plugins, plugin)
-		}
-	}
-	return plugins
 }
 
 func searchPluginFullName(plugin searchPluginInfo) string {

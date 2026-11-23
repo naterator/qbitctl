@@ -1,10 +1,10 @@
   ⇅ qbitctl                                      ? shortcuts   ctrl+p commands
     1 Queue    ▸ 2 Search      3 Server      4 Config
   ────────────────────────────────────────────────────────────────────────────
-   Search results                                          Provider: Prowlarr
+   Search results                            Provider: Enabled search plugins
    0 results  ·  Search order
       Title                         Size      Seeds ID         Source
-   Press / to search Prowlarr.
+   Press / to search Enabled search plugins.
 
     Choose search provider
 

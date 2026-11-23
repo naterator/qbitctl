@@ -57,6 +57,10 @@ func TestSearchCommandDefaultsAndValidation(t *testing.T) {
 }
 
 func TestSearchRecentReadsCacheWithoutAuthentication(t *testing.T) {
+	const (
+		resultID   int64 = 123456789012
+		resultSize int64 = 4294967296
+	)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	path, err := qbt.SearchResultsCachePath()
 	if err != nil {
@@ -73,8 +77,8 @@ func TestSearchRecentReadsCacheWithoutAuthentication(t *testing.T) {
 			"saved_at": time.Now().Unix(),
 			"query":    "ubuntu",
 			"results": []any{map[string]any{
-				"id": 123456789012, "url": "https://download.example/ubuntu.torrent", "plugin": "enabled",
-				"name": "Ubuntu Desktop", "size": 4294967296, "seeders": 15, "leechers": 3, "source": "example.org",
+				"id": resultID, "url": "https://download.example/ubuntu.torrent", "plugin": "enabled",
+				"name": "Ubuntu Desktop", "size": resultSize, "seeders": 15, "leechers": 3, "source": "example.org",
 			}},
 		}},
 	}
@@ -104,7 +108,7 @@ func TestSearchRecentReadsCacheWithoutAuthentication(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
 		t.Fatalf("search --recent JSON = %q: %v", stdout, err)
 	}
-	if len(rows) != 1 || rows[0].ID != 123456789012 || rows[0].Name != "Ubuntu Desktop" || rows[0].Size != 4294967296 {
+	if len(rows) != 1 || rows[0].ID != resultID || rows[0].Name != "Ubuntu Desktop" || rows[0].Size != resultSize {
 		t.Fatalf("search --recent rows = %#v", rows)
 	}
 	if requests != 0 {

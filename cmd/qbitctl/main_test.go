@@ -788,6 +788,62 @@ func TestAddSearchIDWithoutCacheFailsBeforeLogin(t *testing.T) {
 	}
 }
 
+func TestAddAdvancedOptions(t *testing.T) {
+	server := newQBTestServer(t)
+	server.AppVersion = "v5.3.0"
+	withQBServerClientFactory(t, server)
+	root := newRootCmd()
+	root.SetArgs([]string{
+		"--url", server.creds().URL, "--user", "admin", "--pass", "secret",
+		"add", "magnet:?xt=urn:btih:abc",
+		"--content-layout", "subfolder",
+		"--download-path", "/incomplete",
+		"--skip-checking=false",
+		"--stop-condition", "metadata",
+		"--sequential",
+		"--first-last-piece-priority",
+		"--ratio-limit", "1.5",
+		"--seeding-time-limit", "90m",
+		"--inactive-seeding-time-limit", "-1",
+		"--share-limits-mode", "match-any",
+		"--share-limit-action", "stop",
+	})
+	if _, stderr := captureOutput(t, func() {
+		if err := root.ExecuteContext(t.Context()); err != nil {
+			t.Fatalf("advanced add returned error: %v", err)
+		}
+	}); stderr != "" {
+		t.Fatalf("advanced add wrote stderr: %q", stderr)
+	}
+	forms := server.Forms["/api/v2/torrents/add"]
+	if len(forms) != 1 {
+		t.Fatalf("add requests = %d, want 1", len(forms))
+	}
+	form := forms[0]
+	for field, want := range map[string]string{
+		"contentLayout":            "Subfolder",
+		"downloadPath":             "/incomplete",
+		"useDownloadPath":          "true",
+		"autoTMM":                  "false",
+		"seedMode":                 "false",
+		"stopCondition":            "MetadataReceived",
+		"sequentialDownload":       "true",
+		"firstLastPiecePrio":       "true",
+		"ratioLimit":               "1.500000",
+		"seedingTimeLimit":         "90",
+		"inactiveSeedingTimeLimit": "-1",
+		"shareLimitsMode":          "MatchAny",
+		"shareLimitAction":         "Stop",
+	} {
+		if got := form.Get(field); got != want {
+			t.Errorf("advanced add form %s = %q, want %q", field, got, want)
+		}
+	}
+	if got := form.Get("skip_checking"); got != "" {
+		t.Fatalf("5.3 request sent removed skip_checking field %q", got)
+	}
+}
+
 func TestResolveHashWithNoHashInOptions(t *testing.T) {
 	// Options doesn't require hash, but ResolveHash will fail if it's missing.
 	server := newQBTestServer(t)

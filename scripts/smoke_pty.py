@@ -21,6 +21,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -30,6 +31,28 @@ from record_demo import ALPHA, BRAVO, Fixture, torrent  # noqa: E402
 WIDTH = 112
 HEIGHT = 32
 ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+class DetailsFixture(Fixture):
+    def do_GET(self):
+        path = urlsplit(self.path).path
+        if path == "/api/v2/torrents/files":
+            if self.protected():
+                self.reply(body=[{
+                    "index": 0, "name": "fixture-image.iso", "size": 1048576,
+                    "priority": 1, "progress": 0.42,
+                }])
+        elif path == "/api/v2/sync/torrentPeers":
+            if self.protected():
+                self.reply(body={
+                    "rid": 1,
+                    "full_update": True,
+                    "peers": {"192.0.2.9:51413": {
+                        "ip": "192.0.2.9", "port": 51413, "client": "Fixture peer", "progress": 0.68,
+                    }},
+                })
+        else:
+            super().do_GET()
 
 
 class Session:
@@ -96,10 +119,16 @@ class Session:
             "escape": b"\x1b",
             "up": b"\x1b[A",
             "down": b"\x1b[B",
+            "f2": b"\x1bOQ",
             "ctrl+c": b"\x03",
         }
         start = len(self.output)
         self.send(keys.get(name, name.encode()))
+        if name == "escape":
+            # Standalone Escape is also the prefix for Alt key sequences.
+            # Give the terminal parser time to distinguish it before the
+            # next simulated keystroke.
+            time.sleep(0.15)
         if expected:
             self.wait(expected, timeout=15)
         else:
@@ -205,6 +234,22 @@ def stale_credential_recovery(session: Session):
     session.key("enter", "Ubuntu 24.04 LTS")
 
 
+def inspect_torrent_details(session: Session):
+    session.key("enter", "1 Overview")
+    session.key("2", "fixture-image.iso")
+    session.key("3", "192.0.2.9:51413")
+    session.key("escape")
+
+
+def inspect_tracker_and_add_forms(session: Session):
+    session.key("t", "v full URL")
+    session.key("v", "https://tracker.example/announce")
+    session.key("escape")
+    session.key("a", "Add torrent")
+    session.key("f2", "Advanced: Content layout")
+    session.key("escape")
+
+
 def cancel_search_and_confirm_delete(session: Session, fixture):
     session.key("2")
     session.key("/", "Search Enabled search plugins")
@@ -233,7 +278,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="qbitctl-pty-") as temp:
         base = Path(temp)
         config = base / "config.json"
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), DetailsFixture)
         server.fixture = fixture
         worker = Thread(target=server.serve_forever, daemon=True)
         worker.start()
@@ -252,6 +297,8 @@ def main():
             write_config(binary, config, server_url, "stale", base)
             session = Session(binary, config, server_url, base)
             stale_credential_recovery(session)
+            inspect_torrent_details(session)
+            inspect_tracker_and_add_forms(session)
             cancel_search_and_confirm_delete(session, fixture)
             session.key("q")
             session.wait_exit(8)
@@ -259,7 +306,7 @@ def main():
                 raise RuntimeError(f"qbitctl TUI exited with {session.proc.returncode}")
             if fixture.logouts != 2:
                 raise RuntimeError(f"logout count = {fixture.logouts}, want 2")
-            print("PTY smoke passed (first launch, stale credentials, canceled search, confirmed delete)")
+            print("PTY smoke passed (setup, recovery, details, tracker and add forms, search cancellation, deletion)")
         finally:
             if session is not None:
                 session.close()

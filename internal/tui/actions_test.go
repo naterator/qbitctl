@@ -119,6 +119,107 @@ func TestMoveAndControlActionsUseMarkedTargets(t *testing.T) {
 	}
 }
 
+func TestVerificationAndQueueActionsUseFocusedOrMarkedTargets(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	seedRecordingQueue(m, service,
+		client.TorrentInfo{Hash: "a", Name: "Alpha"},
+		client.TorrentInfo{Hash: "b", Name: "Beta"},
+	)
+	m.queueIndex = 0
+	m.toggleMark()
+	m.queueIndex = 1
+	m.toggleMark()
+	for _, kind := range []string{"recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom"} {
+		runTUIWork(t, m, m.openAction(kind))
+	}
+	actions := service.recordedActions()
+	if len(actions) != 6 {
+		t.Fatalf("actions = %#v, want six actions", actions)
+	}
+	for i, action := range actions {
+		wantKind := []string{"recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom"}[i]
+		if action.kind != wantKind || action.hashes != "a|b" {
+			t.Fatalf("action[%d] = %#v, want %s for a|b", i, action, wantKind)
+		}
+	}
+}
+
+func TestPaletteRunsQueueActionForFocusedTorrent(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	seedRecordingQueue(m, service, client.TorrentInfo{Hash: "a", Name: "Alpha"})
+	m.openPaletteDialog()
+	for i, item := range m.dialog.items {
+		if item.action == "queue-top" {
+			m.dialog.selected = i
+			break
+		}
+	}
+	if m.dialog == nil || m.dialog.items[m.dialog.selected].action != "queue-top" {
+		t.Fatalf("palette did not expose queue-top: %#v", m.dialog)
+	}
+	runTUIWork(t, m, m.update(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	actions := service.recordedActions()
+	if len(actions) != 1 || actions[0].kind != "queue-top" || actions[0].hashes != "a" {
+		t.Fatalf("palette action = %#v, want queue-top for focused torrent", actions)
+	}
+}
+
+func TestRenameDialogRequiresOneTargetAndSubmitsName(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	seedRecordingQueue(m, service,
+		client.TorrentInfo{Hash: "a", Name: "Alpha"},
+		client.TorrentInfo{Hash: "b", Name: "Beta"},
+	)
+	m.queueIndex = 0
+	if cmd := m.openAction("rename"); cmd != nil {
+		t.Fatalf("rename opened an unexpected command: %v", cmd)
+	}
+	if m.dialog == nil || m.dialog.kind != dialogRename || m.dialog.request.hashes != "a" {
+		t.Fatalf("rename dialog = %#v", m.dialog)
+	}
+	if got := m.dialog.value(0); got != "Alpha" {
+		t.Fatalf("rename initial value = %q, want Alpha", got)
+	}
+	m.dialog.fields[0].input.SetValue("Renamed")
+	runTUIWork(t, m, m.update(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	actions := service.recordedActions()
+	if len(actions) != 1 || actions[0].kind != "rename" || actions[0].hashes != "a" || actions[0].value != "Renamed" {
+		t.Fatalf("rename actions = %#v", actions)
+	}
+
+	service = &recordingService{}
+	m = newModel(t.Context(), service)
+	seedRecordingQueue(m, service,
+		client.TorrentInfo{Hash: "a", Name: "Alpha"},
+		client.TorrentInfo{Hash: "b", Name: "Beta"},
+	)
+	m.marked["a"], m.marked["b"] = true, true
+	if cmd := m.openAction("rename"); cmd != nil {
+		t.Fatalf("multi-target rename opened an unexpected command: %v", cmd)
+	}
+	if m.dialog != nil || m.notice != "Rename one torrent at a time" {
+		t.Fatalf("multi-target rename dialog=%#v notice=%q", m.dialog, m.notice)
+	}
+}
+
+func TestRenameDialogRejectsBlankName(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	seedRecordingQueue(m, service, client.TorrentInfo{Hash: "a", Name: "Alpha"})
+	m.openAction("rename")
+	m.dialog.fields[0].input.SetValue(" ")
+	runTUIWork(t, m, m.update(tea.KeyPressMsg{Code: tea.KeyEnter}))
+	if m.dialog == nil || m.dialog.status != "A torrent name is required" {
+		t.Fatalf("blank rename dialog = %#v", m.dialog)
+	}
+	if actions := service.recordedActions(); len(actions) != 0 {
+		t.Fatalf("blank rename actions = %#v", actions)
+	}
+}
+
 func TestMoveBlankPathKeepsDialogOpen(t *testing.T) {
 	service := &recordingService{}
 	m := newModel(t.Context(), service)
@@ -234,12 +335,14 @@ func TestEditDialogAppliesToMarkedTorrents(t *testing.T) {
 	if m.dialog == nil || m.dialog.request.hashes != "a|b" || !strings.Contains(m.dialog.title, "2") {
 		t.Fatalf("marked edit dialog = %#v", m.dialog)
 	}
-	for m.dialog.selected < 8 {
-		m.update(tea.KeyPressMsg{Code: tea.KeyDown})
+	for i, item := range m.dialog.items {
+		if item.action == "up-limit" {
+			m.dialog.selected = i
+			break
+		}
 	}
-	// SetFieldNames places upload-limit at the last position.
-	if m.dialog.items[m.dialog.selected].action != "up-limit" {
-		t.Fatalf("selected field = %q", m.dialog.items[m.dialog.selected].action)
+	if m.dialog.selected < 0 || m.dialog.selected >= len(m.dialog.items) || m.dialog.items[m.dialog.selected].action != "up-limit" {
+		t.Fatalf("upload limit field was not present: %#v", m.dialog.items)
 	}
 	m.update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.dialog == nil || m.dialog.kind != dialogEditValue || m.dialog.value(0) != "2048" {

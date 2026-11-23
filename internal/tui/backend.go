@@ -35,6 +35,7 @@ type actionRequest struct {
 	kind       string
 	hashes     string
 	value      string
+	original   string
 	field      string
 	id         int64
 	addOptions client.AddTorrentOptions
@@ -467,6 +468,14 @@ func (c *tuiClient) details(ctx context.Context, hash string, trackers bool) ([]
 	return orderRows(detailRowsFromMap(fields), detailRowOrder), nil
 }
 
+func (c *tuiClient) trackers(ctx context.Context, hash string) ([]client.TrackerEntry, error) {
+	if c == nil || c.app == nil {
+		return nil, fmt.Errorf("qBittorrent client is not configured")
+	}
+	app := c.withContext(ctx, io.Discard, io.Discard)
+	return app.FetchTrackerEntries(hash)
+}
+
 // server returns the server/transfer summary in the same order as the
 // existing human-readable command, while retaining any future fields added by
 // qBittorrent at the end in stable order.
@@ -524,14 +533,34 @@ func (c *tuiClient) action(ctx context.Context, req actionRequest) error {
 		return app.PauseTorrent(req.hashes)
 	case "force-start":
 		return app.ForceStartTorrent(req.hashes)
+	case "recheck":
+		return app.RecheckTorrent(req.hashes)
+	case "reannounce":
+		return app.ReannounceTorrent(req.hashes)
+	case "queue-up":
+		return app.QueueUpTorrent(req.hashes)
+	case "queue-down":
+		return app.QueueDownTorrent(req.hashes)
+	case "queue-top":
+		return app.QueueTopTorrent(req.hashes)
+	case "queue-bottom":
+		return app.QueueBottomTorrent(req.hashes)
 	case "move":
 		return app.MoveTorrent(req.hashes, req.value)
+	case "rename":
+		return app.RenameTorrent(req.hashes, req.value)
 	case "remove":
 		return app.StopAndRemoveTorrent(req.hashes, false)
 	case "delete":
 		return app.StopAndRemoveTorrent(req.hashes, true)
 	case "set":
 		return app.SetField(req.hashes, req.field, req.value)
+	case "tracker-add":
+		return app.AddTrackers(req.hashes, req.value)
+	case "tracker-edit":
+		return app.EditTracker(req.hashes, req.original, req.value)
+	case "tracker-remove":
+		return app.RemoveTrackers(req.hashes, req.value)
 	default:
 		return fmt.Errorf("unsupported TUI action %q", req.kind)
 	}

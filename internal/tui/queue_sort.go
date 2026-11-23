@@ -4,6 +4,7 @@ package tui
 
 import (
 	"cmp"
+	"math"
 	"strings"
 
 	"github.com/naterator/qbitctl/pkg/client"
@@ -19,6 +20,11 @@ const (
 	queueProgressDesc queueSort = "progress-desc"
 	queueStateAsc     queueSort = "state-asc"
 	queueStateDesc    queueSort = "state-desc"
+	queueSizeDesc     queueSort = "size-desc"
+	queueRatioDesc    queueSort = "ratio-desc"
+	queueETAAsc       queueSort = "eta-asc"
+	queueDownloadDesc queueSort = "download-speed-desc"
+	queueUploadDesc   queueSort = "upload-speed-desc"
 )
 
 var queueSortChoices = []struct {
@@ -32,6 +38,11 @@ var queueSortChoices = []struct {
 	{queueProgressDesc, "Progress high to low"},
 	{queueStateAsc, "State A-Z"},
 	{queueStateDesc, "State Z-A"},
+	{queueSizeDesc, "Largest first"},
+	{queueRatioDesc, "Highest ratio"},
+	{queueETAAsc, "Shortest ETA"},
+	{queueDownloadDesc, "Highest download speed"},
+	{queueUploadDesc, "Highest upload speed"},
 }
 
 func (order queueSort) label() string {
@@ -80,9 +91,33 @@ func (order queueSort) compare(left, right client.TorrentInfo) int {
 		comparison = strings.Compare(strings.ToLower(left.State), strings.ToLower(right.State))
 	case queueStateDesc:
 		comparison = strings.Compare(strings.ToLower(right.State), strings.ToLower(left.State))
+	case queueSizeDesc:
+		comparison = cmp.Compare(right.TotalSize, left.TotalSize)
+	case queueRatioDesc:
+		comparison = cmp.Compare(queueRatio(right.Ratio), queueRatio(left.Ratio))
+	case queueETAAsc:
+		comparison = cmp.Compare(queueETA(left.ETA), queueETA(right.ETA))
+	case queueDownloadDesc:
+		comparison = cmp.Compare(right.DLSpeed, left.DLSpeed)
+	case queueUploadDesc:
+		comparison = cmp.Compare(right.UpSpeed, left.UpSpeed)
 	}
 	if comparison != 0 {
 		return comparison
 	}
 	return strings.Compare(strings.ToLower(left.Name), strings.ToLower(right.Name))
+}
+
+func queueRatio(ratio float64) float64 {
+	if ratio == -1 { // qBittorrent serializes an unbounded share ratio as -1.
+		return math.Inf(1)
+	}
+	return ratio
+}
+
+func queueETA(seconds int64) int64 {
+	if seconds < 0 {
+		return math.MaxInt64
+	}
+	return seconds
 }

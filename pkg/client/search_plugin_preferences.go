@@ -73,6 +73,51 @@ func SetDefaultSearchPlugin(path, selection string) error {
 	})
 }
 
+// ResetDefaultSearchPluginIfMatches removes a saved provider only when it is
+// still the exact value supplied by the caller and the selected config belongs
+// to this authenticated server/account. The compare and delete happen inside
+// one configfile.Update transaction so a concurrent preference change is not
+// accidentally erased.
+func (a *App) ResetDefaultSearchPluginIfMatches(selection string) error {
+	if a == nil || strings.TrimSpace(a.ConfigPath()) == "" || strings.TrimSpace(selection) == "" {
+		return nil
+	}
+	selection = strings.TrimSpace(selection)
+	if !validDefaultSearchPluginValue(selection) {
+		return codedErrf(ExitBadArgs, "invalid saved search plugin")
+	}
+	return configfile.Update(a.ConfigPath(), func(object configfile.Object) (bool, error) {
+		value, ok := configValue(object, defaultSearchPluginConfigKey)
+		if !ok {
+			return false, nil
+		}
+		var saved string
+		if err := json.Unmarshal(value, &saved); err != nil || strings.TrimSpace(saved) != selection {
+			return false, nil
+		}
+
+		// A CLI URL/user override can point at another server while reusing the
+		// same config file. In that case an uninstall must not clear the other
+		// server's preference.
+		var disk configFile
+		if raw, ok := configValue(object, "url"); ok {
+			if err := json.Unmarshal(raw, &disk.URL); err != nil {
+				return false, err
+			}
+		}
+		if raw, ok := configValue(object, "user"); ok {
+			if err := json.Unmarshal(raw, &disk.User); err != nil {
+				return false, err
+			}
+		}
+		if disk.User == "" || a.creds.User == "" || disk.User != a.creds.User ||
+			!sameCredentialOrigin(disk.URL, a.creds.URL) {
+			return false, nil
+		}
+		return deleteConfigValue(object, defaultSearchPluginConfigKey), nil
+	})
+}
+
 // ValidateDefaultSearchPlugin validates a saved preference against the
 // currently connected server. Only an installed, enabled plugin's exact
 // canonical ID is returned. The enabled and all group selectors remain valid

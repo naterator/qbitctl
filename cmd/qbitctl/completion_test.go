@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -15,6 +16,37 @@ import (
 	qbt "github.com/naterator/qbitctl/pkg/client"
 	"github.com/spf13/cobra"
 )
+
+func TestCompletionReportsTruncationOnlyWhenMoreMatchesExist(t *testing.T) {
+	server := newQBTestServer(t)
+	for i := range completionMatchLimit + 1 {
+		server.Torrents = append(server.Torrents, TorrentInfo{Hash: fmt.Sprintf("%040x", i), Name: "Ubuntu ISO"})
+	}
+	withQBServerClientFactory(t, server)
+	writeCompletionConfig(t, server)
+	t.Setenv("COBRA_ACTIVE_HELP", "1")
+	t.Setenv("QBITCTL_ACTIVE_HELP", "1")
+
+	first := server.Torrents[0].Hash
+	got, directive := runCompletion(t, []string{"__complete", "start", first, "Ubuntu"})
+	if len(got) != completionMatchLimit || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("exactly %d matches returned %d output lines, directive %d", completionMatchLimit, len(got), directive)
+	}
+
+	got, directive = runCompletion(t, []string{"__complete", "show", "Ubuntu"})
+	if len(got) != completionMatchLimit+1 || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("truncated matches returned %d output lines, directive %d", len(got), directive)
+	}
+	if hint := got[completionMatchLimit]; !strings.HasPrefix(hint, "_activeHelp_ ") || !strings.Contains(hint, "Type more") {
+		t.Errorf("truncation hint = %q", hint)
+	}
+
+	t.Setenv("COBRA_ACTIVE_HELP", "0")
+	got, _ = runCompletion(t, []string{"__complete", "show", "Ubuntu"})
+	if len(got) != completionMatchLimit {
+		t.Errorf("disabling active help returned %d candidates", len(got))
+	}
+}
 
 func TestCompletionProtocolStaticArguments(t *testing.T) {
 	tests := []struct {

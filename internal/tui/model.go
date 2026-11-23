@@ -32,8 +32,10 @@ const (
 	queueWork workKind = iota
 	searchWork
 	searchPluginsWork
+	searchPluginManageWork
 	serverWork
 	detailWork
+	detailTabWork
 	detailRefreshWork
 	actionWork
 	configWork
@@ -64,6 +66,21 @@ type searchCatalogService interface {
 	searchWithCatalog(context.Context, string, string, time.Duration, []searchPluginInfo) ([]client.SearchResult, string, error)
 }
 
+// torrentFilesService and torrentPeersService are optional so the small
+// in-memory services used by the rest of the TUI tests do not need to know
+// about qBittorrent's per-torrent detail endpoints.
+type torrentFilesService interface {
+	files(context.Context, string) ([]client.TorrentFile, error)
+}
+
+type torrentPeersService interface {
+	peers(context.Context, string, int64) (client.TorrentPeers, error)
+}
+
+type torrentFilePriorityService interface {
+	setFilePriority(context.Context, string, []int, client.FilePriority) error
+}
+
 type workDone struct {
 	kind                      workKind
 	queue                     []client.TorrentInfo
@@ -73,7 +90,10 @@ type workDone struct {
 	rows                      []detailRow
 	title                     string
 	detailTarget              *torrentDetailTarget
+	trackerEntries            []client.TrackerEntry
+	trackerLoaded             bool
 	detailUpdate              *torrentDetailUpdate
+	detailTabUpdate           *detailTabUpdate
 	notice                    string
 	app                       *client.App
 	setup                     setupState
@@ -84,6 +104,9 @@ type workDone struct {
 	pluginSelectionGeneration uint64
 	effectivePlugin           string
 	searchPluginWasDefault    bool
+	pluginAction              string
+	pluginActionName          string
+	trackerAction             bool
 	err                       error
 }
 
@@ -264,8 +287,12 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		return m.nextTick()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			if !m.quitting && m.busy != "" && m.work == searchWork {
-				m.cancelSearch()
+			if !m.quitting && m.busy != "" && (m.work == searchWork || m.work == searchPluginManageWork) {
+				if m.work == searchPluginManageWork {
+					m.cancelSearchPluginAction()
+				} else {
+					m.cancelSearch()
+				}
 				return nil
 			}
 			if !m.quitting && m.searchPluginsLoading && m.dialog != nil && m.dialog.kind == dialogSearchPlugins {
@@ -322,7 +349,11 @@ func (m *model) handleKey(key string) tea.Cmd {
 	case "esc":
 		if m.busy != "" && m.work == connectWork {
 			return m.openAction("cancel-connection")
-		} else if m.busy != "" && m.work == searchWork {
+		} else if m.busy != "" && (m.work == searchWork || m.work == searchPluginManageWork) {
+			if m.work == searchPluginManageWork {
+				m.cancelSearchPluginAction()
+				return nil
+			}
 			return m.openAction("cancel-search")
 		} else if m.searchPluginsLoading && m.dialog != nil && m.dialog.kind == dialogSearchPlugins {
 			m.cancelSearchPlugins()
@@ -469,6 +500,35 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		m.refreshSearchPluginPicker()
 		return nil
 	}
+	if done.kind == searchPluginManageWork {
+		m.cancel, m.busy = nil, ""
+		if m.quitting {
+			return tea.Quit
+		}
+		if done.err != nil {
+			if errors.Is(done.err, context.Canceled) {
+				if m.dialog != nil {
+					m.dialog.status = "Plugin request canceled"
+				}
+				return nil
+			}
+			if m.dialog != nil {
+				m.dialog.status = done.err.Error()
+			}
+			m.setNotice(done.err.Error(), true)
+			return nil
+		}
+		if done.plugins != nil {
+			m.searchPlugins = normalizeSearchPlugins(done.plugins)
+			m.searchPluginsAttempted = true
+			m.searchPluginsStale = false
+			m.searchPluginsError = ""
+			m.revalidateSavedSearchPlugin(false)
+		}
+		m.setNotice("Search plugins updated", false)
+		m.openSearchPluginManagement()
+		return nil
+	}
 	m.cancel, m.busy = nil, ""
 	if m.quitting {
 		m.releasePendingApp(done.app)
@@ -514,7 +574,11 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	}
 	if done.kind == detailRefreshWork {
 		m.finishTorrentDetailsRefresh(done)
-		return nil
+		return m.loadPendingDetailTab()
+	}
+	if done.kind == detailTabWork {
+		m.finishDetailTabWork(done)
+		return m.loadPendingDetailTab()
 	}
 	if done.err != nil {
 		if done.kind == searchWork {
@@ -522,6 +586,9 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		}
 		if done.app != nil {
 			done.app.Logout()
+		}
+		if done.trackerAction && m.dialog != nil && (m.dialog.kind == dialogTrackers || m.dialog.kind == dialogTrackerAdd || m.dialog.kind == dialogTrackerEdit) {
+			m.dialog.status = done.err.Error()
 		}
 		m.setNotice(done.err.Error(), true)
 		return nil
@@ -542,10 +609,22 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		m.serverRows = done.rows
 	case detailWork:
 		if m.dialog == nil && m.page == queuePage {
-			m.openDetailDialog(done.title, done.rows)
+			if done.trackerLoaded {
+				m.openTrackerDialog(done.title, done.detailTarget.hash, done.trackerEntries)
+			} else {
+				m.openDetailDialog(done.title, done.rows)
+			}
 			m.dialog.torrentDetails = done.detailTarget
 		}
 	case actionWork:
+		if done.trackerAction && m.dialog != nil && m.dialog.torrentDetails != nil && m.dialog.torrentDetails.trackers {
+			m.dialog.kind = dialogTrackers
+			m.dialog.fields = nil
+			m.dialog.focus = 0
+			m.dialog.request = actionRequest{}
+			m.dialog.status = ""
+			return m.refreshTorrentDetails()
+		}
 		if m.page == queuePage {
 			return m.refresh()
 		}
@@ -864,6 +943,13 @@ func (m *model) cancelSearch() {
 	m.busy = "Canceling search"
 }
 
+func (m *model) cancelSearchPluginAction() {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	m.busy = "Canceling plugin action"
+}
+
 func (m *model) cancelSearchPlugins() {
 	if m.searchPluginCancel != nil {
 		m.searchPluginCancel()
@@ -916,6 +1002,12 @@ func (m *model) loadDetails(trackers bool) tea.Cmd {
 	backend := m.backend
 	target := torrentDetailTarget{hash: torrent.Hash, trackers: trackers}
 	return m.startWork(detailWork, label, func(ctx context.Context) workDone {
+		if trackers {
+			if trackerBackend, ok := backend.(trackerService); ok {
+				entries, err := trackerBackend.trackers(ctx, target.hash)
+				return workDone{title: target.title(torrent.Name), detailTarget: &target, trackerEntries: entries, trackerLoaded: true, err: err}
+			}
+		}
 		rows, err := backend.details(ctx, target.hash, target.trackers)
 		return workDone{title: target.title(torrent.Name), rows: rows, detailTarget: &target, err: err}
 	})
@@ -927,7 +1019,11 @@ func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
 		notices := map[string]string{
 			"add": "Torrent submitted", "add-result": "Search result submitted", "start": "Started selected torrents",
 			"pause": "Paused selected torrents", "force-start": "Force started selected torrents", "move": "Move requested",
-			"remove": "Removed selected torrents", "delete": "Deleted selected torrents and files", "set": "Saved torrent property",
+			"recheck": "Recheck requested", "reannounce": "Reannounce requested",
+			"queue-up": "Moved selected torrents up", "queue-down": "Moved selected torrents down",
+			"queue-top": "Moved selected torrents to the top", "queue-bottom": "Moved selected torrents to the bottom",
+			"rename": "Torrent renamed", "remove": "Removed selected torrents", "delete": "Deleted selected torrents and files", "set": "Saved torrent property",
+			"tracker-add": "Tracker added", "tracker-edit": "Tracker updated", "tracker-remove": "Tracker removed",
 		}
 		notice := notices[request.kind]
 		if request.kind == "set" {
@@ -936,7 +1032,7 @@ func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
 				notice = fmt.Sprintf("Saved %s for %d torrents", request.field, count)
 			}
 		}
-		return workDone{notice: notice, err: err}
+		return workDone{notice: notice, trackerAction: strings.HasPrefix(request.kind, "tracker-"), err: err}
 	})
 }
 

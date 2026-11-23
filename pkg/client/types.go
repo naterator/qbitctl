@@ -32,39 +32,63 @@ type Credentials struct {
 // TorrentInfo uses minutes for qBittorrent's share time limits. The wire
 // sentinels are -1 for no limit and -2 for the global limit.
 type TorrentInfo struct {
-	Name              string  `json:"name"`
-	Hash              string  `json:"hash"`
-	Tags              string  `json:"tags"`
-	Category          string  `json:"category"`
-	UpLimit           int64   `json:"up_limit"`
-	DLLimit           int64   `json:"dl_limit"`
-	ContentPath       string  `json:"content_path"`
-	Tracker           string  `json:"tracker"`
-	RatioLimit        float64 `json:"ratio_limit"`
-	SeedingTime       int64   `json:"seeding_time"`
-	SeedingTimeLimit  int64   `json:"seeding_time_limit"`
-	SequentialDL      bool    `json:"seq_dl"`
-	AutoTMM           bool    `json:"auto_tmm"`
-	SuperSeeding      bool    `json:"super_seeding"`
-	Private           bool    `json:"private"`
-	State             string  `json:"state"`
-	Ratio             float64 `json:"ratio"`
-	UpSpeed           int64   `json:"upspeed"`
-	DLSpeed           int64   `json:"dlspeed"`
-	Uploaded          int64   `json:"uploaded"`
-	Downloaded        int64   `json:"downloaded"`
-	Size              int64   `json:"size"`
-	TotalSize         int64   `json:"total_size"`
-	TotalSeeders      *int64  `json:"num_complete,omitempty"` // Swarm count, nil when omitted.
-	ETA               int64   `json:"eta"`
-	Progress          float64 `json:"progress"`
-	InactiveSeedingTL int64   `json:"inactive_seeding_time_limit"`
-	ShareLimitsMode   string  `json:"share_limits_mode,omitempty"`
-	ShareLimitAction  string  `json:"share_limit_action,omitempty"`
+	Name                     string  `json:"name"`
+	Hash                     string  `json:"hash"`
+	Tags                     string  `json:"tags"`
+	Category                 string  `json:"category"`
+	UpLimit                  int64   `json:"up_limit"`
+	DLLimit                  int64   `json:"dl_limit"`
+	ContentPath              string  `json:"content_path"`
+	Tracker                  string  `json:"tracker"`
+	RatioLimit               float64 `json:"ratio_limit"`
+	SeedingTime              int64   `json:"seeding_time"`
+	SeedingTimeLimit         int64   `json:"seeding_time_limit"`
+	SequentialDL             bool    `json:"seq_dl"`
+	AutoTMM                  bool    `json:"auto_tmm"`
+	SuperSeeding             bool    `json:"super_seeding"`
+	Private                  bool    `json:"private"`
+	State                    string  `json:"state"`
+	Ratio                    float64 `json:"ratio"`
+	UpSpeed                  int64   `json:"upspeed"`
+	DLSpeed                  int64   `json:"dlspeed"`
+	Uploaded                 int64   `json:"uploaded"`
+	Downloaded               int64   `json:"downloaded"`
+	Size                     int64   `json:"size"`
+	TotalSize                int64   `json:"total_size"`
+	TotalSeeders             *int64  `json:"num_complete,omitempty"` // Swarm count, nil when omitted.
+	ETA                      int64   `json:"eta"`
+	Progress                 float64 `json:"progress"`
+	InactiveSeedingTL        int64   `json:"inactive_seeding_time_limit"`
+	ShareLimitsMode          string  `json:"share_limits_mode,omitempty"`
+	ShareLimitAction         string  `json:"share_limit_action,omitempty"`
+	inactiveSeedingTLPresent bool    `json:"-"`
+	// Optional fields distinguish missing server data from valid zero values.
+	AddedOn           *int64   `json:"added_on,omitempty"`
+	CompletionOn      *int64   `json:"completion_on,omitempty"`
+	LastActivity      *int64   `json:"last_activity,omitempty"`
+	SeenComplete      *int64   `json:"seen_complete,omitempty"`
+	TimeActive        *int64   `json:"time_active,omitempty"`
+	SavePath          *string  `json:"save_path,omitempty"`
+	DownloadPath      *string  `json:"download_path,omitempty"`
+	AmountLeft        *int64   `json:"amount_left,omitempty"`
+	Completed         *int64   `json:"completed,omitempty"`
+	Availability      *float64 `json:"availability,omitempty"`
+	ConnectedSeeds    *int64   `json:"num_seeds,omitempty"`
+	ConnectedLeechers *int64   `json:"num_leechs,omitempty"`
+	TotalLeechers     *int64   `json:"num_incomplete,omitempty"`
+	QueuePosition     *int64   `json:"priority,omitempty"`
+	TrackerCount      *int64   `json:"trackers_count,omitempty"`
 }
 
 type TrackerEntry struct {
-	URL string `json:"url"`
+	URL           string `json:"url"`
+	Status        int    `json:"status"`
+	Tier          int    `json:"tier"`
+	NumPeers      int    `json:"num_peers"`
+	NumSeeds      int    `json:"num_seeds"`
+	NumLeeches    int    `json:"num_leeches"`
+	NumDownloaded int    `json:"num_downloaded"`
+	Message       string `json:"msg"`
 }
 
 type TransferInfo struct {

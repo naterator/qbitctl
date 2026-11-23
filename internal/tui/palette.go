@@ -68,6 +68,11 @@ func (m *model) paletteCommands() []dialogItem {
 			dialogItem{label: "Cancel search", action: "cancel-search", description: "Stop the active search request", keys: "esc"},
 		)
 	}
+	if m.busy != "" && m.work == searchPluginManageWork {
+		items = paletteGroup(items, "Search plugins",
+			dialogItem{label: "Cancel plugin request", action: "cancel-plugin-request", description: "Stop the active search-plugin request", keys: "esc"},
+		)
+	}
 	if m.busy != "" && m.work == connectWork {
 		items = paletteGroup(items, "Connection",
 			dialogItem{label: "Cancel connection", action: "cancel-connection", description: "Stop the connection attempt", keys: "esc"},
@@ -94,7 +99,7 @@ func (m *model) addQueuePaletteCommands(items *[]dialogItem, connected, idle boo
 	if idle {
 		*items = paletteGroup(*items, "Queue",
 			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
-			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by name, progress, or state", keys: "o"},
+			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by size, ETA, speed, and other torrent fields", keys: "o"},
 		)
 		if connected {
 			*items = paletteGroup(*items, "Queue",
@@ -135,8 +140,8 @@ func (m *model) addQueuePaletteCommands(items *[]dialogItem, connected, idle boo
 	targets := m.targetHashes()
 	if hasFocused {
 		*items = paletteGroup(*items, "Queue",
-			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent", keys: "enter"},
-			dialogItem{label: "Trackers", action: "trackers", description: "Inspect tracker status", keys: "t"},
+			dialogItem{label: "Torrent details", action: "details", description: "Inspect the selected torrent, files, and peers", keys: "enter"},
+			dialogItem{label: "Trackers", action: "trackers", description: "Inspect status or edit trackers", keys: "t"},
 		)
 	}
 	if len(targets) == 0 {
@@ -151,6 +156,18 @@ func (m *model) addQueuePaletteCommands(items *[]dialogItem, connected, idle boo
 		dialogItem{label: "Remove", action: "remove", description: "Remove torrents but keep files", keys: "x"},
 		dialogItem{label: "Delete files", action: "delete", description: "Remove torrents and delete files", keys: "⇧d"},
 	)
+	actions := []dialogItem{
+		{label: "Recheck", action: "recheck", description: "Verify the focused or marked torrent data"},
+		{label: "Reannounce", action: "reannounce", description: "Ask trackers to announce the focused or marked torrents"},
+		{label: "Queue up", action: "queue-up", description: "Move the focused or marked torrents up one queue position"},
+		{label: "Queue down", action: "queue-down", description: "Move the focused or marked torrents down one queue position"},
+		{label: "Queue top", action: "queue-top", description: "Move the focused or marked torrents to the top of the queue"},
+		{label: "Queue bottom", action: "queue-bottom", description: "Move the focused or marked torrents to the bottom of the queue"},
+	}
+	if len(targets) == 1 {
+		actions = append(actions, dialogItem{label: "Rename torrent", action: "rename", description: "Rename the focused torrent"})
+	}
+	*items = paletteGroup(*items, "Torrent actions", actions...)
 
 }
 
@@ -159,7 +176,7 @@ func (m *model) addSearchPaletteCommands(items *[]dialogItem, connected, idle bo
 	// picker changes only the next search and does not disturb current results.
 	if connected {
 		*items = paletteGroup(*items, "Search",
-			dialogItem{label: "Choose search provider", action: "providers", description: "Set the provider for the next search", keys: "p"},
+			dialogItem{label: "Choose search provider", action: "providers", description: "Choose a provider or manage search plugins", keys: "p"},
 		)
 	}
 	if !idle {

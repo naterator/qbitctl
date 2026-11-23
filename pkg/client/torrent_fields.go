@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 )
 
 // GetFieldNames lists all field names available for the get command.
@@ -22,6 +23,9 @@ var GetFieldNames = []string{
 	"ratio-limit",
 	"seedtime",
 	"seedtime-limit",
+	"inactive-seedtime-limit",
+	"share-limits-mode",
+	"share-limit-action",
 	"seqdl",
 	"autotmm",
 	"superseed",
@@ -35,6 +39,22 @@ var GetFieldNames = []string{
 	"downloaded",
 	"eta",
 	"state",
+	"added-on",
+	"completion-on",
+	"last-activity",
+	"seen-complete",
+	"time-active",
+	"save-path",
+	"temp-download-path",
+	"remaining-bytes",
+	"completed-bytes",
+	"availability",
+	"seeds",
+	"leechers",
+	"swarm-seeds",
+	"swarm-leechers",
+	"queue-position",
+	"tracker-count",
 	"progress",
 }
 
@@ -45,6 +65,9 @@ var SetFieldNames = []string{
 	"dl-limit",
 	"ratio-limit",
 	"seedtime-limit",
+	"inactive-seedtime-limit",
+	"share-limits-mode",
+	"share-limit-action",
 	"seqdl",
 	"superseed",
 	"tags",
@@ -114,6 +137,12 @@ func torrentFieldValue(t TorrentInfo, field string) string {
 		return strconv.FormatInt(t.SeedingTime, 10)
 	case "seedtime-limit":
 		return strconv.FormatInt(t.SeedingTimeLimit, 10)
+	case "inactive-seedtime-limit":
+		return strconv.FormatInt(EffectiveInactiveSeedingTimeLimit(t), 10)
+	case "share-limits-mode":
+		return shareLimitsModeValue(t.ShareLimitsMode)
+	case "share-limit-action":
+		return shareLimitActionValue(t.ShareLimitAction)
 	case "seqdl":
 		return formatBool(t.SequentialDL)
 	case "autotmm":
@@ -148,9 +177,55 @@ func torrentFieldValue(t TorrentInfo, field string) string {
 			pct = 100
 		}
 		return fmt.Sprintf("%d%%", pct)
+	case "added-on":
+		return optionalIntString(t.AddedOn)
+	case "completion-on":
+		return optionalIntString(t.CompletionOn)
+	case "last-activity":
+		return optionalIntString(t.LastActivity)
+	case "seen-complete":
+		return optionalIntString(t.SeenComplete)
+	case "time-active":
+		return optionalIntString(t.TimeActive)
+	case "save-path":
+		if t.SavePath != nil {
+			return *t.SavePath
+		}
+	case "temp-download-path":
+		if t.DownloadPath != nil {
+			return *t.DownloadPath
+		}
+	case "remaining-bytes":
+		return optionalIntString(t.AmountLeft)
+	case "completed-bytes":
+		return optionalIntString(t.Completed)
+	case "availability":
+		if t.Availability != nil {
+			return strconv.FormatFloat(*t.Availability, 'f', -1, 64)
+		}
+	case "seeds":
+		return optionalIntString(t.ConnectedSeeds)
+	case "leechers":
+		return optionalIntString(t.ConnectedLeechers)
+	case "swarm-seeds":
+		return optionalIntString(t.TotalSeeders)
+	case "swarm-leechers":
+		return optionalIntString(t.TotalLeechers)
+	case "queue-position":
+		return optionalIntString(t.QueuePosition)
+	case "tracker-count":
+		return optionalIntString(t.TrackerCount)
 	default:
 		return ""
 	}
+	return ""
+}
+
+func optionalIntString(value *int64) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatInt(*value, 10)
 }
 
 // torrentDisplayFieldValue formats the fields that are intended for people to
@@ -173,9 +248,24 @@ func torrentDisplayFieldValue(units DataUnits, t TorrentInfo, field string) stri
 		return units.FormatSize(t.Uploaded)
 	case "downloaded":
 		return units.FormatSize(t.Downloaded)
+	case "remaining-bytes":
+		if t.AmountLeft != nil {
+			return units.FormatSize(*t.AmountLeft)
+		}
+	case "completed-bytes":
+		if t.Completed != nil {
+			return units.FormatSize(*t.Completed)
+		}
+	case "added-on", "completion-on", "last-activity", "seen-complete":
+		raw := torrentFieldValue(t, field)
+		if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil && seconds > 0 {
+			return time.Unix(seconds, 0).UTC().Format(time.RFC3339)
+		}
+		return raw
 	default:
 		return torrentFieldValue(t, field)
 	}
+	return ""
 }
 
 func formatTorrentRateLimit(units DataUnits, value int64) string {

@@ -313,7 +313,7 @@ func (m *model) viewTorrentDetail(width int) []string {
 	if !ok {
 		return []string{"Select a torrent to inspect it.", "", "Enter opens details."}
 	}
-	return []string{
+	rows := []string{
 		viewTitleStyle.Render(viewFit(viewSafe(t.Name), width)),
 		viewTorrentState(t.State) + viewMutedStyle.Render("  ·  "+m.viewSize(t.TotalSize)),
 		"",
@@ -322,9 +322,31 @@ func (m *model) viewTorrentDetail(width int) []string {
 		viewKeyValue("Down", m.viewRate(t.DLSpeed)),
 		viewKeyValue("Up", m.viewRate(t.UpSpeed)),
 		viewKeyValue("Ratio", fmt.Sprintf("%.2f", t.Ratio)),
+	}
+	if seeds := viewSwarmCounts(t.ConnectedSeeds, t.TotalSeeders); seeds != "" {
+		rows = append(rows, viewKeyValue("Seeds", seeds))
+	}
+	if leechers := viewSwarmCounts(t.ConnectedLeechers, t.TotalLeechers); leechers != "" {
+		rows = append(rows, viewKeyValue("Leechers", leechers))
+	}
+	if t.QueuePosition != nil && *t.QueuePosition > 0 {
+		rows = append(rows, viewKeyValue("Position", fmt.Sprint(*t.QueuePosition)))
+	}
+	return append(rows,
 		viewKeyValue("Tracker", viewSafe(t.Tracker)),
 		viewKeyValue("Path", viewSafe(t.ContentPath)),
+	)
+}
+
+func viewSwarmCounts(connected, total *int64) string {
+	parts := make([]string, 0, 2)
+	if connected != nil && *connected >= 0 {
+		parts = append(parts, fmt.Sprintf("%d connected", *connected))
 	}
+	if total != nil && *total >= 0 {
+		parts = append(parts, fmt.Sprintf("%d in swarm", *total))
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m *model) viewSearch(width, height int) []string {

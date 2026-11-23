@@ -57,6 +57,7 @@ func TestPaletteCommandsQueueContext(t *testing.T) {
 	byAction := requirePaletteActions(t, m.paletteCommands(),
 		"search", "add", "refresh", "filter", "sort-queue", "toggle-mark",
 		"details", "trackers", "edit", "start", "pause", "force-start", "move", "remove", "delete",
+		"recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom", "rename",
 		"previous-item", "next-item", "previous-page", "next-page", "first-item", "last-item",
 	)
 	if byAction["toggle-mark"].label != "Mark torrent" {
@@ -77,7 +78,19 @@ func TestPaletteCommandsQueueContext(t *testing.T) {
 	// while actions that would issue a qBittorrent mutation do not.
 	m.backend = nil
 	requirePaletteActions(t, m.paletteCommands(), "filter", "sort-queue", "toggle-mark", "clear-marks")
-	requireNoPaletteActions(t, m.paletteCommands(), "add", "details", "trackers", "start", "pause", "move", "remove", "delete")
+	requireNoPaletteActions(t, m.paletteCommands(), "add", "details", "trackers", "start", "pause", "move", "remove", "delete", "recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom", "rename")
+}
+
+func TestPaletteHidesRenameForMultipleMarkedTorrents(t *testing.T) {
+	m := newModel(t.Context(), &recordingService{})
+	m.page = queuePage
+	m.replaceQueue([]client.TorrentInfo{{Hash: "a", Name: "Alpha"}, {Hash: "b", Name: "Beta"}})
+	m.marked["a"] = true
+	m.marked["b"] = true
+	byAction := requirePaletteActions(t, m.paletteCommands(), "recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom")
+	if _, ok := byAction["rename"]; ok {
+		t.Fatal("palette exposed rename for multiple marked torrents")
+	}
 }
 
 func TestPaletteCommandsSearchContext(t *testing.T) {

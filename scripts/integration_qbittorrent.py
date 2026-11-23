@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+from functools import partial
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse as urlparse
@@ -41,6 +42,8 @@ def bencode(value: object) -> bytes:
         return f"i{value}e".encode("ascii")
     if isinstance(value, bytes):
         return str(len(value)).encode("ascii") + b":" + value
+    if isinstance(value, list):
+        return b"l" + b"".join(bencode(item) for item in value) + b"e"
     if isinstance(value, dict):
         parts = [b"d"]
         for key in sorted(value):
@@ -58,6 +61,17 @@ def write_fixture(path: Path, name: str = "qbitctl-compat-fixture.bin") -> None:
     content = b"q"
     info = {
         b"length": len(content),
+        b"name": name.encode("utf-8"),
+        b"piece length": 16384,
+        b"pieces": hashlib.sha1(content).digest(),
+    }
+    path.write_bytes(bencode({b"info": info}))
+
+
+def write_folder_fixture(path: Path, name: str) -> None:
+    content = b"q"
+    info = {
+        b"files": [{b"length": len(content), b"path": [b"original", b"fixture.bin"]}],
         b"name": name.encode("utf-8"),
         b"piece length": 16384,
         b"pieces": hashlib.sha1(content).digest(),
@@ -180,22 +194,6 @@ def install_search_plugin(
         if response.status != 200 or body not in (b"", b"Ok."):
             raise RuntimeError("qBittorrent rejected the fixture search plugin")
     wait_for_search_plugin(opener, url, short_name, full_name)
-
-
-def set_search_plugin_enabled(
-    url: str, password: str, name: str, full_name: str, enabled: bool
-) -> None:
-    opener = authenticated_opener(url, password)
-    payload = urlparse.urlencode({"names": name, "enable": str(enabled).lower()}).encode()
-    request = urlrequest.Request(
-        url.rstrip("/") + "/api/v2/search/enablePlugin", data=payload
-    )
-    request.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with opener.open(request, timeout=30) as response:
-        body = response.read().strip()
-        if response.status != 200 or body not in (b"", b"Ok."):
-            raise RuntimeError(f"qBittorrent rejected the plugin enabled={enabled} request")
-    wait_for_search_plugin(opener, url, name, full_name, enabled)
 
 
 def docker_logs(container: str) -> str:
@@ -651,6 +649,78 @@ def wait_for_torrent(
     raise RuntimeError(f"timed out waiting for torrent {name!r} to be {expected}")
 
 
+def verify_tracker_edits(cli, torrent_hash: str) -> None:
+    original = "http://127.0.0.1:1/announce?passkey=fixture-one"
+    replacement = "http://127.0.0.1:1/announce?passkey=fixture-two"
+
+    def trackers() -> set[str]:
+        rows = json.loads(cli("trackers", torrent_hash, "--json").stdout)
+        return {tracker["url"] for tracker in rows}
+
+    cli("trackers", "add", torrent_hash, original)
+    summary = cli("trackers", torrent_hash).stdout
+    if "127.0.0.1" not in summary or "passkey" in summary:
+        raise RuntimeError("qbitctl trackers did not show the host without its passkey")
+    if original not in trackers():
+        raise RuntimeError("qbitctl did not add the tracker")
+
+    cli("trackers", "edit", torrent_hash, original, replacement)
+    updated = trackers()
+    if replacement not in updated or original in updated:
+        raise RuntimeError("qbitctl did not replace the exact tracker URL")
+
+    cli("trackers", "remove", torrent_hash, replacement)
+    if replacement in trackers():
+        raise RuntimeError("qbitctl did not remove the exact tracker URL")
+
+
+def verify_files_and_peers(cli, torrent_hash: str) -> None:
+    def file() -> dict[str, object]:
+        rows = json.loads(cli("files", torrent_hash, "--json").stdout)
+        if len(rows) != 1 or rows[0].get("index") != 0:
+            raise RuntimeError("qbitctl files did not return the fixture's file index")
+        return rows[0]
+
+    def wait_for_file(field: str, expected: object) -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if file().get(field) == expected:
+                return
+            time.sleep(0.25)
+        raise RuntimeError(f"qbitctl files did not update {field} to {expected!r}")
+
+    original = str(file()["name"])
+    renamed = "qbitctl-renamed-file.bin"
+    cli("files", "priority", torrent_hash, "high", "0")
+    wait_for_file("priority", 6)
+    cli("files", "priority", torrent_hash, "normal", "0")
+    wait_for_file("priority", 1)
+    cli("files", "rename-file", torrent_hash, original, renamed)
+    wait_for_file("name", renamed)
+    cli("files", "rename-file", torrent_hash, renamed, original)
+    wait_for_file("name", original)
+
+    peers = json.loads(cli("peers", torrent_hash, "--json").stdout)
+    if peers.get("rid", 0) < 1 or peers.get("peers") != {}:
+        raise RuntimeError(f"qbitctl peers returned an unexpected snapshot: {peers!r}")
+
+
+def verify_folder_rename(cli, torrent_hash: str) -> None:
+    def current_file() -> str:
+        rows = json.loads(cli("files", torrent_hash, "--json").stdout)
+        return str(rows[0]["name"])
+
+    original, filename = current_file().rsplit("/", 1)
+    renamed = original.removesuffix("original") + "renamed"
+    cli("files", "rename-folder", torrent_hash, original, renamed)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if current_file() == f"{renamed}/{filename}":
+            return
+        time.sleep(0.25)
+    raise RuntimeError("qbitctl did not rename the fixture's folder")
+
+
 def wait_for_tags_and_limits(
     binary: Path,
     url: str,
@@ -705,6 +775,7 @@ Session\DHTEnabled=false
 Session\LSDEnabled=false
 Session\PeXEnabled=false
 Session\Port=6881
+Session\QueueingSystemEnabled=true
 [Meta]
 MigrationVersion=9999
 [LegalNotice]
@@ -736,6 +807,7 @@ def run(args: argparse.Namespace) -> None:
     binary = args.binary.resolve()
     if not binary.is_file():
         raise RuntimeError(f"qbitctl binary does not exist: {binary}")
+    version = tuple(int(part) for part in re.findall(r"\d+", args.version)[:3])
 
     container = f"qbitctl-compat-{os.getpid()}"
     proxy_container = f"qbitctl-compat-nginx-{os.getpid()}"
@@ -803,6 +875,8 @@ def run(args: argparse.Namespace) -> None:
             # Completion reads the saved setup because Cobra's hidden
             # __complete command skips the normal pre-run password handling.
             run_cli(binary, url, password, root, config_home, "config", "write")
+            cli = partial(run_cli, binary, url, password, root, config_home)
+            config_file = config_home / "qbitctl" / "config.json"
             install_search_plugin(
                 url,
                 password,
@@ -820,11 +894,19 @@ def run(args: argparse.Namespace) -> None:
 
             category = "qbitctl-compat"
             destination = "/downloads/compat"
+            incomplete = "/downloads/incomplete"
             (downloads / "compat").mkdir()
+            (downloads / "incomplete").mkdir()
+            mode_override = ("--share-limits-mode", "match-any") if version >= (5, 3, 0) else ()
             run_cli(
                 binary, url, password, root, config_home, "add", str(fixture),
                 "--category", category, "--save-path", destination,
                 "--tags", "qbitctl-add-option", "--stopped",
+                "--content-layout", "original", "--download-path", incomplete,
+                "--skip-checking=false", "--stop-condition", "none", "--sequential",
+                "--first-last-piece-priority", "--ratio-limit", "1.25",
+                "--seeding-time-limit", "4m", "--inactive-seeding-time-limit", "6m",
+                "--share-limit-action", "stop", *mode_override,
             )
             torrent = wait_for_torrent(
                 binary,
@@ -844,6 +926,32 @@ def run(args: argparse.Namespace) -> None:
                 or torrent.get("tags") != "qbitctl-add-option"
             ):
                 raise RuntimeError("qBittorrent did not apply the add category, save path, and tags")
+            expected_options = {
+                "seq_dl": True,
+                "f_l_piece_prio": True,
+                "ratio_limit": 1.25,
+                "seeding_time_limit": 4,
+                "inactive_seeding_time_limit": 6,
+            }
+            if version >= (5, 2, 0):
+                expected_options["share_limit_action"] = "Stop"
+            if mode_override:
+                expected_options["share_limits_mode"] = "MatchAny"
+            applied_options = {key: torrent.get(key) for key in expected_options}
+            if applied_options != expected_options or str(torrent.get("download_path")).rstrip("/") != incomplete:
+                raise RuntimeError(
+                    f"qBittorrent add returned unexpected advanced options: {applied_options!r}, "
+                    f"download path {torrent.get('download_path')!r}"
+                )
+            fields = run_cli(
+                binary, url, password, root, config_home,
+                "show", torrent_hash, "--units", "bytes",
+                "--fields", "seeds,leechers,save-path,remaining-bytes,completed-bytes", "--no-header",
+            ).stdout.strip().split("\t")
+            if len(fields) != 5 or fields[:2] != ["0", "0"] or fields[2].rstrip("/") != destination:
+                raise RuntimeError(f"qbitctl show returned unexpected typed fields: {fields!r}")
+            if fields[3:] != ["1 B", "0 B"]:
+                raise RuntimeError(f"qbitctl show returned unexpected completed/remaining bytes: {fields!r}")
             verify_main_data(url, password)
 
             plugins = list_search_plugins(binary, url, password, root, config_home)
@@ -879,13 +987,11 @@ def run(args: argparse.Namespace) -> None:
 
             # A disabled saved provider must fall back to the normal enabled
             # group.  This also preserves the original default-provider check.
-            set_search_plugin_enabled(
-                url,
-                password,
-                "qbitctl_fixture_alt",
-                "Qbitctl Fixture Alt",
-                False,
-            )
+            cli("search", "plugins", "disable", "qbitctl_fixture_alt")
+            opener = authenticated_opener(url, password)
+            wait_for_search_plugin(opener, url, "qbitctl_fixture_alt", "Qbitctl Fixture Alt", False)
+            if json.loads(config_file.read_text()).get("default_search_plugin") != "qbitctl_fixture_alt":
+                raise RuntimeError("Disabling a plugin changed the saved provider")
             disabled_alt = next(
                 (item for item in list_search_plugins(binary, url, password, root, config_home)
                  if item.get("name") == "qbitctl_fixture_alt"),
@@ -925,13 +1031,13 @@ def run(args: argparse.Namespace) -> None:
             )
             search_result_named(explicit_short_results, "qbitctl search torrent")
 
-            set_search_plugin_enabled(
-                url,
-                password,
-                "qbitctl_fixture_alt",
-                "Qbitctl Fixture Alt",
-                True,
-            )
+            set_saved_default_search_plugin(config_home, "qbitctl_fixture_alt")
+            cli("search", "plugins", "enable", "qbitctl_fixture_alt")
+            wait_for_search_plugin(opener, url, "qbitctl_fixture_alt", "Qbitctl Fixture Alt")
+            reenabled_results = search_results(binary, url, password, root, config_home)
+            search_result_named(reenabled_results, "qbitctl alt search torrent")
+            if any(row.get("name") == "qbitctl search torrent" for row in reenabled_results):
+                raise RuntimeError("Re-enabling the saved provider did not restore it")
             # An explicit provider must win over a conflicting saved default.
             set_saved_default_search_plugin(config_home, "qbitctl_fixture")
             explicit_full_results = search_results(
@@ -978,10 +1084,11 @@ def run(args: argparse.Namespace) -> None:
                     raise RuntimeError(f"qbitctl search did not display {expected_size}")
 
             search_id = str(torrent_result["id"])
-            version = tuple(int(part) for part in re.findall(r"\d+", args.version)[:3])
             search_add_options = ()
             if version >= (5, 2, 0):
-                search_add_options = ("--category", category, "--save-path", destination, "--stopped")
+                search_add_options = (
+                    "--category", category, "--save-path", destination, "--stopped", "--sequential",
+                )
             run_cli(
                 binary, url, password, root, config_home,
                 "add", "--search-id", search_id, *search_add_options,
@@ -1000,8 +1107,9 @@ def run(args: argparse.Namespace) -> None:
             if search_add_options and (
                 search_torrent.get("category") != category
                 or str(search_torrent.get("save_path")).rstrip("/") != destination
+                or search_torrent.get("seq_dl") is not True
             ):
-                raise RuntimeError("qbitctl did not apply the search result's category and save path at add time")
+                raise RuntimeError("qbitctl did not apply the search result's add options")
             search_hash = str(search_torrent["hash"])
 
             # Both cached results came from one search. The alternate plugin
@@ -1133,6 +1241,21 @@ def run(args: argparse.Namespace) -> None:
                 2,
                 1.5,
             )
+            policy = [("inactive-seedtime-limit", "3m", "inactive_seeding_time_limit", 3)]
+            if version >= (5, 2, 0):
+                policy.append(("share-limit-action", "stop", "share_limit_action", "Stop"))
+            if version >= (5, 3, 0):
+                policy.append(("share-limits-mode", "match-all", "share_limits_mode", "MatchAll"))
+            for field, value, _, _ in policy:
+                run_cli(binary, url, password, root, config_home, "set", field, value, torrent_hash)
+            row = next(
+                item for item in list_torrents(binary, url, password, root, config_home)
+                if item["hash"] == torrent_hash
+            )
+            if any(row.get(key) != expected for _, _, key, expected in policy):
+                raise RuntimeError("qBittorrent did not retain the updated share-limit policy")
+            if row["seeding_time_limit"] != 2 or row["ratio_limit"] != 1.5:
+                raise RuntimeError("Setting a share-limit policy changed an existing numeric limit")
 
             filtered = run_cli(
                 binary, url, password, root, config_home,
@@ -1145,7 +1268,8 @@ def run(args: argparse.Namespace) -> None:
             commands = root / "commands.txt"
             commands.write_text(
                 'list --tag "qbitctl-compat-c" --fields name --no-header\n'
-                f"get name {torrent_hash}\n",
+                f"get name {torrent_hash}\n"
+                f"queue bottom {alt_search_hash}\n",
                 encoding="utf-8",
             )
             batch_output = run_cli(
@@ -1154,7 +1278,27 @@ def run(args: argparse.Namespace) -> None:
             if batch_output != ["qbitctl-compat-fixture.bin"] * 2:
                 raise RuntimeError(f"qbitctl batch returned {batch_output!r}")
 
+            verify_files_and_peers(cli, torrent_hash)
+            verify_tracker_edits(cli, torrent_hash)
+            cli("queue", "top", alt_search_hash)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                queue_position = cli("get", "queue-position", alt_search_hash).stdout.strip()
+                if queue_position == "1":
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError(f"qbitctl queue top left the torrent at position {queue_position!r}")
+            original_name = "qbitctl-alt-search-fixture.bin"
+            renamed = "qbitctl renamed fixture"
+            run_cli(binary, url, password, root, config_home, "rename", renamed, alt_search_hash)
+            wait_for_torrent(binary, url, password, root, config_home, renamed)
+            run_cli(binary, url, password, root, config_home, "rename", original_name, alt_search_hash)
+            wait_for_torrent(binary, url, password, root, config_home, original_name)
+
             group_hashes = (search_hash, alt_search_hash)
+            run_cli(binary, url, password, root, config_home, "recheck", *group_hashes)
+            run_cli(binary, url, password, root, config_home, "reannounce", *group_hashes)
             run_cli(
                 binary, url, password, root, config_home,
                 "set", "tags", "qbitctl-compat-bulk", *group_hashes,
@@ -1251,6 +1395,28 @@ def run(args: argparse.Namespace) -> None:
                     search_name,
                     present=False,
                 )
+            folder_fixture = root / "qbitctl-folder.torrent"
+            folder_name = "qbitctl-folder-fixture"
+            write_folder_fixture(folder_fixture, folder_name)
+            cli("add", str(folder_fixture), "--stopped", "--content-layout", "original")
+            folder_torrent = wait_for_torrent(
+                binary, url, password, root, config_home, folder_name, state="stoppedDL",
+            )
+            folder_hash = str(folder_torrent["hash"])
+            verify_folder_rename(cli, folder_hash)
+            cli("delete", folder_hash)
+            set_saved_default_search_plugin(config_home, "qbitctl_fixture_alt")
+            cli("search", "plugins", "uninstall", "qbitctl_fixture_alt")
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                plugins = json.loads(cli("search", "plugins", "list", "--json").stdout)
+                if all(plugin["name"] != "qbitctl_fixture_alt" for plugin in plugins):
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError("qbitctl did not uninstall the search plugin")
+            if json.loads(config_file.read_text()).get("default_search_plugin") == "qbitctl_fixture_alt":
+                raise RuntimeError("Uninstalling the selected plugin left its ID saved")
             print(f"qBittorrent {args.version}: compatibility checks passed")
         except Exception:
             logs = redact(docker_logs(container), password).strip()

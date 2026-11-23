@@ -25,6 +25,7 @@ const (
 	completionCacheScopeLimit = 32
 	completionCacheDirName    = "qbitctl"
 	completionCacheFileName   = "completion.json"
+	completionMatchLimit      = 200
 )
 
 // The completion cache contains only sanitized torrent metadata. It is scoped
@@ -199,7 +200,13 @@ func completeSetValue(field, toComplete string) ([]cobra.Completion, cobra.Shell
 	case "seqdl", "autotmm", "superseed":
 		values = []string{"true", "false"}
 	case "seedtime-limit":
-		values = []string{"-1", "-2", "1h", "1d"}
+		values = []string{"-1", "-2", "unlimited", "global", "1h", "1d"}
+	case "inactive-seedtime-limit":
+		values = []string{"-1", "-2", "unlimited", "global", "1h", "1d"}
+	case "share-limits-mode":
+		values = []string{"Default", "MatchAll", "MatchAny", "match-all", "match-any"}
+	case "share-limit-action":
+		values = []string{"Default", "Stop", "Remove", "RemoveWithContent", "EnableSuperSeeding", "remove-with-content", "enable-super-seeding"}
 	}
 	return completeStatic(values, toComplete)
 }
@@ -308,7 +315,7 @@ func filterCompletionTorrents(torrents []completionCacheTorrent, exclude []strin
 		}
 	}
 	toComplete = strings.ToLower(toComplete)
-	completions := make([]cobra.Completion, 0, min(len(torrents), 200))
+	completions := make([]cobra.Completion, 0, min(len(torrents), completionMatchLimit))
 	for _, torrent := range torrents {
 		hash := strings.ToLower(strings.TrimSpace(torrent.Hash))
 		if !isFullTorrentHash(hash) || excludedHash(hash, excluded) {
@@ -317,10 +324,10 @@ func filterCompletionTorrents(torrents []completionCacheTorrent, exclude []strin
 		if !strings.HasPrefix(hash, toComplete) && !strings.HasPrefix(strings.ToLower(torrent.Name), toComplete) {
 			continue
 		}
-		completions = append(completions, cobra.CompletionWithDesc(hash, qbt.SanitizeServerText(torrent.Name)))
-		if len(completions) == 200 {
-			break
+		if len(completions) == completionMatchLimit {
+			return cobra.AppendActiveHelp(completions, "More than 200 torrents match. Type more of the hash or name.")
 		}
+		completions = append(completions, cobra.CompletionWithDesc(hash, qbt.SanitizeServerText(torrent.Name)))
 	}
 	return completions
 }

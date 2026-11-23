@@ -81,7 +81,16 @@ func TestAddTorrentVariants(t *testing.T) {
 		if err := os.WriteFile(path, []byte("dummy torrent payload"), 0o600); err != nil {
 			t.Fatalf("write torrent file failed: %v", err)
 		}
-		options := AddTorrentOptions{Category: "linux", SavePath: "/downloads/linux", Tags: "iso,linux", Stopped: true}
+		options := AddTorrentOptions{
+			Category:              "linux",
+			SavePath:              "/downloads/linux",
+			Tags:                  "iso,linux",
+			Stopped:               true,
+			ContentLayout:         "original",
+			DownloadPath:          "/incomplete",
+			SequentialDownload:    true,
+			SequentialDownloadSet: true,
+		}
 
 		if err := app.AddTorrentWithOptions(path, options); err != nil {
 			t.Fatalf("AddTorrentWithOptions err = %v", err)
@@ -91,15 +100,97 @@ func TestAddTorrentVariants(t *testing.T) {
 		}
 		form := server.Forms["/api/v2/torrents/add"][0]
 		for field, want := range map[string]string{
-			"category": "linux",
-			"savepath": "/downloads/linux",
-			"autoTMM":  "false",
-			"tags":     "iso,linux",
-			"stopped":  "true",
+			"category":           "linux",
+			"savepath":           "/downloads/linux",
+			"autoTMM":            "false",
+			"tags":               "iso,linux",
+			"stopped":            "true",
+			"contentLayout":      "Original",
+			"downloadPath":       "/incomplete",
+			"useDownloadPath":    "true",
+			"sequentialDownload": "true",
 		} {
 			if got := form.Get(field); got != want {
 				t.Fatalf("file add form %s = %q, want %q", field, got, want)
 			}
+		}
+	})
+
+	t.Run("advanced add options use the 5.3 wire names", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.AppVersion = "v5.3.0"
+		app := server.newApp()
+		ratio := 1.5
+		seedMinutes := int64(90)
+		inactiveMinutes := int64(-1)
+		options := AddTorrentOptions{
+			ContentLayout:                 "subfolder",
+			DownloadPath:                  "/incomplete",
+			SkipChecking:                  true,
+			SkipCheckingSet:               true,
+			StopCondition:                 "metadata",
+			SequentialDownload:            true,
+			SequentialDownloadSet:         true,
+			FirstLastPiecePriority:        true,
+			FirstLastPiecePrioritySet:     true,
+			ShareRatioLimit:               &ratio,
+			ShareSeedingTimeLimit:         &seedMinutes,
+			ShareInactiveSeedingTimeLimit: &inactiveMinutes,
+			ShareLimitsMode:               "match-any",
+			ShareLimitAction:              "remove",
+		}
+		magnet := "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+		if err := app.AddTorrentWithOptions(magnet, options); err != nil {
+			t.Fatalf("AddTorrentWithOptions err = %v", err)
+		}
+		form := server.Forms["/api/v2/torrents/add"][0]
+		for field, want := range map[string]string{
+			"contentLayout":            "Subfolder",
+			"downloadPath":             "/incomplete",
+			"useDownloadPath":          "true",
+			"autoTMM":                  "false",
+			"seedMode":                 "true",
+			"stopCondition":            "MetadataReceived",
+			"sequentialDownload":       "true",
+			"firstLastPiecePrio":       "true",
+			"ratioLimit":               "1.500000",
+			"seedingTimeLimit":         "90",
+			"inactiveSeedingTimeLimit": "-1",
+			"shareLimitsMode":          "MatchAny",
+			"shareLimitAction":         "Remove",
+		} {
+			if got := form.Get(field); got != want {
+				t.Errorf("advanced add form %s = %q, want %q", field, got, want)
+			}
+		}
+		if _, present := form["skip_checking"]; present {
+			t.Fatal("5.3 add request sent removed skip_checking field")
+		}
+	})
+
+	t.Run("skip checking uses the legacy wire name before 5.3", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.AppVersion = "v5.2.0"
+		app := server.newApp()
+		if err := app.AddTorrentWithOptions("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", AddTorrentOptions{SkipChecking: true, SkipCheckingSet: true}); err != nil {
+			t.Fatalf("AddTorrentWithOptions err = %v", err)
+		}
+		form := server.Forms["/api/v2/torrents/add"][0]
+		if form.Get("skip_checking") != "true" || form.Get("seedMode") != "" {
+			t.Fatalf("5.2 skip-checking form = %v, want skip_checking only", form)
+		}
+	})
+
+	t.Run("share mode rejects pre-5.3 servers", func(t *testing.T) {
+		server := newQBTestServer(t)
+		server.AppVersion = "v5.2.0"
+		app := server.newApp()
+		err := app.AddTorrentWithOptions("magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", AddTorrentOptions{ShareLimitsMode: "match-any"})
+		if err == nil || !strings.Contains(err.Error(), "requires qBittorrent 5.3.0") {
+			t.Fatalf("AddTorrentWithOptions error = %v, want version gate", err)
+		}
+		if len(server.Forms["/api/v2/torrents/add"]) != 0 {
+			t.Fatal("unsupported share mode sent an add request")
 		}
 	})
 

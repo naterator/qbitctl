@@ -4,8 +4,10 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naterator/qbitctl/pkg/client"
 )
 
 type torrentDetailTarget struct {
@@ -21,9 +23,14 @@ func (target torrentDetailTarget) title(name string) string {
 }
 
 type torrentDetailUpdate struct {
-	dialog *dialog
-	rows   []detailRow
-	err    error
+	dialog         *dialog
+	rows           []detailRow
+	trackerEntries []client.TrackerEntry
+	trackerLoaded  bool
+	files          []client.TorrentFile
+	peers          client.TorrentPeers
+	tab            detailTab
+	err            error
 }
 
 func fetchQueueUpdate(ctx context.Context, backend service) workDone {
@@ -50,10 +57,41 @@ func (m *model) refreshTorrentDetails() tea.Cmd {
 		return nil
 	}
 	backend, target := m.backend, *d.torrentDetails
+	refreshTab := detailTabOverview
+	peerRID := int64(0)
+	if !target.trackers && d.detail != nil {
+		refreshTab = d.detail.tab
+		peerRID = d.detail.peers.RID
+	}
 	return m.startWork(detailRefreshWork, "Refreshing queue and torrent details", func(ctx context.Context) workDone {
 		update := fetchQueueUpdate(ctx, backend)
-		rows, err := backend.details(ctx, target.hash, target.trackers)
-		update.detailUpdate = &torrentDetailUpdate{dialog: d, rows: rows, err: err}
+		detail := &torrentDetailUpdate{dialog: d, tab: refreshTab}
+		if target.trackers {
+			if trackerBackend, ok := backend.(trackerService); ok {
+				detail.trackerEntries, detail.err = trackerBackend.trackers(ctx, target.hash)
+				detail.trackerLoaded = true
+			} else {
+				detail.rows, detail.err = backend.details(ctx, target.hash, true)
+			}
+		} else if refreshTab == detailTabOverview {
+			detail.rows, detail.err = backend.details(ctx, target.hash, false)
+		} else {
+			switch refreshTab {
+			case detailTabFiles:
+				if source, ok := backend.(torrentFilesService); ok {
+					detail.files, detail.err = source.files(ctx, target.hash)
+				} else {
+					detail.err = fmt.Errorf("file details are unavailable for this connection")
+				}
+			case detailTabPeers:
+				if source, ok := backend.(torrentPeersService); ok {
+					detail.peers, detail.err = source.peers(ctx, target.hash, peerRID)
+				} else {
+					detail.err = fmt.Errorf("peer details are unavailable for this connection")
+				}
+			}
+		}
+		update.detailUpdate = detail
 		return update
 	})
 }
@@ -97,5 +135,18 @@ func (m *model) finishTorrentDetailsRefresh(done workDone) {
 		m.dialog = nil
 		return
 	}
-	d.rows, d.status = update.rows, ""
+	if d.detail != nil && update.tab != detailTabOverview && !d.torrentDetails.trackers {
+		switch update.tab {
+		case detailTabFiles:
+			d.detail.files = append([]client.TorrentFile(nil), update.files...)
+		case detailTabPeers:
+			d.detail.peers.Merge(update.peers)
+		}
+	} else if update.trackerLoaded {
+		m.replaceTrackerEntries(update.trackerEntries)
+		d.rows = nil
+	} else {
+		d.rows = update.rows
+	}
+	d.status = ""
 }

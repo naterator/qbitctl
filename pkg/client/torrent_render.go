@@ -11,8 +11,9 @@ import (
 )
 
 type fieldSpec struct {
-	label string
-	field string
+	label    string
+	field    string
+	optional bool
 }
 
 var detailedTorrentFields = []fieldSpec{
@@ -41,6 +42,22 @@ var detailedTorrentFields = []fieldSpec{
 	{label: "Tracker", field: "tracker"},
 	{label: "Transferred: Down", field: "downloaded"},
 	{label: "Transferred: Up", field: "uploaded"},
+	{label: "Seeds: Connected", field: "seeds", optional: true},
+	{label: "Leechers: Connected", field: "leechers", optional: true},
+	{label: "Seeds: Swarm", field: "swarm-seeds", optional: true},
+	{label: "Leechers: Swarm", field: "swarm-leechers", optional: true},
+	{label: "Queue Position", field: "queue-position", optional: true},
+	{label: "Availability", field: "availability", optional: true},
+	{label: "Tracker Count", field: "tracker-count", optional: true},
+	{label: "Save Path", field: "save-path", optional: true},
+	{label: "Temporary Download Path", field: "temp-download-path", optional: true},
+	{label: "Remaining", field: "remaining-bytes", optional: true},
+	{label: "Completed", field: "completed-bytes", optional: true},
+	{label: "Added", field: "added-on", optional: true},
+	{label: "Completed On", field: "completion-on", optional: true},
+	{label: "Last Activity", field: "last-activity", optional: true},
+	{label: "Seen Complete", field: "seen-complete", optional: true},
+	{label: "Active Seconds", field: "time-active", optional: true},
 }
 
 func (a *App) ShowAllTorrentsInfoJSON() error {
@@ -174,17 +191,23 @@ func renderBlurb(w io.Writer, rows []labeledRow) {
 }
 
 func torrentBlurbRows(torrent TorrentInfo, fields []fieldSpec) []labeledRow {
-	rows := make([]labeledRow, len(fields))
-	for i, f := range fields {
-		rows[i] = labeledRow{label: f.label, value: torrentFieldValue(torrent, f.field)}
+	rows := make([]labeledRow, 0, len(fields))
+	for _, f := range fields {
+		value := torrentFieldValue(torrent, f.field)
+		if !f.optional || value != "" {
+			rows = append(rows, labeledRow{label: f.label, value: value})
+		}
 	}
 	return rows
 }
 
 func torrentDisplayBlurbRows(torrent TorrentInfo, fields []fieldSpec, units DataUnits) []labeledRow {
-	rows := make([]labeledRow, len(fields))
-	for i, f := range fields {
-		rows[i] = labeledRow{label: f.label, value: torrentDisplayFieldValue(units, torrent, f.field)}
+	rows := make([]labeledRow, 0, len(fields))
+	for _, f := range fields {
+		value := torrentDisplayFieldValue(units, torrent, f.field)
+		if !f.optional || value != "" {
+			rows = append(rows, labeledRow{label: f.label, value: value})
+		}
 	}
 	return rows
 }

@@ -38,6 +38,8 @@ func TestParseSeedtimeLimit(t *testing.T) {
 		{input: "+3600", want: 3600},
 		{input: "-1", want: -1},
 		{input: "-2", want: -2},
+		{input: "unlimited", want: -1},
+		{input: "global", want: -2},
 	} {
 		got, err := parseSeedtimeLimit(tt.input)
 		if err != nil {

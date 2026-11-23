@@ -24,23 +24,31 @@ import (
 type dialogKind string
 
 const (
-	dialogPalette       dialogKind = "palette"
-	dialogSearch        dialogKind = "search"
-	dialogFilter        dialogKind = "filter"
-	dialogAdd           dialogKind = "add"
-	dialogAddResult     dialogKind = "add-result"
-	dialogEditSelect    dialogKind = "edit-select"
-	dialogResultSort    dialogKind = "result-sort"
-	dialogQueueSort     dialogKind = "queue-sort"
-	dialogEditValue     dialogKind = "edit-value"
-	dialogMove          dialogKind = "move"
-	dialogConfirm       dialogKind = "confirm"
-	dialogDelete        dialogKind = "delete"
-	dialogDetails       dialogKind = "details"
-	dialogHelp          dialogKind = "help"
-	dialogConfig        dialogKind = "config"
-	dialogTheme         dialogKind = "theme"
-	dialogSearchPlugins dialogKind = "search-plugins"
+	dialogPalette             dialogKind = "palette"
+	dialogSearch              dialogKind = "search"
+	dialogFilter              dialogKind = "filter"
+	dialogAdd                 dialogKind = "add"
+	dialogAddResult           dialogKind = "add-result"
+	dialogEditSelect          dialogKind = "edit-select"
+	dialogShareChoice         dialogKind = "share-choice"
+	dialogResultSort          dialogKind = "result-sort"
+	dialogQueueSort           dialogKind = "queue-sort"
+	dialogEditValue           dialogKind = "edit-value"
+	dialogMove                dialogKind = "move"
+	dialogRename              dialogKind = "rename"
+	dialogConfirm             dialogKind = "confirm"
+	dialogDelete              dialogKind = "delete"
+	dialogDetails             dialogKind = "details"
+	dialogHelp                dialogKind = "help"
+	dialogConfig              dialogKind = "config"
+	dialogTheme               dialogKind = "theme"
+	dialogSearchPlugins       dialogKind = "search-plugins"
+	dialogSearchPluginManage  dialogKind = "search-plugin-manage"
+	dialogSearchPluginActions dialogKind = "search-plugin-actions"
+	dialogSearchPluginInstall dialogKind = "search-plugin-install"
+	dialogTrackers            dialogKind = "trackers"
+	dialogTrackerAdd          dialogKind = "tracker-add"
+	dialogTrackerEdit         dialogKind = "tracker-edit"
 )
 
 type dialogField struct {
@@ -65,6 +73,10 @@ type dialog struct {
 
 	fields []dialogField
 	focus  int
+	// advanced keeps the less common add-time controls collapsed until the
+	// user asks for them. Values remain in fields while collapsed so toggling
+	// the section never discards in-progress input.
+	advanced bool
 
 	// Palette dialogs keep the unfiltered list so typing can cheaply rebuild
 	// the visible list without losing the action context.
@@ -75,14 +87,24 @@ type dialog struct {
 	rows           []detailRow
 	scroll         int
 	torrentDetails *torrentDetailTarget
+	trackerHash    string
+	trackerTitle   string
+	trackerEntries []client.TrackerEntry
+	trackerReveal  bool
+	detail         *detailDialogState
+	renamePath     *torrentPathRename
 
 	request actionRequest
+	// confirmAction overrides the legacy remove action when a confirmation is
+	// used for another destructive mutation (for example share-limit action).
+	confirmAction string
 	// torrents are captured when the edit dialog opens. Marked rows are edited
 	// together, while an unmarked queue uses its focused row.
-	torrents []client.TorrentInfo
-	mixed    bool
-	status   string
-	message  string
+	torrents   []client.TorrentInfo
+	mixed      bool
+	status     string
+	message    string
+	pluginName string
 }
 
 func newDialogField(label, value, placeholder, help string) dialogField {
@@ -123,6 +145,14 @@ func (d *dialog) focusField(index int) tea.Cmd {
 	if index >= len(d.fields) {
 		index = 0
 	}
+	if !d.fieldVisible(index) {
+		for i := 0; i < len(d.fields); i++ {
+			if d.fieldVisible(i) {
+				index = i
+				break
+			}
+		}
+	}
 	for i := range d.fields {
 		d.fields[i].input.Blur()
 	}
@@ -134,17 +164,34 @@ func (d *dialog) cycleField(backward bool) tea.Cmd {
 	if d == nil || len(d.fields) == 0 {
 		return nil
 	}
-	next := d.focus + 1
+	delta := 1
 	if backward {
-		next = d.focus - 1
+		delta = -1
 	}
-	if next < 0 {
-		next = len(d.fields) - 1
+	next := d.focus
+	for i := 0; i < len(d.fields); i++ {
+		next += delta
+		if next < 0 {
+			next = len(d.fields) - 1
+		}
+		if next >= len(d.fields) {
+			next = 0
+		}
+		if d.fieldVisible(next) {
+			return d.focusField(next)
+		}
 	}
-	if next >= len(d.fields) {
-		next = 0
+	return nil
+}
+
+func (d *dialog) fieldVisible(index int) bool {
+	if d == nil || index < 0 || index >= len(d.fields) {
+		return false
 	}
-	return d.focusField(next)
+	if (d.kind == dialogAdd || d.kind == dialogAddResult) && !d.advanced {
+		return index < addContentLayoutField
+	}
+	return true
 }
 
 func (d *dialog) stepSelection(delta int) {
@@ -265,6 +312,11 @@ func (m *model) openAction(action string) tea.Cmd {
 			m.cancelSearch()
 		}
 		return nil
+	case "cancel-plugin-request":
+		if m.busy != "" && m.work == searchPluginManageWork && m.cancel != nil {
+			m.cancelSearchPluginAction()
+		}
+		return nil
 	case "cancel-connection":
 		if m.busy != "" && m.work == connectWork && m.cancel != nil {
 			m.connectCanceled = true
@@ -325,7 +377,7 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "edit":
 		m.openEditDialog()
 		return nil
-	case "start", "pause", "force-start":
+	case "start", "pause", "force-start", "recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom":
 		hashes := m.targetHashes()
 		if len(hashes) == 0 {
 			m.setNotice("Select or mark a torrent first", false)
@@ -337,6 +389,22 @@ func (m *model) openAction(action string) tea.Cmd {
 		}
 		m.dialog = nil
 		return m.launchAction(action, actionRequest{kind: action, hashes: joinHashes(hashes)})
+	case "rename":
+		hashes := m.targetHashes()
+		if len(hashes) == 0 {
+			m.setNotice("Select or mark a torrent first", false)
+			return nil
+		}
+		if len(hashes) > 1 {
+			m.setNotice("Rename one torrent at a time", false)
+			return nil
+		}
+		if m.busy != "" {
+			m.setNotice("Finish the current request first", false)
+			return nil
+		}
+		m.openRenameDialog()
+		return nil
 	case "move":
 		if len(m.targetHashes()) == 0 {
 			m.setNotice("Select or mark a torrent first", false)
@@ -662,6 +730,18 @@ func torrentAddFields(source dialogField) []dialogField {
 		newDialogField("Destination", "", "optional qBittorrent path", "Save path on the qBittorrent host"),
 		newDialogField("Stopped", "no", "yes or no", "Add the torrent stopped instead of starting it"),
 		newDialogField("Tags", "", "optional comma-separated tags", "Tags assigned by qBittorrent"),
+		newDialogField("Advanced: Content layout", "", "default, original, subfolder, no-subfolder", "Optional layout for files inside the download"),
+		newDialogField("Advanced: Download path", "", "optional qBittorrent path", "Separate incomplete/download path on the qBittorrent host"),
+		newDialogField("Advanced: Skip checking", "default", "default, yes, no", "Skip hash checking and start seeding"),
+		newDialogField("Advanced: Stop condition", "default", "default, none, metadata, files", "Stop after metadata or files are checked"),
+		newDialogField("Advanced: Sequential download", "default", "default, yes, no", "Download pieces in sequential order"),
+		newDialogField("Advanced: First/last priority", "default", "default, yes, no", "Prioritize the first and last pieces"),
+		newDialogField("Advanced: Share ratio", "", "-2 global, -1 unlimited, or non-negative", "Share ratio limit applied at add time"),
+		newDialogField("Advanced: Seeding time", "", "duration, -1, or -2", "Share seeding limit; durations such as 3d or 90m"),
+		newDialogField("Advanced: Inactive seeding", "", "duration, -1, or -2", "Inactive share seeding limit"),
+		newDialogField("Advanced: Share limits mode", "default", "default, match-any, match-all", "How multiple share limits are combined"),
+		newDialogField("Advanced: Share limit action", "default", "default, stop, remove, remove-with-content, enable-super-seeding", "Action when share limits are reached"),
+		newDialogField("Confirm destructive action", "no", "yes or no", "Required when share limit action removes a torrent"),
 	}
 }
 
@@ -747,6 +827,39 @@ func (m *model) openMoveDialog() {
 		request: actionRequest{kind: "move", hashes: joinHashes(hashes)},
 		fields: []dialogField{
 			newDialogField("Path", "", "/downloads/path", "Destination directory on the qBittorrent host"),
+		},
+	}
+	m.dialog = d
+	d.focusField(0)
+}
+
+func (m *model) openRenameDialog() {
+	hashes := m.targetHashes()
+	if len(hashes) == 0 {
+		m.setNotice("Select or mark a torrent first", false)
+		return
+	}
+	if len(hashes) > 1 {
+		m.setNotice("Rename one torrent at a time", false)
+		return
+	}
+	if m.busy != "" {
+		m.setNotice("Finish the current request first", false)
+		return
+	}
+	name := ""
+	for _, torrent := range m.queue {
+		if strings.EqualFold(torrent.Hash, hashes[0]) {
+			name = torrent.Name
+			break
+		}
+	}
+	d := &dialog{
+		kind:    dialogRename,
+		title:   "Rename torrent",
+		request: actionRequest{kind: "rename", hashes: hashes[0]},
+		fields: []dialogField{
+			newDialogField("Name", name, "New torrent name", "The name shown by qBittorrent"),
 		},
 	}
 	m.dialog = d
@@ -857,7 +970,7 @@ func (m *model) openConnectionEditor(includeStartup bool) {
 
 func (m *model) openDetailDialog(title string, rows []detailRow) {
 	copyRows := append([]detailRow(nil), rows...)
-	m.dialog = &dialog{kind: dialogDetails, title: title, rows: copyRows}
+	m.dialog = &dialog{kind: dialogDetails, title: title, rows: copyRows, detail: newDetailDialogState()}
 }
 
 func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
@@ -883,11 +996,38 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	name := key.String()
+	if name == "ctrl+p" && m.busy != "" && m.work == searchPluginManageWork {
+		m.openPaletteDialog()
+		return nil
+	}
+	if (d.kind == dialogAdd || d.kind == dialogAddResult) && name == "f2" {
+		d.advanced = !d.advanced
+		if !d.advanced && !d.fieldVisible(d.focus) {
+			d.focusField(addTagsField)
+		}
+		return nil
+	}
 
 	// Ctrl+C is intentionally handled by the parent model. This keeps one
 	// cancellation policy for in-flight requests and for the interactive UI.
 	if name == "esc" || name == "escape" || (name == "?" && d.kind == dialogHelp) ||
 		(name == "ctrl+p" && d.kind == dialogPalette) {
+		if m.busy != "" && m.work == searchPluginManageWork && m.cancel != nil {
+			m.cancelSearchPluginAction()
+			return nil
+		}
+		if d.kind == dialogTrackerAdd || d.kind == dialogTrackerEdit {
+			m.restoreTrackerListDialog()
+			return nil
+		}
+		if d.kind == dialogDetails && d.detail != nil && d.detail.fileFilterActive {
+			d.detail.fileFilterActive = false
+			return nil
+		}
+		if d.renamePath != nil {
+			m.dialog = d.renamePath.parent
+			return nil
+		}
 		if d.kind == dialogSearchPlugins && m.searchPluginsLoading {
 			m.cancelSearchPlugins()
 		}
@@ -896,6 +1036,9 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		}
 		m.dialog = nil
 		return nil
+	}
+	if d.kind == dialogTrackers || d.kind == dialogTrackerAdd || d.kind == dialogTrackerEdit {
+		return m.updateTrackerDialog(name, key)
 	}
 
 	switch d.kind {
@@ -930,7 +1073,10 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		d.refreshPalette()
 		return cmd
 
-	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins:
+	case dialogEditSelect, dialogShareChoice, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins, dialogSearchPluginManage, dialogSearchPluginActions:
+		if d.kind == dialogSearchPlugins && (name == "m" || name == "M") {
+			return m.openSearchPluginManagement()
+		}
 		switch name {
 		case "up", "ctrl+k", "k":
 			d.stepSelection(-1)
@@ -958,6 +1104,10 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			return nil
 		case "enter", "return":
 			if len(d.items) == 0 {
+				return nil
+			}
+			if d.kind == dialogShareChoice && m.busy != "" {
+				d.status = "Finish the current request first"
 				return nil
 			}
 			if d.kind == dialogTheme {
@@ -993,6 +1143,29 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				m.setDefaultSearchPlugin(d.items[d.selected].action)
 				return nil
 			}
+			if d.kind == dialogSearchPluginManage {
+				return m.submitSearchPluginManagementSelection()
+			}
+			if d.kind == dialogSearchPluginActions {
+				return m.submitSearchPluginAction()
+			}
+			if d.kind == dialogShareChoice {
+				request := d.request
+				request.value = d.items[d.selected].action
+				request.kind = "set"
+				m.dialog = nil
+				if request.field == "share-limit-action" && client.IsDestructiveShareLimitAction(request.value) {
+					m.dialog = &dialog{
+						kind:          dialogConfirm,
+						title:         "Confirm share-limit action",
+						message:       shareLimitChoiceConfirmation(m, request.hashes, request.value),
+						request:       request,
+						confirmAction: "edit",
+					}
+					return nil
+				}
+				return m.launchAction("edit", request)
+			}
 			field := client.CanonicalSetField(d.items[d.selected].action)
 			value := ""
 			mixed := false
@@ -1013,6 +1186,21 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				d.title = fmt.Sprintf("Set %s for %d torrents", field, len(d.torrents))
 			}
 			d.request.field = field
+			if field == "share-limits-mode" || field == "share-limit-action" {
+				d.kind = dialogShareChoice
+				d.title = "Set " + field
+				d.items = shareLimitChoiceItems(field)
+				d.selected = 0
+				if !mixed {
+					for i, item := range d.items {
+						if item.action == value {
+							d.selected = i
+							break
+						}
+					}
+				}
+				return nil
+			}
 			placeholder := "value"
 			help := "qBittorrent validates this field"
 			if mixed {
@@ -1030,6 +1218,12 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		innerWidth, _ := dialogDimensions(m.width)
 		visible := dialogBodyHeight(m.heightForDialog())
 		count := len(dialogDetailLines(d.rows, innerWidth))
+		if d.kind == dialogDetails && d.torrentDetails != nil && !d.torrentDetails.trackers {
+			if handled, cmd := m.updateTorrentDetailKey(d, name); handled {
+				return cmd
+			}
+			count = len(m.detailDialogLines(d, innerWidth))
+		}
 		if d.kind == dialogHelp {
 			visible, count = helpViewport(viewContentWidth(m.width), m.heightForDialog()-viewHeaderLines-viewFooterLines)
 		}
@@ -1059,7 +1253,11 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			}
 			request := d.request
 			m.dialog = nil
-			return m.launchAction("remove", request)
+			action := d.confirmAction
+			if action == "" {
+				action = "remove"
+			}
+			return m.launchAction(action, request)
 		case "n", "N":
 			m.dialog = nil
 		}
@@ -1080,13 +1278,19 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			return m.launchAction("delete", request)
 		}
 
-	case dialogSearch, dialogFilter, dialogAdd, dialogAddResult, dialogEditValue, dialogMove, dialogConfig:
+	case dialogSearch, dialogFilter, dialogAdd, dialogAddResult, dialogEditValue, dialogMove, dialogRename, dialogConfig, dialogSearchPluginInstall:
 		switch name {
 		case "tab":
 			return d.cycleField(false)
 		case "shift+tab":
 			return d.cycleField(true)
 		case "enter", "return":
+			if d.kind == dialogSearchPluginInstall {
+				return m.submitSearchPluginInstall(d.value(0))
+			}
+			if d.renamePath != nil {
+				return m.submitTorrentPathRename(d)
+			}
 			return m.submitDialog()
 		}
 	}
@@ -1149,17 +1353,12 @@ func (m *model) submitDialog() tea.Cmd {
 			d.status = "A magnet, URL, or torrent file path is required"
 			return nil
 		}
-		stopped, err := parseTUIChoice(d.value(3))
+		options, err := parseAddDialogOptions(d)
 		if err != nil {
-			d.status = "Stopped must be yes or no"
+			d.status = err.Error()
 			return nil
 		}
-		request.addOptions = client.AddTorrentOptions{
-			Category: strings.TrimSpace(d.value(1)),
-			SavePath: strings.TrimSpace(d.value(2)),
-			Stopped:  stopped,
-			Tags:     strings.TrimSpace(d.value(4)),
-		}
+		request.addOptions = options
 		m.dialog = nil
 		return m.launchAction(label, request)
 
@@ -1191,6 +1390,19 @@ func (m *model) submitDialog() tea.Cmd {
 		}
 		m.dialog = nil
 		return m.launchAction("move", actionRequest{kind: "move", hashes: d.request.hashes, value: path})
+
+	case dialogRename:
+		if m.busy != "" {
+			d.status = "Finish the current request first"
+			return nil
+		}
+		name := strings.TrimSpace(d.value(0))
+		if name == "" {
+			d.status = "A torrent name is required"
+			return nil
+		}
+		m.dialog = nil
+		return m.launchAction("rename", actionRequest{kind: "rename", hashes: d.request.hashes, value: name})
 
 	case dialogConfig:
 		choice := "no"
@@ -1312,7 +1524,11 @@ func (m *model) dialogView(width, height int) string {
 		body = m.dialogPaletteLines(innerWidth, visible)
 		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "run")
 
-	case dialogEditSelect, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins:
+	case dialogTrackers:
+		body = trackerDialogLines(d, innerWidth, visible)
+		footer = viewKeys(innerWidth, "↑/↓", "select", "v", "full URL", "a", "add", "e", "edit", "d", "remove", "esc", "close")
+
+	case dialogEditSelect, dialogShareChoice, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins, dialogSearchPluginManage, dialogSearchPluginActions:
 		start := d.listStart(visible)
 		for i := start; i < min(len(d.items), start+visible); i++ {
 			item := d.items[i]
@@ -1341,12 +1557,18 @@ func (m *model) dialogView(width, height int) string {
 
 	case dialogDetails:
 		details := dialogDetailLines(d.rows, innerWidth)
+		if d.torrentDetails != nil && !d.torrentDetails.trackers {
+			details = m.detailDialogLines(d, innerWidth)
+		}
 		start := min(d.scroll, max(0, len(details)-visible))
 		body = append(body, details[start:min(len(details), start+visible)]...)
 		if len(details) == 0 {
 			body = append(body, viewMutedStyle.Render("No details available"))
 		}
-		footer = viewKeys(innerWidth, "esc", "close", "↑/↓", "scroll", "pgup/pgdn", "page")
+		footer = viewKeys(innerWidth, "1/2/3", "tabs", "↑/↓", "scroll", "esc", "close")
+		if d.detail != nil && d.detail.tab == detailTabFiles {
+			footer = viewKeys(innerWidth, "space", "mark", "/", "filter", "0/n/6/7", "priority", "f2/f3", "rename", "tab", "tabs", "esc", "close")
+		}
 
 	case dialogConfirm, dialogDelete:
 		message := strings.Split(d.message, "\n")
@@ -1370,6 +1592,9 @@ func (m *model) dialogView(width, height int) string {
 	default:
 		var focusedLine int
 		for i, field := range d.fields {
+			if !d.fieldVisible(i) {
+				continue
+			}
 			if i == d.focus {
 				focusedLine = len(body)
 			}
@@ -1380,6 +1605,9 @@ func (m *model) dialogView(width, height int) string {
 		}
 		start := viewWindowStart(focusedLine, len(body), visible)
 		body = body[start:min(len(body), start+visible)]
+		if d.kind == dialogAdd || d.kind == dialogAddResult {
+			footer = viewKeys(innerWidth, "tab", "next", "f2", "advanced", "enter", "submit", "esc", "cancel")
+		}
 	}
 	if d.status != "" && height >= 4 {
 		body = append(body, viewErrorStyle.Render(viewFit(viewSafe(d.status), innerWidth)))
@@ -1461,6 +1689,12 @@ func setFieldValue(torrent client.TorrentInfo, field string) string {
 		return strconv.FormatFloat(torrent.RatioLimit, 'f', -1, 64)
 	case "seedtime-limit":
 		return client.FormatSeedtimeLimitInput(torrent.SeedingTimeLimit)
+	case "inactive-seedtime-limit":
+		return client.FormatSeedtimeLimitInput(client.EffectiveInactiveSeedingTimeLimit(torrent))
+	case "share-limits-mode":
+		return shareLimitModeValue(torrent.ShareLimitsMode)
+	case "share-limit-action":
+		return shareLimitActionValue(torrent.ShareLimitAction)
 	case "seqdl":
 		return strconv.FormatBool(torrent.SequentialDL)
 	case "autotmm":

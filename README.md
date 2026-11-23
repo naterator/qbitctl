@@ -37,7 +37,10 @@ qbitctl add ./ubuntu.torrent
 Use `Tab` to switch between Queue, Search, Server, and Config. Press `?` for
 shortcuts or `Ctrl+P` for actions that fit the current tab and selection.
 Mark torrents with `Space` to edit them together. Press Enter in the Queue to
-open live torrent details. The details and the queue share the same refresh.
+open live torrent details. Use `2` for Files and `3` for Peers. In Files,
+`F2` renames the selected file and `F3` renames its folder. Press `o`
+in the queue to sort by size, ratio, ETA, or either transfer speed. The
+queue detail pane shows connected and swarm counts when the server reports them.
 The queue refreshes every five seconds while transferring and every 15
 seconds when idle. The command palette can pause automatic refresh, and
 `r` still refreshes on demand. Set `qbitctl tui-default on` to open the TUI
@@ -55,7 +58,8 @@ Press `p` (**Providers**) to choose **Enabled search plugins** (the default),
 **All search plugins**, or an individual enabled plugin. Disabled plugins appear
 grayed out at the bottom of the picker. The choice is saved in `config.json`
 and used for TUI and CLI searches. If a saved plugin is no longer available or
-enabled, qbitctl uses **Enabled search plugins**. Press `/` to start a search.
+enabled, qbitctl uses **Enabled search plugins**. Press `m` in the picker to
+manage the server's plugins. Press `/` to start a search.
 
 ![qbitctl TUI showing Config, the search provider picker, and live torrent details](assets/demo.gif)
 
@@ -71,9 +75,11 @@ unambiguous prefix.
 | --- | --- |
 | `tui` | Open the interactive terminal UI. |
 | `info`, `list`, `show`, `get` | Read server stats, list torrents, or inspect a specific torrent. |
+| `files`, `peers`, `trackers` | Inspect torrent contents and swarm connections, set file priorities, or manage trackers. |
 | `search`, `add` | Search installed plugins or add a file, magnet, URL, or search result. |
 | `set`, `move` | Change torrent settings or move data on the server. |
 | `start`, `pause`, `force-start` | Control one or more torrents. |
+| `recheck`, `reannounce`, `rename`, `queue` | Verify data, refresh tracker announcements, rename a torrent, or change its place in the queue. |
 | `remove`, `delete` | Remove a torrent. `delete` also removes its files. |
 | `config`, `tui-default` | Set up the connection or change what bare `qbitctl` opens. |
 | `update`, `version`, `completion` | Update qbitctl, show its version, or generate shell completions. |
@@ -83,6 +89,9 @@ qbitctl list --state downloading --category linux --fields hash,name,progress
 qbitctl search "Ubuntu 24.04" --sort seeders-desc --min-seeders 10 --limit 5
 qbitctl add --search-id 123456789012 --category linux --stopped
 qbitctl set seedtime-limit 3d 9c328901 fedcba98
+qbitctl files 9c328901
+qbitctl files priority 9c328901 skip 2 3
+qbitctl queue top 9c328901 fedcba98
 qbitctl pause 9c328901 fedcba98
 qbitctl completion bash
 ```
@@ -91,18 +100,36 @@ Use `qbitctl batch commands.txt` to run one command per line with a shared
 login. Pipe the commands into `qbitctl batch` to read them from stdin.
 A batch stops on the first error unless you pass `--continue-on-error`.
 
+Use `qbitctl show <hash> --fields name,seeds,leechers,queue-position`
+for a compact view. Fields the server omits are blank. `dl-path` and its
+existing alias `download-path` show the content path. Use
+`temp-download-path` for qBittorrent's separate download directory.
+
+Use `trackers <hash>` for hostnames and status, or `--full-url` when you need
+the exact announce URL. The `add`, `edit`, and `remove` tracker subcommands
+take exact URLs. The `set` fields for share-limit policy are
+`inactive-seedtime-limit`, `share-limit-action` (qBittorrent 5.2+), and
+`share-limits-mode` (5.3+).
+
 Search uses your saved provider and waits up to 30 seconds by default.
 Run `qbitctl search --list-plugins` to see what your server has
 installed. Use `--plugin` with a name or ID, join several with `|` in a quoted
 value, or use `--plugin all` to include disabled plugins. Change the wait with
 `--timeout`.
 
+Run `qbitctl search plugins list` or use `install <https-url>`,
+`enable <id>`, `disable <id>`, `uninstall <id>`, and `update` under
+`qbitctl search plugins`. Disabling your default plugin temporarily falls
+back to the enabled group. Re-enabling it restores the saved choice.
+
 Copy the ID from a search result into `add --search-id`. Run
 `qbitctl search --recent` to print the latest cached results without
 connecting. IDs last up to 24 hours for the same server and user.
 Add options include `--category`, `--save-path`, `--tags`, and `--stopped`.
-Applying them to a plugin-downloaded search result requires qBittorrent 5.2
-or later.
+Run `qbitctl add --help` or press `F2` in the TUI add form for
+content layout, a separate download path, stop conditions, piece priorities,
+and share limits. These overrides require qBittorrent 5.2 or later for
+plugin-downloaded search results.
 
 Use `--json` for structured output or `--server-json` for the raw API response
 where offered. `list` and `show` also support `--fields` and `--template`.

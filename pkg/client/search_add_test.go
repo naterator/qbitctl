@@ -259,11 +259,22 @@ func TestAddSearchResultUsesMetadataBeforeAdd(t *testing.T) {
 
 func TestAddSearchResultWithOptionsSendsOptions(t *testing.T) {
 	app, _, transport, id, _, _ := setupSearchAddTest(t, "5.3.0", []int{http.StatusOK})
+	ratio := 1.5
+	seedMinutes := int64(60)
 	options := AddTorrentOptions{
-		Category: "linux",
-		SavePath: "/downloads/linux",
-		Tags:     "iso,linux",
-		Stopped:  true,
+		Category:              "linux",
+		SavePath:              "/downloads/linux",
+		Tags:                  "iso,linux",
+		Stopped:               true,
+		DownloadPath:          "/incomplete",
+		SkipChecking:          true,
+		SkipCheckingSet:       true,
+		SequentialDownload:    true,
+		SequentialDownloadSet: true,
+		ShareRatioLimit:       &ratio,
+		ShareSeedingTimeLimit: &seedMinutes,
+		ShareLimitsMode:       "match-all",
+		ShareLimitAction:      "stop",
 	}
 	if err := app.AddSearchResultWithOptions(id, options); err != nil {
 		t.Fatalf("AddSearchResultWithOptions: %v", err)
@@ -276,11 +287,19 @@ func TestAddSearchResultWithOptionsSendsOptions(t *testing.T) {
 	}
 	form := transport.addForms[0]
 	for field, want := range map[string]string{
-		"category": "linux",
-		"savepath": "/downloads/linux",
-		"autoTMM":  "false",
-		"tags":     "iso,linux",
-		"stopped":  "true",
+		"category":           "linux",
+		"savepath":           "/downloads/linux",
+		"autoTMM":            "false",
+		"tags":               "iso,linux",
+		"stopped":            "true",
+		"downloadPath":       "/incomplete",
+		"useDownloadPath":    "true",
+		"seedMode":           "true",
+		"sequentialDownload": "true",
+		"ratioLimit":         "1.500000",
+		"seedingTimeLimit":   "60",
+		"shareLimitsMode":    "MatchAll",
+		"shareLimitAction":   "Stop",
 	} {
 		if got := form.Get(field); got != want {
 			t.Errorf("add form %s = %q, want %q", field, got, want)

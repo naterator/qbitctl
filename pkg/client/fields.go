@@ -25,6 +25,12 @@ func CanonicalGetField(field string) string {
 		return "seedtime"
 	case "seedtime-limit", "seed-time-limit":
 		return "seedtime-limit"
+	case "inactive-seedtime-limit", "inactive-seed-time-limit", "inactive-seeding-time-limit", "inactive_seeding_time_limit", "inactive_seeding_tl":
+		return "inactive-seedtime-limit"
+	case "share-limits-mode", "share-limit-mode", "share_limits_mode", "share_mode", "share-mode":
+		return "share-limits-mode"
+	case "share-limit-action", "share_limit_action", "share_action", "share-action":
+		return "share-limit-action"
 	case "seqdl", "sequential-download":
 		return "seqdl"
 	case "autotmm", "auto-tmm":
@@ -75,6 +81,12 @@ func CanonicalSetField(field string) string {
 		return "ratio-limit"
 	case "seedtime-limit", "seed-time-limit":
 		return "seedtime-limit"
+	case "inactive-seedtime-limit", "inactive-seed-time-limit", "inactive-seeding-time-limit", "inactive_seeding_time_limit", "inactive_seeding_tl":
+		return "inactive-seedtime-limit"
+	case "share-limits-mode", "share-limit-mode", "share_limits_mode", "share_mode", "share-mode":
+		return "share-limits-mode"
+	case "share-limit-action", "share_limit_action", "share_action", "share-action":
+		return "share-limit-action"
 	case "seqdl", "sequential-download":
 		return "seqdl"
 	case "autotmm", "auto-tmm":

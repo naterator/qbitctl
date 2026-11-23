@@ -28,7 +28,7 @@ const (
 var errTorrentFileTooLarge = errors.New("torrent file exceeds the 63 MiB upload limit")
 
 // AddTorrentOptions controls the settings qBittorrent applies while adding a
-// torrent. Empty category, save path, and tags values use qBittorrent's
+// torrent. Empty strings, nil limits, and false Set flags use qBittorrent's
 // defaults. A stopped torrent is opt-in so the zero value retains the normal
 // auto-start behavior.
 type AddTorrentOptions struct {
@@ -36,13 +36,41 @@ type AddTorrentOptions struct {
 	SavePath string
 	Tags     string
 	Stopped  bool
+
+	// ContentLayout controls qBittorrent's placement of files inside the
+	// download. Accepted values are Original, Subfolder, and NoSubfolder.
+	ContentLayout string
+	// DownloadPath is the separate incomplete/download path. When set,
+	// qBittorrent receives useDownloadPath=true and auto management is disabled.
+	DownloadPath string
+
+	// SkipCheckingSet distinguishes an explicitly selected false value from an
+	// omitted value. qBittorrent 5.3 renamed skip_checking to seedMode; the
+	// client selects the correct wire key from the verified server version.
+	SkipChecking    bool
+	SkipCheckingSet bool
+	StopCondition   string
+
+	SequentialDownload        bool
+	SequentialDownloadSet     bool
+	FirstLastPiecePriority    bool
+	FirstLastPiecePrioritySet bool
+
+	// Share time limits are qBittorrent API minutes. -1 means unlimited and -2
+	// means the global setting. Pointers preserve an omitted value.
+	ShareRatioLimit               *float64
+	ShareSeedingTimeLimit         *int64
+	ShareInactiveSeedingTimeLimit *int64
+	ShareLimitsMode               string
+	ShareLimitAction              string
 }
 
 func (options AddTorrentOptions) hasOverrides() bool {
 	return strings.TrimSpace(options.Category) != "" ||
 		strings.TrimSpace(options.SavePath) != "" ||
 		strings.TrimSpace(options.Tags) != "" ||
-		options.Stopped
+		options.Stopped ||
+		options.hasAdvancedOverrides()
 }
 
 type torrentFileUpload struct {
@@ -98,10 +126,17 @@ func (a *App) AddTorrentWithOptions(source string, options AddTorrentOptions) er
 	if source == "" {
 		return codedErrf(ExitBadArgs, "Torrent file path or magnet link required")
 	}
-	if looksLikeTorrentSourceURL(source) {
-		return a.addTorrentURL(source, options, "")
+	normalized, err := NormalizeAddTorrentOptions(options)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "Invalid add option: %v", err)
 	}
-	return a.addTorrentFile(source, options)
+	if err := a.validateAddTorrentOptions(normalized); err != nil {
+		return err
+	}
+	if looksLikeTorrentSourceURL(source) {
+		return a.addTorrentURL(source, normalized, "")
+	}
+	return a.addTorrentFile(source, normalized)
 }
 
 // AddSearchResult submits a cached search result to qBittorrent.
@@ -118,8 +153,15 @@ func (a *App) AddSearchResultWithOptions(id int64, options AddTorrentOptions) er
 	if err != nil {
 		return err
 	}
+	normalized, err := NormalizeAddTorrentOptions(options)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "Invalid add option: %v", err)
+	}
 	if target.Plugin == "" || !(strings.HasPrefix(target.URL, "http:") || strings.HasPrefix(target.URL, "https:")) {
-		return a.addTorrentURL(target.URL, options, "")
+		if err := a.validateAddTorrentOptions(normalized); err != nil {
+			return err
+		}
+		return a.addTorrentURL(target.URL, normalized, "")
 	}
 	version, err := a.fetchAppVersion()
 	if err != nil {
@@ -133,15 +175,24 @@ func (a *App) AddSearchResultWithOptions(id int64, options AddTorrentOptions) er
 		}
 		version = a.appVersion
 	}
+	if a.compatibilitySource == compatibilitySourceDisk && (normalized.SkipCheckingSet || normalized.ShareLimitsMode != "") {
+		if err := a.refreshCompatibility(); err != nil {
+			return err
+		}
+		version = a.appVersion
+	}
+	if err := validateAddTorrentOptionsForVersion(normalized, version); err != nil {
+		return err
+	}
 	if compareDottedVersion(version, "5.2.0") >= 0 {
 		// The newer Web UI cancels its pending plugin download when the
 		// session logs out. Fetch metadata first so add completes in-session.
 		if err := a.waitForSearchMetadata(target); err != nil {
 			return codedErrWrapf(ExitActionFail, err, "Failed to fetch metadata for search result %d: %v", id, err)
 		}
-		return a.addTorrentURL(target.URL, options, target.Plugin)
+		return a.addTorrentURLForVersion(target.URL, normalized, target.Plugin, version)
 	}
-	if options.hasOverrides() {
+	if normalized.hasOverrides() {
 		return codedErrf(ExitActionFail, "search-result add options require qBittorrent 5.2.0 or newer")
 	}
 	_, err = a.client.requestContext(a.context(), http.MethodPost, "/api/v2/search/downloadTorrent", url.Values{
@@ -183,6 +234,10 @@ func (a *App) waitForSearchMetadata(target cachedSearchTarget) error {
 }
 
 func (a *App) addTorrentURL(source string, options AddTorrentOptions, downloader string) error {
+	return a.addTorrentURLForVersion(source, options, downloader, a.appVersion)
+}
+
+func (a *App) addTorrentURLForVersion(source string, options AddTorrentOptions, downloader, version string) error {
 	var body strings.Builder
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("urls", source); err != nil {
@@ -193,7 +248,7 @@ func (a *App) addTorrentURL(source string, options AddTorrentOptions, downloader
 			return codedErrf(ExitActionFail, "Failed to build add request")
 		}
 	}
-	if err := writeTorrentAddOptions(writer, options); err != nil {
+	if err := writeTorrentAddOptions(writer, options, version); err != nil {
 		return codedErrf(ExitActionFail, "Failed to build add request")
 	}
 	if err := writer.Close(); err != nil {
@@ -223,7 +278,7 @@ func (a *App) addTorrentFile(path string, options AddTorrentOptions) error {
 	if err := ctx.Err(); err != nil {
 		return codedErrWrapf(ExitActionFail, err, "Failed to add torrent file '%s': %v", path, err)
 	}
-	upload, err := newTorrentFileUpload(path, options)
+	upload, err := newTorrentFileUpload(path, options, a.appVersion)
 	if err != nil {
 		return codedErrf(ExitFile, "Failed to read torrent file '%s': %v", path, err)
 	}
@@ -244,7 +299,7 @@ func (a *App) addTorrentFile(path string, options AddTorrentOptions) error {
 	return nil
 }
 
-func writeTorrentAddOptions(writer *multipart.Writer, options AddTorrentOptions) error {
+func writeTorrentAddOptions(writer *multipart.Writer, options AddTorrentOptions, version string) error {
 	if strings.TrimSpace(options.Category) != "" {
 		if err := writer.WriteField("category", options.Category); err != nil {
 			return err
@@ -254,9 +309,24 @@ func writeTorrentAddOptions(writer *multipart.Writer, options AddTorrentOptions)
 		if err := writer.WriteField("savepath", options.SavePath); err != nil {
 			return err
 		}
+	}
+	if strings.TrimSpace(options.DownloadPath) != "" {
+		if err := writer.WriteField("downloadPath", options.DownloadPath); err != nil {
+			return err
+		}
+		if err := writer.WriteField("useDownloadPath", "true"); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(options.SavePath) != "" || strings.TrimSpace(options.DownloadPath) != "" {
 		// qBittorrent's auto-managed category path can otherwise override an
 		// explicitly requested destination on supported 5.x servers.
 		if err := writer.WriteField("autoTMM", "false"); err != nil {
+			return err
+		}
+	}
+	if options.ContentLayout != "" {
+		if err := writer.WriteField("contentLayout", options.ContentLayout); err != nil {
 			return err
 		}
 	}
@@ -267,6 +337,57 @@ func writeTorrentAddOptions(writer *multipart.Writer, options AddTorrentOptions)
 	}
 	if options.Stopped {
 		if err := writer.WriteField("stopped", "true"); err != nil {
+			return err
+		}
+	}
+	if options.SkipCheckingSet {
+		field := "skip_checking"
+		if compareDottedVersion(version, "5.3.0") >= 0 {
+			// qBittorrent 5.3 renamed this add parameter to seedMode while
+			// retaining the same boolean behavior.
+			field = "seedMode"
+		}
+		if err := writer.WriteField(field, formatBool(options.SkipChecking)); err != nil {
+			return err
+		}
+	}
+	if options.StopCondition != "" {
+		if err := writer.WriteField("stopCondition", options.StopCondition); err != nil {
+			return err
+		}
+	}
+	if options.SequentialDownloadSet {
+		if err := writer.WriteField("sequentialDownload", formatBool(options.SequentialDownload)); err != nil {
+			return err
+		}
+	}
+	if options.FirstLastPiecePrioritySet {
+		if err := writer.WriteField("firstLastPiecePrio", formatBool(options.FirstLastPiecePriority)); err != nil {
+			return err
+		}
+	}
+	if options.ShareRatioLimit != nil {
+		if err := writer.WriteField("ratioLimit", strconv.FormatFloat(*options.ShareRatioLimit, 'f', 6, 64)); err != nil {
+			return err
+		}
+	}
+	if options.ShareSeedingTimeLimit != nil {
+		if err := writer.WriteField("seedingTimeLimit", strconv.FormatInt(*options.ShareSeedingTimeLimit, 10)); err != nil {
+			return err
+		}
+	}
+	if options.ShareInactiveSeedingTimeLimit != nil {
+		if err := writer.WriteField("inactiveSeedingTimeLimit", strconv.FormatInt(*options.ShareInactiveSeedingTimeLimit, 10)); err != nil {
+			return err
+		}
+	}
+	if options.ShareLimitsMode != "" {
+		if err := writer.WriteField("shareLimitsMode", options.ShareLimitsMode); err != nil {
+			return err
+		}
+	}
+	if options.ShareLimitAction != "" {
+		if err := writer.WriteField("shareLimitAction", options.ShareLimitAction); err != nil {
 			return err
 		}
 	}
@@ -294,7 +415,7 @@ func torrentFileInfo(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
-func newTorrentFileUpload(path string, options AddTorrentOptions) (*torrentFileUpload, error) {
+func newTorrentFileUpload(path string, options AddTorrentOptions, version string) (*torrentFileUpload, error) {
 	info, err := torrentFileInfo(path)
 	if err != nil {
 		return nil, err
@@ -302,7 +423,7 @@ func newTorrentFileUpload(path string, options AddTorrentOptions) (*torrentFileU
 
 	var framing bytes.Buffer
 	writer := multipart.NewWriter(&framing)
-	if err := writeTorrentAddOptions(writer, options); err != nil {
+	if err := writeTorrentAddOptions(writer, options, version); err != nil {
 		return nil, err
 	}
 	if _, err := writer.CreateFormFile("torrents", filepath.Base(path)); err != nil {

@@ -53,7 +53,10 @@ type Server struct {
 	InfoRawBody       string
 	TrackersRawBody   string
 	CategoriesRawBody string
+	FilesRawBody      string
+	PeersRawBody      string
 	Torrents          any
+	Files             any
 	Trackers          any
 	Categories        map[string]map[string]any
 	Forms             map[string][]url.Values
@@ -223,6 +226,18 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(s.Trackers)
+	case "/api/v2/torrents/files":
+		if s.FilesRawBody != "" {
+			_, _ = io.WriteString(w, s.FilesRawBody)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(s.Files)
+	case "/api/v2/sync/torrentPeers":
+		if s.PeersRawBody != "" {
+			_, _ = io.WriteString(w, s.PeersRawBody)
+			return
+		}
+		_, _ = io.WriteString(w, `{"rid":0,"full_update":true,"show_flags":true,"peers":{},"peers_removed":[]}`)
 	case "/api/v2/torrents/categories":
 		if s.CategoriesRawBody != "" {
 			_, _ = io.WriteString(w, s.CategoriesRawBody)
@@ -248,7 +263,14 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 		"/api/v2/torrents/delete",
 		"/api/v2/torrents/start",
 		"/api/v2/torrents/setForceStart",
-		"/api/v2/torrents/setLocation":
+		"/api/v2/torrents/setLocation",
+		"/api/v2/torrents/recheck",
+		"/api/v2/torrents/reannounce",
+		"/api/v2/torrents/increasePrio",
+		"/api/v2/torrents/decreasePrio",
+		"/api/v2/torrents/topPrio",
+		"/api/v2/torrents/bottomPrio",
+		"/api/v2/torrents/rename":
 		s.recordForm(r.URL.Path, r)
 		if r.URL.Path == "/api/v2/torrents/setShareLimits" {
 			s.applyShareLimits(r.Form)
@@ -258,6 +280,14 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 		if !s.SkipSeqToggle {
 			s.toggleSequentialDownload(r.Form.Get("hashes"))
 		}
+	case "/api/v2/torrents/addTrackers",
+		"/api/v2/torrents/editTracker",
+		"/api/v2/torrents/removeTrackers":
+		s.recordForm(r.URL.Path, r)
+	case "/api/v2/torrents/filePrio",
+		"/api/v2/torrents/renameFile",
+		"/api/v2/torrents/renameFolder":
+		s.recordForm(r.URL.Path, r)
 	case "/api/v2/app/version":
 		v := s.AppVersion
 		if v == "" {

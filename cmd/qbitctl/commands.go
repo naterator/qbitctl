@@ -131,12 +131,70 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 func newAddCmd(opts *CLIOptions) *cobra.Command {
 	var searchID int64
 	var addOptions qbt.AddTorrentOptions
+	var (
+		contentLayout, downloadPath, stopCondition             string
+		sequential, firstLastPiecePriority, skipChecking       bool
+		ratioLimit, seedingTimeLimit, inactiveSeedingTimeLimit string
+		shareLimitsMode, shareLimitAction                      string
+	)
+	prepareAddOptions := func(cmd *cobra.Command) error {
+		addOptions.ContentLayout = contentLayout
+		addOptions.DownloadPath = downloadPath
+		addOptions.StopCondition = stopCondition
+		addOptions.SequentialDownload = sequential
+		addOptions.SequentialDownloadSet = cmd.Flags().Changed("sequential") || cmd.Flags().Changed("sequential-download")
+		addOptions.FirstLastPiecePriority = firstLastPiecePriority
+		addOptions.FirstLastPiecePrioritySet = cmd.Flags().Changed("first-last-piece-priority") || cmd.Flags().Changed("first-last-piece-prio")
+		addOptions.SkipChecking = skipChecking
+		addOptions.SkipCheckingSet = cmd.Flags().Changed("skip-checking")
+		addOptions.ShareLimitsMode = shareLimitsMode
+		addOptions.ShareLimitAction = shareLimitAction
+
+		if cmd.Flags().Changed("ratio-limit") {
+			ratio, err := qbt.ParseAddRatioLimit(ratioLimit)
+			if err != nil {
+				return fmt.Errorf("--ratio-limit: %v", err)
+			}
+			addOptions.ShareRatioLimit = &ratio
+		}
+		if cmd.Flags().Changed("seeding-time-limit") || cmd.Flags().Changed("seedtime-limit") {
+			seconds, err := qbt.ParseSeedtimeLimit(seedingTimeLimit)
+			if err != nil {
+				return fmt.Errorf("--seeding-time-limit: %v", err)
+			}
+			minutes, err := qbt.SeedtimeLimitSecondsToMinutes(seconds)
+			if err != nil {
+				return fmt.Errorf("--seeding-time-limit: %v", err)
+			}
+			addOptions.ShareSeedingTimeLimit = &minutes
+		}
+		if cmd.Flags().Changed("inactive-seeding-time-limit") || cmd.Flags().Changed("inactive-seedtime-limit") {
+			seconds, err := qbt.ParseSeedtimeLimit(inactiveSeedingTimeLimit)
+			if err != nil {
+				return fmt.Errorf("--inactive-seeding-time-limit: %v", err)
+			}
+			minutes, err := qbt.SeedtimeLimitSecondsToMinutes(seconds)
+			if err != nil {
+				return fmt.Errorf("--inactive-seeding-time-limit: %v", err)
+			}
+			addOptions.ShareInactiveSeedingTimeLimit = &minutes
+		}
+		normalized, err := qbt.NormalizeAddTorrentOptions(addOptions)
+		if err != nil {
+			return fmt.Errorf("invalid add option: %v", err)
+		}
+		addOptions = normalized
+		return nil
+	}
 	cmd := &cobra.Command{
 		Use:     "add <torrent-file|magnet-link|URL> | --search-id <id>",
 		Aliases: []string{"a", "ad"},
 		Short:   "Add a torrent file, magnet link, URL, or cached search result",
 		GroupID: "change",
 		Args: func(cmd *cobra.Command, args []string) error {
+			if err := prepareAddOptions(cmd); err != nil {
+				return codedErr(exitBadArgs, err.Error())
+			}
 			if !cmd.Flags().Changed("search-id") {
 				return cobra.ExactArgs(1)(cmd, args)
 			}
@@ -158,6 +216,21 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().StringVar(&addOptions.SavePath, "save-path", "", "Destination directory on the qBittorrent host")
 	cmd.Flags().StringVar(&addOptions.Tags, "tags", "", "Assign comma-separated tags to the torrent")
 	cmd.Flags().BoolVar(&addOptions.Stopped, "stopped", false, "Add the torrent in the stopped state")
+	cmd.Flags().StringVar(&contentLayout, "content-layout", "", "File layout: original, subfolder, or no-subfolder")
+	cmd.Flags().StringVar(&downloadPath, "download-path", "", "Separate incomplete/download directory on the qBittorrent host")
+	cmd.Flags().BoolVar(&skipChecking, "skip-checking", false, "Skip hash checking and start seeding")
+	cmd.Flags().StringVar(&stopCondition, "stop-condition", "", "Stop condition: none, metadata, or files")
+	cmd.Flags().BoolVar(&sequential, "sequential", false, "Download pieces sequentially")
+	cmd.Flags().BoolVar(&sequential, "sequential-download", false, "Alias for --sequential")
+	cmd.Flags().BoolVar(&firstLastPiecePriority, "first-last-piece-priority", false, "Prioritize the first and last pieces")
+	cmd.Flags().BoolVar(&firstLastPiecePriority, "first-last-piece-prio", false, "Alias for --first-last-piece-priority")
+	cmd.Flags().StringVar(&ratioLimit, "ratio-limit", "", "Share ratio limit (non-negative, -1 unlimited, or -2 global)")
+	cmd.Flags().StringVar(&seedingTimeLimit, "seeding-time-limit", "", "Seeding time limit: duration, -1 unlimited, or -2 global")
+	cmd.Flags().StringVar(&seedingTimeLimit, "seedtime-limit", "", "Alias for --seeding-time-limit")
+	cmd.Flags().StringVar(&inactiveSeedingTimeLimit, "inactive-seeding-time-limit", "", "Inactive seeding limit: duration, -1 unlimited, or -2 global")
+	cmd.Flags().StringVar(&inactiveSeedingTimeLimit, "inactive-seedtime-limit", "", "Alias for --inactive-seeding-time-limit")
+	cmd.Flags().StringVar(&shareLimitsMode, "share-limits-mode", "", "Share limits mode: default, match-any, or match-all")
+	cmd.Flags().StringVar(&shareLimitAction, "share-limit-action", "", "Share limit action: default, stop, remove, remove-with-content, or enable-super-seeding")
 	return cmd
 }
 
@@ -236,10 +309,16 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 	var searchOptions searchCommandOptions
 	var cmd *cobra.Command
 	cmd = &cobra.Command{
-		Use:     "search <pattern> | --list-plugins",
-		Short:   "Search torrents or list qBittorrent search plugins",
+		Use:   "search <pattern> | --list-plugins",
+		Short: "Search torrents or list qBittorrent search plugins",
+		Long: "Search torrents or manage qBittorrent search plugins.\n\n" +
+			"Plugin actions: search plugins list, install <https-url>, enable <id>, " +
+			"disable <id>, uninstall <id>, or update.",
 		GroupID: "view",
 		Args: func(cmd *cobra.Command, args []string) error {
+			if searchPluginManagementInvocation(args) {
+				return validateSearchPluginManagementArgs(cmd, args)
+			}
 			if recent {
 				if len(args) != 0 {
 					return codedErr(exitBadArgs, "--recent cannot be combined with a search pattern")
@@ -309,6 +388,9 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 				return result(cmd, renderRecentSearch(cmd, opts, jsonOutput, searchOptions))
 			}
 			return authenticatedRun(opts, func(app *App, args []string) error {
+				if searchPluginManagementInvocation(args) {
+					return runSearchPluginManagement(app, args, jsonOutput)
+				}
 				if listPlugins {
 					plugins, err := app.SearchPlugins()
 					if err != nil {
@@ -483,7 +565,11 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 			"  up-limit / dl-limit         Bytes/sec, or a k suffix for KiB\n" +
 			"  ratio-limit                 Floating point value (>= 0)\n" +
 			"  seedtime-limit              90m, 2h, 3d, 7d12h, or seconds\n" +
-			"                              -1 unlimited, -2 global limit\n" +
+			"                              -1/unlimited, -2/global limit\n" +
+			"  inactive-seedtime-limit    Same duration and sentinel values\n" +
+			"  share-limits-mode          default, match-all, or match-any\n" +
+			"  share-limit-action         default, stop, remove, remove-with-content,\n" +
+			"                              or enable-super-seeding\n" +
 			"  seqdl / autotmm / superseed true or false",
 		GroupID:           "change",
 		Args:              validateSetArgs,

@@ -78,6 +78,12 @@ func parseToggleValue(value string) (bool, error) {
 }
 
 func parseSeedtimeLimit(value string) (int64, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "unlimited":
+		value = "-1"
+	case "global":
+		value = "-2"
+	}
 	if value == "-1" || value == "-2" {
 		// qBittorrent reserves -1 for no limit and -2 for the global limit.
 		return strconv.ParseInt(value, 10, 64)
@@ -152,6 +158,12 @@ func parseSeedtimeLimit(value string) (int64, error) {
 	return int64(duration / time.Second), nil
 }
 
+// ParseSeedtimeLimit parses the duration/sentinel syntax used by qbitctl's
+// share-time options and returns seconds before API conversion.
+func ParseSeedtimeLimit(value string) (int64, error) {
+	return parseSeedtimeLimit(value)
+}
+
 // seedtimeLimitSecondsToMinutes converts the CLI's documented seconds to the
 // qBittorrent Web API's minute-based wire value. The API sentinels are already
 // wire values and must pass through unchanged. Positive values must describe a
@@ -171,6 +183,12 @@ func seedtimeLimitSecondsToMinutes(seconds int64) (int64, error) {
 		return 0, fmt.Errorf("seedtime must be a whole number of minutes (seconds must be divisible by 60)")
 	}
 	return seconds / 60, nil
+}
+
+// SeedtimeLimitSecondsToMinutes converts qbitctl's seconds representation to
+// qBittorrent's minute-based add/set API value.
+func SeedtimeLimitSecondsToMinutes(seconds int64) (int64, error) {
+	return seedtimeLimitSecondsToMinutes(seconds)
 }
 
 // FormatSeedtimeLimitInput formats an API seed-time limit for an editable CLI

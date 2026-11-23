@@ -9,7 +9,6 @@
                                                                                │
                                                                                │ Down      —
                                                                                │ Up        —
-                                                                               │ Ratio     0.00
 
                       Edit 2 torrents
 
@@ -18,6 +17,9 @@
                         dl-limit · Set this qBittorrent field
                         ratio-limit · Set this qBittorrent field
                         seedtime-limit · Set this qBittorrent field
+                        inactive-seedtime-limit · Set this qBittorrent field
+                        share-limits-mode · Set this qBittorrent field
+                        share-limit-action · Set this qBittorrent field
                         seqdl · Set this qBittorrent field
                         superseed · Set this qBittorrent field
                         tags · Set this qBittorrent field
@@ -25,8 +27,6 @@
 
                       ↑/↓ move   enter select   esc close
 
-                                                                               │
-                                                                               │
                                                                                │
                                                                                │
                                                                                │

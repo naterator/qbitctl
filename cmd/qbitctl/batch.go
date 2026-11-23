@@ -123,9 +123,15 @@ func executeBatchLine(cmd *cobra.Command, app *App, line string) error {
 }
 
 func validateBatchCommand(cmd *cobra.Command) error {
-	switch cmd.Name() {
-	case "add", "delete", "force-start", "get", "info", "list", "move", "pause",
-		"remove", "search", "set", "show", "start", "version":
+	group := cmd
+	root := cmd.Root()
+	for group.HasParent() && group.Parent() != root {
+		group = group.Parent()
+	}
+	switch group.Name() {
+	case "add", "delete", "files", "force-start", "get", "info", "list", "move", "pause",
+		"peers", "queue", "reannounce", "recheck", "remove", "rename", "search", "set",
+		"show", "start", "trackers", "version":
 	default:
 		return fmt.Errorf("command %q is not supported inside batch", cmd.Name())
 	}

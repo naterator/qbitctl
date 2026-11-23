@@ -1,7 +1,6 @@
 package client
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -117,9 +116,9 @@ func (a *App) setShareLimits(hash string, torrent TorrentInfo) error {
 		"hashes":                   {hash},
 		"ratioLimit":               {fmt.Sprintf("%.6f", torrent.RatioLimit)},
 		"seedingTimeLimit":         {strconv.FormatInt(torrent.SeedingTimeLimit, 10)},
-		"inactiveSeedingTimeLimit": {strconv.FormatInt(torrent.InactiveSeedingTL, 10)},
-		"shareLimitsMode":          {cmp.Or(torrent.ShareLimitsMode, "Default")},
-		"shareLimitAction":         {cmp.Or(torrent.ShareLimitAction, "Default")},
+		"inactiveSeedingTimeLimit": {strconv.FormatInt(inactiveSeedingTimeLimitValue(torrent), 10)},
+		"shareLimitsMode":          {shareLimitsModeValue(torrent.ShareLimitsMode)},
+		"shareLimitAction":         {shareLimitActionValue(torrent.ShareLimitAction)},
 	}
 	if _, err := a.client.requestContext(a.context(), http.MethodPost, "/api/v2/torrents/setShareLimits", params); err != nil {
 		return codedErrWrapf(ExitSetFail, err, "Failed to set share limits: %v", err)
@@ -147,6 +146,71 @@ func (a *App) SetSeedtimeLimit(hash, seedtimeStr string) error {
 	})
 }
 
+// SetInactiveSeedtimeLimit updates the limit applied after a torrent has been
+// inactive. It uses the same duration syntax and wire sentinels as the regular
+// seed-time limit.
+func (a *App) SetInactiveSeedtimeLimit(hash, seedtimeStr string) error {
+	seconds, err := parseSeedtimeLimit(seedtimeStr)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "%v '%s'", err, seedtimeStr)
+	}
+	minutes, err := seedtimeLimitSecondsToMinutes(seconds)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "%v '%s'", err, seedtimeStr)
+	}
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
+	if err != nil {
+		return err
+	}
+
+	return a.setShareLimitGroups(torrents, func(torrent *TorrentInfo) {
+		torrent.InactiveSeedingTL = minutes
+		torrent.inactiveSeedingTLPresent = true
+	})
+}
+
+// SetShareLimitsMode updates how ratio, active seed-time, and inactive
+// seed-time limits are combined. MatchAll/MatchAny are qBittorrent's wire
+// values; friendly aliases are accepted by validation before this method runs.
+func (a *App) SetShareLimitsMode(hash, value string) error {
+	mode, err := parseShareLimitsMode(value)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "%v", err)
+	}
+	if err := a.requireShareLimitPolicyVersion("share-limits-mode", "5.3.0"); err != nil {
+		return err
+	}
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
+	if err != nil {
+		return err
+	}
+
+	return a.setShareLimitGroups(torrents, func(torrent *TorrentInfo) {
+		torrent.ShareLimitsMode = mode
+	})
+}
+
+// SetShareLimitAction updates the action qBittorrent takes once the selected
+// share limit is reached. The destructive remove actions are intentionally
+// available to scripted callers; the TUI adds an explicit confirmation.
+func (a *App) SetShareLimitAction(hash, value string) error {
+	action, err := parseShareLimitAction(value)
+	if err != nil {
+		return codedErrf(ExitBadArgs, "%v", err)
+	}
+	if err := a.requireShareLimitPolicyVersion("share-limit-action", "5.2.0"); err != nil {
+		return err
+	}
+	torrents, err := a.torrentsForHashes(splitHashList(hash))
+	if err != nil {
+		return err
+	}
+
+	return a.setShareLimitGroups(torrents, func(torrent *TorrentInfo) {
+		torrent.ShareLimitAction = action
+	})
+}
+
 func (a *App) SetRatioLimit(hash, ratioStr string) error {
 	ratio, err := parseRatioLimit(ratioStr)
 	if err != nil {
@@ -171,7 +235,7 @@ func (a *App) setShareLimitGroups(torrents []TorrentInfo, update func(*TorrentIn
 	indices := make(map[string]int, len(torrents))
 	for _, torrent := range torrents {
 		update(&torrent)
-		key := fmt.Sprintf("%.6f|%d|%d|%s|%s", torrent.RatioLimit, torrent.SeedingTimeLimit, torrent.InactiveSeedingTL, cmp.Or(torrent.ShareLimitsMode, "Default"), cmp.Or(torrent.ShareLimitAction, "Default"))
+		key := fmt.Sprintf("%.6f|%d|%d|%s|%s", torrent.RatioLimit, torrent.SeedingTimeLimit, inactiveSeedingTimeLimitValue(torrent), shareLimitsModeValue(torrent.ShareLimitsMode), shareLimitActionValue(torrent.ShareLimitAction))
 		index, exists := indices[key]
 		if !exists {
 			indices[key] = len(groups)
@@ -180,10 +244,23 @@ func (a *App) setShareLimitGroups(torrents []TorrentInfo, update func(*TorrentIn
 		}
 		groups[index].hashes = append(groups[index].hashes, strings.ToLower(torrent.Hash))
 	}
-	for _, group := range groups {
-		if err := a.setShareLimits(strings.Join(group.hashes, "|"), group.torrent); err != nil {
-			return err
+	completed := make([]string, 0, len(torrents))
+	for groupIndex, group := range groups {
+		selector := strings.Join(group.hashes, "|")
+		if err := a.setShareLimits(selector, group.torrent); err != nil {
+			skipped := make([]string, 0)
+			for _, remaining := range groups[groupIndex+1:] {
+				skipped = append(skipped, remaining.hashes...)
+			}
+			return &groupedMutationError{
+				operation: "set share limits",
+				completed: completed,
+				failed:    append([]string(nil), group.hashes...),
+				skipped:   skipped,
+				cause:     err,
+			}
 		}
+		completed = append(completed, group.hashes...)
 	}
 	return nil
 }
@@ -251,6 +328,9 @@ func (a *App) SetTags(hash, tags string) error {
 	// operation with the add/remove endpoints available in that release. Newer
 	// servers take the native path above and avoid the extra info request.
 	if err := a.replaceTagsLegacy(hash, tags); err != nil {
+		if _, grouped := err.(*groupedMutationError); grouped {
+			return codedErrWrapf(ExitSetFail, err, "%v", err)
+		}
 		return codedErrWrapf(ExitSetFail, err, "Failed to set tags to '%s': %v", tags, err)
 	}
 
@@ -307,18 +387,44 @@ func (a *App) replaceTagsLegacy(hash, tags string) error {
 		}
 		groups[index].hashes = append(groups[index].hashes, strings.ToLower(torrent.Hash))
 	}
-	for _, group := range groups {
+	completed := make([]string, 0, len(torrents))
+	for groupIndex, group := range groups {
 		selector := strings.Join(group.hashes, "|")
 		if len(group.add) > 0 {
 			if err := a.updateTagsLegacy(selector, group.add, "/api/v2/torrents/addTags"); err != nil {
-				return fmt.Errorf("add tags: %w", err)
+				skipped := make([]string, 0)
+				for _, remaining := range groups[groupIndex+1:] {
+					skipped = append(skipped, remaining.hashes...)
+				}
+				return &groupedMutationError{
+					operation: "set tags (add)",
+					completed: completed,
+					failed:    append([]string(nil), group.hashes...),
+					skipped:   skipped,
+					cause:     err,
+				}
 			}
 		}
 		if len(group.remove) > 0 {
 			if err := a.updateTagsLegacy(selector, group.remove, "/api/v2/torrents/removeTags"); err != nil {
-				return fmt.Errorf("remove tags: %w", err)
+				skipped := make([]string, 0)
+				for _, remaining := range groups[groupIndex+1:] {
+					skipped = append(skipped, remaining.hashes...)
+				}
+				operation := "set tags (remove)"
+				if len(group.add) > 0 {
+					operation += ", add completed"
+				}
+				return &groupedMutationError{
+					operation: operation,
+					completed: completed,
+					failed:    append([]string(nil), group.hashes...),
+					skipped:   skipped,
+					cause:     err,
+				}
 			}
 		}
+		completed = append(completed, group.hashes...)
 	}
 
 	return nil
@@ -436,6 +542,12 @@ func (a *App) SetField(hash, field, value string) error {
 		return a.SetRatioLimit(hash, value)
 	case "seedtime-limit":
 		return a.SetSeedtimeLimit(hash, value)
+	case "inactive-seedtime-limit":
+		return a.SetInactiveSeedtimeLimit(hash, value)
+	case "share-limits-mode":
+		return a.SetShareLimitsMode(hash, value)
+	case "share-limit-action":
+		return a.SetShareLimitAction(hash, value)
 	case "seqdl":
 		return a.SetSequentialDownload(hash, value)
 	case "autotmm":

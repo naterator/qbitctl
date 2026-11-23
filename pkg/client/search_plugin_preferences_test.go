@@ -170,3 +170,45 @@ func TestSetDefaultSearchPluginCanonicalizesGroupSelectors(t *testing.T) {
 		t.Fatal("DefaultSearchPlugins must not be empty")
 	}
 }
+
+func TestResetDefaultSearchPluginIfMatchesIsAtomicAndServerScoped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := configfile.Update(path, func(object configfile.Object) (bool, error) {
+		object["url"] = json.RawMessage(`"https://qbt.example:443/webui"`)
+		object["user"] = json.RawMessage(`"admin"`)
+		object["owner"] = json.RawMessage(`{"name":"nate"}`)
+		object[defaultSearchPluginConfigKey] = json.RawMessage(`"jackett"`)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	other := &App{configPath: path, creds: Credentials{URL: "https://other.example", User: "admin"}}
+	if err := other.ResetDefaultSearchPluginIfMatches("jackett"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadDefaultSearchPlugin(path); err != nil || got != "jackett" {
+		t.Fatalf("other-server reset = %q, %v; want jackett", got, err)
+	}
+
+	app := &App{configPath: path, creds: Credentials{URL: "https://qbt.example", User: "admin"}}
+	if err := app.ResetDefaultSearchPluginIfMatches("missing"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadDefaultSearchPlugin(path); err != nil || got != "jackett" {
+		t.Fatalf("stale reset = %q, %v; want jackett", got, err)
+	}
+	if err := app.ResetDefaultSearchPluginIfMatches("jackett"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadDefaultSearchPlugin(path); err != nil || got != DefaultSearchPlugins {
+		t.Fatalf("matching reset = %q, %v; want %q", got, err, DefaultSearchPlugins)
+	}
+	object, err := configfile.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := object["owner"]; !ok {
+		t.Fatal("reset removed unrelated config")
+	}
+}

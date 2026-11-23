@@ -81,6 +81,47 @@ func TestQueueSortPreservesFocusAndMarksOnRefresh(t *testing.T) {
 	}
 }
 
+func TestQueueSortsBySizeRatioETAAndRates(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.replaceQueue([]client.TorrentInfo{
+		{Hash: "a", Name: "Alpha", TotalSize: 1000, Ratio: 1.25, ETA: 20, DLSpeed: 1, UpSpeed: 30},
+		{Hash: "b", Name: "Bravo", TotalSize: 10, Ratio: -1, ETA: -1, DLSpeed: 40, UpSpeed: 10},
+		{Hash: "c", Name: "Charlie", TotalSize: 100, Ratio: 2, ETA: 10, DLSpeed: 20, UpSpeed: 10},
+	})
+	for _, tc := range []struct {
+		order queueSort
+		want  []string
+	}{
+		{queueSizeDesc, []string{"a", "c", "b"}},
+		{queueRatioDesc, []string{"b", "c", "a"}},
+		{queueETAAsc, []string{"c", "a", "b"}},
+		{queueDownloadDesc, []string{"b", "c", "a"}},
+		{queueUploadDesc, []string{"a", "b", "c"}},
+	} {
+		m.setQueueSort(tc.order)
+		if got := queueTestHashes(m); !slices.Equal(got, tc.want) {
+			t.Errorf("sort %q = %v, want %v", tc.order, got, tc.want)
+		}
+	}
+}
+
+func TestQueueDetailShowsKnownSwarmCounts(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.replaceQueue([]client.TorrentInfo{{
+		Hash: "a", Name: "Alpha", ConnectedSeeds: new(int64(0)), TotalSeeders: new(int64(17)),
+		ConnectedLeechers: new(int64(2)), TotalLeechers: new(int64(-1)), QueuePosition: new(int64(3)),
+	}})
+	display := strings.Join(m.viewTorrentDetail(80), "\n")
+	for _, want := range []string{"0 connected · 17 in swarm", "2 connected", "Position"} {
+		if !strings.Contains(display, want) {
+			t.Errorf("missing %q in detail %q", want, display)
+		}
+	}
+	if strings.Contains(display, "-1 in swarm") {
+		t.Errorf("detail shows unknown count: %q", display)
+	}
+}
+
 func TestQueueSortPickerAndSearchSortAreIndependent(t *testing.T) {
 	m := newModel(t.Context(), nil)
 	m.handleKey("ctrl+p")
@@ -106,6 +147,7 @@ func TestQueueSortPickerAndSearchSortAreIndependent(t *testing.T) {
 	wantLabels := []string{
 		"Active first", "Name A-Z", "Name Z-A", "Progress low to high",
 		"Progress high to low", "State A-Z", "State Z-A",
+		"Largest first", "Highest ratio", "Shortest ETA", "Highest download speed", "Highest upload speed",
 	}
 	gotLabels := make([]string, 0, len(m.dialog.items))
 	for _, item := range m.dialog.items {

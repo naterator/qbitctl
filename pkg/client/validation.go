@@ -56,6 +56,19 @@ func ValidateSetValue(field, value string) error {
 		}
 		_, err = seedtimeLimitSecondsToMinutes(seconds)
 		return err
+	case "inactive-seedtime-limit":
+		seconds, err := parseSeedtimeLimit(value)
+		if err != nil {
+			return err
+		}
+		_, err = seedtimeLimitSecondsToMinutes(seconds)
+		return err
+	case "share-limits-mode":
+		_, err := parseShareLimitsMode(value)
+		return err
+	case "share-limit-action":
+		_, err := parseShareLimitAction(value)
+		return err
 	case "seqdl", "autotmm", "superseed":
 		_, err := parseToggleValue(value)
 		return err

@@ -32,6 +32,9 @@ func TestInvalidOutputAndFieldValuesFailBeforeAuth(t *testing.T) {
 		{name: "invalid ratio", args: []string{"set", "ratio-limit", "-1", fullHash}},
 		{name: "invalid toggle", args: []string{"set", "seqdl", "maybe", fullHash}},
 		{name: "partial seed time", args: []string{"set", "seedtime-limit", "30s", fullHash}},
+		{name: "invalid add content layout", args: []string{"add", "magnet:?xt=urn:btih:abc", "--content-layout", "nested"}},
+		{name: "invalid add stop condition", args: []string{"add", "magnet:?xt=urn:btih:abc", "--stop-condition", "ratio"}},
+		{name: "invalid add share action", args: []string{"add", "magnet:?xt=urn:btih:abc", "--share-limit-action", "explode"}},
 		{name: "stdin remains unread", args: []string{"set", "nmae", "x", fullHash, "--pass-stdin"}, pass: true},
 	}
 

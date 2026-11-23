@@ -81,6 +81,22 @@ func (c *tuiClient) searchPlugins(ctx context.Context) ([]searchPluginInfo, erro
 	return app.SearchPlugins()
 }
 
+func (c *tuiClient) categories(ctx context.Context) ([]client.Category, error) {
+	if c == nil || c.app == nil {
+		return nil, fmt.Errorf("qBittorrent client is not configured")
+	}
+	app := c.withContext(ctx, io.Discard, io.Discard)
+	return app.GetCategories()
+}
+
+func (c *tuiClient) tags(ctx context.Context) ([]string, error) {
+	if c == nil || c.app == nil {
+		return nil, fmt.Errorf("qBittorrent client is not configured")
+	}
+	app := c.withContext(ctx, io.Discard, io.Discard)
+	return app.GetTags()
+}
+
 func (c *tuiClient) withContext(ctx context.Context, stdout, stderr io.Writer) *client.App {
 	if ctx == nil {
 		ctx = context.Background()
@@ -484,13 +500,20 @@ func (c *tuiClient) server(ctx context.Context) ([]detailRow, error) {
 		return nil, fmt.Errorf("qBittorrent client is not configured")
 	}
 	app := c.withContext(ctx, io.Discard, io.Discard)
-	// Server values must remain live even when the queue page has not been
-	// visited recently. The client caches the two version probes for the
-	// session, leaving this refresh to make only the current transfer request.
+	// The active preset can change while the Server tab is open. The queue's
+	// sync state only updates when the queue is polled.
 	fields, err := app.ServerDisplayFields()
 	if err != nil {
 		return nil, err
 	}
+	alternate, modeErr := app.FetchSpeedLimitsMode()
+	mode := "normal"
+	if modeErr != nil {
+		mode = "unavailable"
+	} else if alternate {
+		mode = "alternate"
+	}
+	fields["Speed limits mode"] = mode
 	return orderRows(detailRowsFromMap(fields), serverRowOrder), nil
 }
 
@@ -561,6 +584,14 @@ func (c *tuiClient) action(ctx context.Context, req actionRequest) error {
 		return app.EditTracker(req.hashes, req.original, req.value)
 	case "tracker-remove":
 		return app.RemoveTrackers(req.hashes, req.value)
+	case "transfer-download":
+		return app.SetGlobalDownloadLimit(req.value)
+	case "transfer-upload":
+		return app.SetGlobalUploadLimit(req.value)
+	case "transfer-mode":
+		return app.SetSpeedLimitsMode(strings.EqualFold(strings.TrimSpace(req.value), "alternate"))
+	case "ban-peer":
+		return app.BanPeers(req.value)
 	default:
 		return fmt.Errorf("unsupported TUI action %q", req.kind)
 	}
@@ -577,6 +608,7 @@ var serverRowOrder = []string{
 	"Transferred: Up",
 	"Limit: Download",
 	"Limit: Upload",
+	"Speed limits mode",
 }
 
 var detailRowOrder = []string{

@@ -110,8 +110,9 @@ func executeBatchLine(cmd *cobra.Command, app *App, line string) error {
 	connection := app.ConnectionOptions()
 	flags := child.PersistentFlags()
 	for name, value := range map[string]string{
-		"config": connection.ConfigPath, "url": connection.URL,
-		"user": connection.User, "units": string(connection.DataUnits),
+		"config": connection.ConfigPath, "profile": connection.Profile,
+		"url": connection.URL, "user": connection.User,
+		"ca-file": connection.CAFile, "units": string(connection.DataUnits),
 	} {
 		if value != "" {
 			if err := flags.Lookup(name).Value.Set(value); err != nil {
@@ -129,13 +130,13 @@ func validateBatchCommand(cmd *cobra.Command) error {
 		group = group.Parent()
 	}
 	switch group.Name() {
-	case "add", "delete", "files", "force-start", "get", "info", "list", "move", "pause",
+	case "add", "categories", "delete", "files", "force-start", "get", "info", "list", "move", "pause",
 		"peers", "queue", "reannounce", "recheck", "remove", "rename", "search", "set",
-		"show", "start", "trackers", "version":
+		"show", "start", "tags", "trackers", "transfer", "version":
 	default:
 		return fmt.Errorf("command %q is not supported inside batch", cmd.Name())
 	}
-	for _, name := range []string{"config", "url", "user", "pass", "pass-stdin", "http-timeout"} {
+	for _, name := range []string{"config", "profile", "url", "user", "pass", "pass-stdin", "ca-file", "http-timeout"} {
 		if flag := cmd.Flag(name); flag != nil && flag.Changed {
 			return fmt.Errorf("--%s must be supplied to the parent batch command", name)
 		}

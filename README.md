@@ -11,8 +11,14 @@ On macOS, Linux, or a supported BSD, run this in your terminal.
 curl -fsSL https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.sh | bash
 ```
 
-On Windows, download the `.exe` for your architecture and put it on your
-PATH. Manual downloads are available for every build. [GitHub releases](https://github.com/naterator/qbitctl/releases/latest)
+On Windows, download `install.ps1`, sign in with `gh auth login`, and run
+the script in PowerShell 7 or later. It verifies the release ZIP before
+installing to `%LOCALAPPDATA%\qbitctl`. Use `-AddToPath` to add that directory
+to your user PATH. [Download install.ps1](https://raw.githubusercontent.com/naterator/qbitctl/main/scripts/install.ps1)
+
+```powershell
+.\install.ps1 -AddToPath
+```
 
 ## Quick start
 
@@ -37,21 +43,30 @@ qbitctl add ./ubuntu.torrent
 Use `Tab` to switch between Queue, Search, Server, and Config. Press `?` for
 shortcuts or `Ctrl+P` for actions that fit the current tab and selection.
 Mark torrents with `Space` to edit them together. Press Enter in the Queue to
-open live torrent details. Use `2` for Files and `3` for Peers. In Files,
-`F2` renames the selected file and `F3` renames its folder. Press `o`
+open live torrent details. Use `2` for Trackers, `3` for Files, and `4` for
+Peers. Press `t` in the Queue to open Trackers directly. In Trackers, `a`
+adds, `e` edits, `d` removes, and `v` reveals full URLs. In Files, `F2`
+renames the selected file and `F3` renames its folder. Press `o`
 in the queue to sort by size, ratio, ETA, or either transfer speed. The
 queue detail pane shows connected and swarm counts when the server reports them.
 The queue refreshes every five seconds while transferring and every 15
 seconds when idle. The command palette can pause automatic refresh, and
-`r` still refreshes on demand. Set `qbitctl tui-default on` to open the TUI
-when you run `qbitctl` by itself.
+`r` still refreshes on demand. Use the queue filters to select a state,
+category, or tag. Copy a selected torrent's hash or magnet link from the
+command palette when your terminal supports OSC 52. Set
+`qbitctl tui-default on` to open the TUI when you run `qbitctl` by itself.
+
+The Server tab shows global limits and the active speed mode. Switch modes
+to edit the other preset. The Peers view can ban a selected peer after you
+confirm it.
 
 Config groups settings under **Connection**, **View**, and **Search**, with a
 **Files** section for the config and search cache paths. Use
 ↑/↓ or `j`/`k` to move and Enter to change the selected setting. Under View,
 **Data units** switches between human-readable sizes and speeds (the
 default) and exact bytes and bytes per second. qbitctl saves the choice for
-both the TUI and CLI.
+both the TUI and CLI. View also has options for extra queue columns and a
+fixed refresh interval.
 
 On the Search tab, the query and current provider are just below the tabs.
 Press `p` (**Providers**) to choose **Enabled search plugins** (the default),
@@ -61,7 +76,7 @@ and used for TUI and CLI searches. If a saved plugin is no longer available or
 enabled, qbitctl uses **Enabled search plugins**. Press `m` in the picker to
 manage the server's plugins. Press `/` to start a search.
 
-![qbitctl TUI showing Config, the search provider picker, and live torrent details](assets/demo.gif)
+![qbitctl walkthrough showing Config, torrent details with Trackers, and the search provider picker](assets/demo.gif)
 
 [Terminal recording](assets/demo.cast) · [Recording script](scripts/record_demo.py)
 
@@ -77,11 +92,13 @@ unambiguous prefix.
 | `info`, `list`, `show`, `get` | Read server stats, list torrents, or inspect a specific torrent. |
 | `files`, `peers`, `trackers` | Inspect torrent contents and swarm connections, set file priorities, or manage trackers. |
 | `search`, `add` | Search installed plugins or add a file, magnet, URL, or search result. |
+| `transfer` | Inspect speed limits, edit the active limits, or switch between normal and alternate mode. |
+| `categories`, `tags` | Manage server categories and tags or change torrent tag assignments. |
 | `set`, `move` | Change torrent settings or move data on the server. |
 | `start`, `pause`, `force-start` | Control one or more torrents. |
 | `recheck`, `reannounce`, `rename`, `queue` | Verify data, refresh tracker announcements, rename a torrent, or change its place in the queue. |
 | `remove`, `delete` | Remove a torrent. `delete` also removes its files. |
-| `config`, `tui-default` | Set up the connection or change what bare `qbitctl` opens. |
+| `config`, `profile`, `tui-default` | Manage saved connections and startup behavior. |
 | `update`, `version`, `completion` | Update qbitctl, show its version, or generate shell completions. |
 
 ```bash
@@ -93,12 +110,20 @@ qbitctl files 9c328901
 qbitctl files priority 9c328901 skip 2 3
 qbitctl queue top 9c328901 fedcba98
 qbitctl pause 9c328901 fedcba98
+qbitctl transfer mode alternate
+qbitctl transfer set download 524288
+qbitctl categories create linux /downloads/linux --download-path /incomplete
+qbitctl tags add linux 9c328901
 qbitctl completion bash
 ```
 
 Use `qbitctl batch commands.txt` to run one command per line with a shared
 login. Pipe the commands into `qbitctl batch` to read them from stdin.
 A batch stops on the first error unless you pass `--continue-on-error`.
+
+Use `set category <name> <hash>` to assign a category to a torrent.
+`tags remove <tag> <hash>` detaches a tag from a torrent. `tags delete <tag>`
+deletes it from the server catalog.
 
 Use `qbitctl show <hash> --fields name,seeds,leechers,queue-position`
 for a compact view. Fields the server omits are blank. `dl-path` and its
@@ -158,6 +183,12 @@ key lives in your default Keychain. Over SSH, qbitctl can use your unlocked
 login Keychain while your macOS login session is active. For a headless setup,
 supply the same `QBITCTL_MASTER_KEY` when saving the config and on later runs.
 
+Use `qbitctl profile list` to see saved connections, `--profile NAME` to pick
+one for a command, and `qbitctl profile use NAME` to set the startup default.
+Config has separate **Active profile** and **Startup profile** rows. Each
+profile has its own search provider, and view preferences apply across
+profiles.
+
 To use a different server or account, pass `--url` and `--user` with an
 explicit password. URLs can include a reverse-proxy path prefix. For scripts,
 pass the password on stdin or set `QBITCTL_PASSWORD` for that invocation.
@@ -166,6 +197,10 @@ Use `config write` to save settings from a script.
 ```bash
 printf '%s\n' "$QBT_PASS" | qbitctl -u https://nas.example/qbt/ -U admin --pass-stdin list
 ```
+
+For a private certificate authority, add `--ca-file /path/to/ca.pem` to the
+command. Save it with `config write` or in the connection settings in the
+TUI. qbitctl adds the bundle to system trust and checks the server hostname.
 
 ## Updates and install options
 

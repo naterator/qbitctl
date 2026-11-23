@@ -17,9 +17,13 @@ const (
 	configSettingServer configSettingID = iota
 	configSettingUsername
 	configSettingPassword
+	configSettingProfile
+	configSettingStartupProfile
+	configSettingCAFile
 	configSettingTUIDefault
 	configSettingTheme
 	configSettingDataUnits
+	configSettingRefreshInterval
 	configSettingSearchProvider
 	configSettingConfigFile
 	configSettingSearchCache
@@ -40,13 +44,47 @@ func (m *model) configSettings() []configSetting {
 		{configSettingServer, "Connection", "Server address", m.setup.url},
 		{configSettingUsername, "Connection", "Username", m.setup.user},
 		{configSettingPassword, "Connection", "Password", configPasswordStatus(m.setup.hasPassword)},
+		{configSettingProfile, "Connection", "Active profile", m.profileStatus()},
+		{configSettingStartupProfile, "Connection", "Startup profile", m.startupProfileStatus()},
+		{configSettingCAFile, "Connection", "CA bundle", m.caFileStatus()},
 		{configSettingTUIDefault, "View", "TUI by default", configToggleStatus(m.setup.tuiDefault)},
 		{configSettingTheme, "View", "Color scheme", configThemeStatus(m)},
 		{configSettingDataUnits, "View", "Data units", m.dataUnitsLabel()},
+		{configSettingRefreshInterval, "View", "Refresh interval", m.refreshIntervalLabel()},
 		{configSettingSearchProvider, "Search", "Default provider", m.searchPluginLabel(m.savedSearchPlugin)},
 		{configSettingConfigFile, "Files", "Config file", m.configFileStatus()},
 		{configSettingSearchCache, "Files", "Search cache", searchCacheFileStatus()},
 	}
+}
+
+func (m *model) profileStatus() string {
+	if profile := strings.TrimSpace(m.setup.profile); profile != "" {
+		return profile
+	}
+	return "Legacy single-server config"
+}
+
+func (m *model) caFileStatus() string {
+	if caFile := strings.TrimSpace(m.setup.caFile); caFile != "" {
+		return absoluteConfigPagePath(caFile)
+	}
+	return "System trust store"
+}
+
+func (m *model) startupProfileStatus() string {
+	path := strings.TrimSpace(m.configPath)
+	if path == "" {
+		path = strings.TrimSpace(m.setup.path)
+	}
+	if path != "" {
+		if profiles, name, err := client.ReadProfiles(path); err == nil && strings.TrimSpace(name) != "" {
+			if len(profiles) == 1 && profiles[0].Name == client.DefaultProfileName && strings.TrimSpace(m.setup.profile) == "" {
+				return m.profileStatus()
+			}
+			return name
+		}
+	}
+	return m.profileStatus()
 }
 
 func (m *model) configFileStatus() string {
@@ -179,13 +217,27 @@ func (m *model) activateConfigSetting() tea.Cmd {
 		if m.dialog == nil {
 			return nil
 		}
-		return m.dialog.focusField(int(settings[index].id - configSettingServer))
+		focus := map[configSettingID]int{configSettingServer: 0, configSettingUsername: 1, configSettingPassword: 2}[settings[index].id]
+		return m.dialog.focusField(focus)
+	case configSettingProfile:
+		return m.openProfilePicker()
+	case configSettingStartupProfile:
+		return m.openStartupProfilePicker()
+	case configSettingCAFile:
+		m.openConnectionEditor(false)
+		if m.dialog == nil {
+			return nil
+		}
+		return m.dialog.focusField(3)
 	case configSettingTUIDefault:
 		return m.toggleTUIDefault()
 	case configSettingTheme:
 		return m.openThemePicker()
 	case configSettingDataUnits:
 		return m.toggleDataUnits()
+	case configSettingRefreshInterval:
+		m.openRefreshIntervalDialog()
+		return nil
 	case configSettingSearchProvider:
 		return m.openSearchPluginPicker()
 	case configSettingConfigFile, configSettingSearchCache:

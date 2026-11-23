@@ -40,6 +40,7 @@ const (
 	actionWork
 	configWork
 	connectWork
+	queueCatalogWork
 )
 
 type service interface {
@@ -56,6 +57,14 @@ type searchPluginInfo = client.SearchPlugin
 
 type searchPluginService interface {
 	searchPlugins(context.Context) ([]searchPluginInfo, error)
+}
+
+// queueFilterCatalogService is optional so the in-memory TUI test services and
+// older adapters can continue to provide queue filtering from the current
+// snapshot. The qBittorrent adapter implements it with the server catalogs.
+type queueFilterCatalogService interface {
+	categories(context.Context) ([]client.Category, error)
+	tags(context.Context) ([]string, error)
 }
 
 // searchCatalogService lets the TUI pass the catalog it just fetched to the
@@ -83,6 +92,7 @@ type torrentFilePriorityService interface {
 
 type workDone struct {
 	kind                      workKind
+	remoteGeneration          uint64
 	queue                     []client.TorrentInfo
 	queueChanged              bool
 	queueTransfer             queueTransferState
@@ -90,8 +100,6 @@ type workDone struct {
 	rows                      []detailRow
 	title                     string
 	detailTarget              *torrentDetailTarget
-	trackerEntries            []client.TrackerEntry
-	trackerLoaded             bool
 	detailUpdate              *torrentDetailUpdate
 	detailTabUpdate           *detailTabUpdate
 	notice                    string
@@ -100,13 +108,17 @@ type workDone struct {
 	setDefault                *bool
 	setDataUnits              *client.DataUnits
 	plugins                   []searchPluginInfo
+	categories                []client.Category
+	tags                      []string
+	catalogFilterKind         string
 	pluginGeneration          uint64
 	pluginSelectionGeneration uint64
 	effectivePlugin           string
 	searchPluginWasDefault    bool
 	pluginAction              string
 	pluginActionName          string
-	trackerAction             bool
+	trackerActionDialog       *dialog
+	peerBan                   bool
 	err                       error
 }
 
@@ -132,9 +144,13 @@ type model struct {
 	connectExplicit bool
 	connectCanceled bool
 	connectTarget   string
-	exitErr         error
-	theme           themeID
-	themePreview    themeID
+	// remoteGeneration invalidates late responses after a session/profile
+	// switch. A canceled worker may still return after the new connection is
+	// already rendering, so finishWork must not let it repopulate that view.
+	remoteGeneration uint64
+	exitErr          error
+	theme            themeID
+	themePreview     themeID
 
 	page                            page
 	width, height                   int
@@ -152,7 +168,11 @@ type model struct {
 	marked                          map[string]bool
 	filter                          string
 	stateFilter                     string
+	categoryFilter                  string
+	tagFilter                       string
 	queueSort                       queueSort
+	queueColumns                    queueColumnPreset
+	refreshIntervalSetting          time.Duration
 	resultFilter                    resultFilter
 	resultSort                      resultSort
 	resultEditor                    *resultFilterEditor
@@ -174,6 +194,12 @@ type model struct {
 	dialog                          *dialog
 	busy, notice                    string
 	failed                          bool
+	output                          io.Writer
+	tmux                            bool
+	lastMouseIndex                  int
+	lastMouseAt                     time.Time
+	lastDialogMouseIndex            int
+	lastDialogMouseAt               time.Time
 
 	noticeID uint64
 }
@@ -186,7 +212,7 @@ func newModel(ctx context.Context, backend service) *model {
 	return &model{
 		ctx: ctx, backend: backend, width: 80, height: 24,
 		marked: make(map[string]bool), stateFilter: "all",
-		queueSort: queueActiveFirst, resultSort: resultOriginal,
+		queueSort: queueActiveFirst, queueColumns: queueColumnsCompact, resultSort: resultOriginal,
 		searchPlugin:              defaultSearchPluginSelection,
 		savedSearchPlugin:         defaultSearchPluginSelection,
 		searchPluginDefaultActive: true, searchTimeout: 30 * time.Second,
@@ -217,6 +243,9 @@ const (
 )
 
 func (m *model) refreshInterval() time.Duration {
+	if m.refreshIntervalSetting > 0 {
+		return m.refreshIntervalSetting
+	}
 	// Keep the first refresh short so page entry gets a responsive initial
 	// snapshot. Once a queue is established, quiet queues can use a less
 	// chatty cadence while active transfers retain the five-second updates.
@@ -236,7 +265,7 @@ func (m *model) nextTick() tea.Cmd {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	noticeID := m.noticeID
 	cmd := m.update(msg)
-	if _, ok := msg.(workDone); ok && m.dialog != nil && m.dialog.kind == dialogPalette {
+	if _, ok := msg.(workDone); ok && m.dialog != nil && m.dialog.kind == dialogPalette && !m.dialog.paletteStatic {
 		m.dialog.allItems = m.paletteCommands()
 		m.dialog.refreshPalette()
 	}
@@ -285,6 +314,10 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 			}
 		}
 		return m.nextTick()
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
+	case tea.MouseWheelMsg:
+		return m.handleMouseWheel(msg)
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			if !m.quitting && m.busy != "" && (m.work == searchWork || m.work == searchPluginManageWork) {
@@ -355,6 +388,9 @@ func (m *model) handleKey(key string) tea.Cmd {
 				return nil
 			}
 			return m.openAction("cancel-search")
+		} else if m.busy != "" && m.work == queueCatalogWork && m.cancel != nil {
+			m.cancel()
+			m.busy = "Canceling filter catalog"
 		} else if m.searchPluginsLoading && m.dialog != nil && m.dialog.kind == dialogSearchPlugins {
 			m.cancelSearchPlugins()
 		} else if m.page == searchPage && m.resultFilter.active() {
@@ -393,7 +429,11 @@ func (m *model) handleKey(key string) tea.Cmd {
 		if m.page == configPage {
 			return m.activateConfigSetting()
 		}
-		return m.openAction("server-details")
+		return nil
+	case "y":
+		if m.page == queuePage || m.page == searchPage {
+			return m.openAction("copy")
+		}
 	}
 	if m.page == configPage {
 		return nil
@@ -418,6 +458,8 @@ func (m *model) handleKey(key string) tea.Cmd {
 		return m.openAction("edit")
 	case "o":
 		return m.openAction("sort-queue")
+	case "c":
+		return m.openAction("queue-columns")
 	case "s":
 		return m.openAction("start")
 	case "p":
@@ -441,6 +483,7 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 		return nil
 	}
 	ctx, cancel := context.WithCancel(m.ctx)
+	generation := m.remoteGeneration
 	m.cancel, m.work, m.busy = cancel, kind, label
 	done := make(chan workDone, 1)
 	m.workers.Add(1)
@@ -454,12 +497,23 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 			m.pendingMu.Unlock()
 		}
 		result.kind = kind
+		result.remoteGeneration = generation
 		done <- result
 	}()
 	return func() tea.Msg { return <-done }
 }
 
 func (m *model) finishWork(done workDone) tea.Cmd {
+	if done.remoteGeneration != m.remoteGeneration {
+		m.releasePendingApp(done.app)
+		if done.app != nil {
+			done.app.Logout()
+		}
+		if m.quitting {
+			return tea.Quit
+		}
+		return nil
+	}
 	if done.kind == searchPluginsWork {
 		if done.pluginGeneration != m.searchPluginGeneration {
 			if m.quitting {
@@ -529,6 +583,21 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		m.openSearchPluginManagement()
 		return nil
 	}
+	if done.kind == queueCatalogWork {
+		m.cancel, m.busy = nil, ""
+		if m.quitting {
+			return tea.Quit
+		}
+		if errors.Is(done.err, context.Canceled) {
+			return nil
+		}
+		if done.err != nil {
+			m.setNotice(done.err.Error(), true)
+			return nil
+		}
+		m.openQueueCatalogPicker(done.catalogFilterKind, done.categories, done.tags)
+		return nil
+	}
 	m.cancel, m.busy = nil, ""
 	if m.quitting {
 		m.releasePendingApp(done.app)
@@ -587,7 +656,10 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		if done.app != nil {
 			done.app.Logout()
 		}
-		if done.trackerAction && m.dialog != nil && (m.dialog.kind == dialogTrackers || m.dialog.kind == dialogTrackerAdd || m.dialog.kind == dialogTrackerEdit) {
+		if done.trackerActionDialog != nil && m.dialog == done.trackerActionDialog {
+			m.dialog.status = done.err.Error()
+		}
+		if done.peerBan && m.dialog != nil && m.dialog.torrentDetails != nil {
 			m.dialog.status = done.err.Error()
 		}
 		m.setNotice(done.err.Error(), true)
@@ -599,6 +671,7 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	switch done.kind {
 	case queueWork:
 		m.queueTransfer = done.queueTransfer
+		m.updateQueueActivity(done.queueTransfer)
 		if done.queueChanged || m.allTorrents == nil {
 			m.replaceQueue(done.queue)
 		}
@@ -609,21 +682,19 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 		m.serverRows = done.rows
 	case detailWork:
 		if m.dialog == nil && m.page == queuePage {
-			if done.trackerLoaded {
-				m.openTrackerDialog(done.title, done.detailTarget.hash, done.trackerEntries)
-			} else {
-				m.openDetailDialog(done.title, done.rows)
-			}
+			m.openDetailDialog(done.title, done.rows)
 			m.dialog.torrentDetails = done.detailTarget
 		}
 	case actionWork:
-		if done.trackerAction && m.dialog != nil && m.dialog.torrentDetails != nil && m.dialog.torrentDetails.trackers {
-			m.dialog.kind = dialogTrackers
-			m.dialog.fields = nil
-			m.dialog.focus = 0
-			m.dialog.request = actionRequest{}
-			m.dialog.status = ""
+		if done.trackerActionDialog != nil && m.dialog == done.trackerActionDialog {
+			m.closeTrackerForm()
 			return m.refreshTorrentDetails()
+		}
+		if done.peerBan && m.dialog != nil && m.dialog.torrentDetails != nil {
+			return m.refreshTorrentDetails()
+		}
+		if m.page == serverPage {
+			return m.refresh()
 		}
 		if m.page == queuePage {
 			return m.refresh()
@@ -707,6 +778,12 @@ func (m *model) finishCanceledConnection(app *client.App) tea.Cmd {
 }
 
 func (m *model) adoptApp(app *client.App, setup setupState) {
+	if strings.TrimSpace(setup.profile) == "" {
+		setup.profile = app.ProfileName()
+	}
+	if strings.TrimSpace(setup.caFile) == "" {
+		setup.caFile = app.CAFile
+	}
 	m.app, m.ownsApp = app, true
 	m.backend = &tuiClient{app: app}
 	if m.dataUnitsExplicit {
@@ -759,8 +836,9 @@ func (m *model) refresh() tea.Cmd {
 	}
 	switch m.page {
 	case serverPage:
+		backend := m.backend
 		return m.startWork(serverWork, "Reading server info", func(ctx context.Context) workDone {
-			rows, err := m.backend.server(ctx)
+			rows, err := backend.server(ctx)
 			return workDone{rows: rows, err: err}
 		})
 	case searchPage:
@@ -995,27 +1073,30 @@ func (m *model) loadDetails(trackers bool) tea.Cmd {
 	if !ok || m.page != queuePage || m.backend == nil {
 		return nil
 	}
-	label := "Loading torrent details"
+	target := torrentDetailTarget{hash: torrent.Hash}
 	if trackers {
-		label = "Loading trackers"
+		if m.busy != "" {
+			return nil
+		}
+		m.openDetailDialog(torrent.Name, nil)
+		m.dialog.torrentDetails = &target
+		return m.loadDetailTab(detailTabTrackers)
 	}
 	backend := m.backend
-	target := torrentDetailTarget{hash: torrent.Hash, trackers: trackers}
-	return m.startWork(detailWork, label, func(ctx context.Context) workDone {
-		if trackers {
-			if trackerBackend, ok := backend.(trackerService); ok {
-				entries, err := trackerBackend.trackers(ctx, target.hash)
-				return workDone{title: target.title(torrent.Name), detailTarget: &target, trackerEntries: entries, trackerLoaded: true, err: err}
-			}
-		}
-		rows, err := backend.details(ctx, target.hash, target.trackers)
-		return workDone{title: target.title(torrent.Name), rows: rows, detailTarget: &target, err: err}
+	return m.startWork(detailWork, "Loading torrent details", func(ctx context.Context) workDone {
+		rows, err := backend.details(ctx, target.hash, false)
+		return workDone{title: torrent.Name, rows: rows, detailTarget: &target, err: err}
 	})
 }
 
 func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
+	backend := m.backend
+	var trackerDialog *dialog
+	if strings.HasPrefix(request.kind, "tracker-") {
+		trackerDialog = m.dialog
+	}
 	return m.startWork(actionWork, label, func(ctx context.Context) workDone {
-		err := m.backend.action(ctx, request)
+		err := backend.action(ctx, request)
 		notices := map[string]string{
 			"add": "Torrent submitted", "add-result": "Search result submitted", "start": "Started selected torrents",
 			"pause": "Paused selected torrents", "force-start": "Force started selected torrents", "move": "Move requested",
@@ -1024,6 +1105,8 @@ func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
 			"queue-top": "Moved selected torrents to the top", "queue-bottom": "Moved selected torrents to the bottom",
 			"rename": "Torrent renamed", "remove": "Removed selected torrents", "delete": "Deleted selected torrents and files", "set": "Saved torrent property",
 			"tracker-add": "Tracker added", "tracker-edit": "Tracker updated", "tracker-remove": "Tracker removed",
+			"transfer-download": "Global download limit saved", "transfer-upload": "Global upload limit saved",
+			"transfer-mode": "Speed limits mode updated", "ban-peer": "Peer banned",
 		}
 		notice := notices[request.kind]
 		if request.kind == "set" {
@@ -1032,7 +1115,7 @@ func (m *model) launchAction(label string, request actionRequest) tea.Cmd {
 				notice = fmt.Sprintf("Saved %s for %d torrents", request.field, count)
 			}
 		}
-		return workDone{notice: notice, trackerAction: strings.HasPrefix(request.kind, "tracker-"), err: err}
+		return workDone{notice: notice, trackerActionDialog: trackerDialog, peerBan: request.kind == "ban-peer", err: err}
 	})
 }
 
@@ -1126,35 +1209,30 @@ func (m *model) replaceQueue(torrents []client.TorrentInfo) {
 	}
 }
 
+// updateQueueActivity keeps adaptive refresh responsive when maindata reports
+// only server_state changes. A partial sync can omit server_state entirely;
+// nil rates therefore preserve the last known activity rather than turning an
+// established active queue into an idle one.
+func (m *model) updateQueueActivity(transfer queueTransferState) {
+	if transfer.download == nil && transfer.upload == nil {
+		return
+	}
+	m.queueActive = (transfer.download != nil && *transfer.download > 0) ||
+		(transfer.upload != nil && *transfer.upload > 0)
+}
+
 func (m *model) setFilter(query, state string) {
-	query, state = strings.TrimSpace(query), strings.TrimSpace(state)
-	if state == "" {
-		state = "all"
-	}
-	if m.filter != query || m.stateFilter != state {
-		m.clearMarks()
-	}
-	m.filter, m.stateFilter = query, state
-	m.rebuildQueue()
+	next := m.currentQueueFilter()
+	next.query, next.state = query, state
+	m.setQueueFilter(next)
 }
 
 func (m *model) rebuildQueue() {
 	previous, _ := m.focusedTorrent()
-	query := strings.Fields(strings.ToLower(m.filter))
+	filter := m.currentQueueFilter()
 	m.queue = m.queue[:0]
 	for _, torrent := range m.allTorrents {
-		if !matchesState(torrent, m.stateFilter) {
-			continue
-		}
-		index := strings.ToLower(strings.Join([]string{torrent.Name, torrent.Hash, torrent.Category, torrent.Tags}, " "))
-		match := true
-		for _, term := range query {
-			if !strings.Contains(index, term) {
-				match = false
-				break
-			}
-		}
-		if match {
+		if queueFilterMatches(torrent, filter) {
 			m.queue = append(m.queue, torrent)
 		}
 	}
@@ -1169,22 +1247,5 @@ func (m *model) rebuildQueue() {
 }
 
 func matchesState(torrent client.TorrentInfo, filter string) bool {
-	state := strings.ToLower(torrent.State)
-	stopped := strings.HasPrefix(state, "stopped") || strings.HasPrefix(state, "paused")
-	switch strings.ToLower(filter) {
-	case "", "all", "any":
-		return true
-	case "active":
-		return torrent.DLSpeed > 0 || torrent.UpSpeed > 0
-	case "downloading":
-		return !stopped && (strings.HasSuffix(state, "dl") || state == "downloading")
-	case "seeding", "uploading":
-		return !stopped && (strings.HasSuffix(state, "up") || state == "uploading" || state == "seeding")
-	case "stopped", "paused":
-		return stopped
-	case "error":
-		return state == "error" || state == "missingfiles" || state == "unknown"
-	default:
-		return strings.Contains(state, strings.ToLower(filter))
-	}
+	return client.MatchTorrentState(torrent, filter)
 }

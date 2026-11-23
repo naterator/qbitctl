@@ -42,6 +42,16 @@ func (m *model) loadPreferences(path string) {
 	if err != nil {
 		m.preferenceNotice(fmt.Errorf("queue preferences: %w", err))
 	}
+	columns, err := loadQueueColumns(path)
+	m.queueColumns = columns
+	if err != nil {
+		m.preferenceNotice(fmt.Errorf("queue column preferences: %w", err))
+	}
+	interval, err := loadRefreshInterval(path)
+	m.refreshIntervalSetting = interval
+	if err != nil {
+		m.preferenceNotice(fmt.Errorf("refresh preferences: %w", err))
+	}
 	sortOrder, filter, err := loadSearchPreferences(path)
 	m.resultSort, m.resultFilter = sortOrder, filter
 	if err != nil {
@@ -74,7 +84,7 @@ func (m *model) loadSavedSearchPlugin(path string) {
 		}
 		return
 	}
-	selection, err := client.ReadDefaultSearchPlugin(path)
+	selection, err := client.ReadDefaultSearchPluginForProfile(path, m.setup.profile)
 	if err != nil {
 		m.preferenceNotice(fmt.Errorf("default search plugin: %w", err))
 		selection = defaultSearchPluginSelection

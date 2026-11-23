@@ -55,7 +55,7 @@ func TestPaletteCommandsQueueContext(t *testing.T) {
 	m.replaceQueue([]client.TorrentInfo{{Hash: "a", Name: "Alpha", State: "downloading"}})
 
 	byAction := requirePaletteActions(t, m.paletteCommands(),
-		"search", "add", "refresh", "filter", "sort-queue", "toggle-mark",
+		"search", "add", "refresh", "filter", "sort-queue", "queue-columns", "toggle-mark",
 		"details", "trackers", "edit", "start", "pause", "force-start", "move", "remove", "delete",
 		"recheck", "reannounce", "queue-up", "queue-down", "queue-top", "queue-bottom", "rename",
 		"previous-item", "next-item", "previous-page", "next-page", "first-item", "last-item",
@@ -175,7 +175,7 @@ func TestPaletteCommandsServerAndConfigContext(t *testing.T) {
 	m := newModel(t.Context(), server)
 	m.page = serverPage
 	m.serverRows = []detailRow{{label: "Connection", value: "connected"}}
-	byAction := requirePaletteActions(t, m.paletteCommands(), "refresh", "server-details")
+	byAction := requirePaletteActions(t, m.paletteCommands(), "refresh", "server-download-limit", "server-upload-limit", "server-mode-normal", "server-mode-alternate")
 	if byAction["refresh"].label != "Refresh server info" {
 		t.Fatalf("server refresh label = %q", byAction["refresh"].label)
 	}
@@ -183,7 +183,7 @@ func TestPaletteCommandsServerAndConfigContext(t *testing.T) {
 	m.backend = nil
 	m.page = configPage
 	byAction = requirePaletteActions(t, m.paletteCommands(),
-		"config-server", "config-username", "config-password", "config-default", "config-theme", "config-units", "config-provider", "config-file", "config-cache",
+		"config-server", "config-username", "config-password", "config-default", "config-theme", "config-units", "config-refresh", "config-provider", "config-file", "config-cache",
 		"previous-item", "next-item", "previous-page", "next-page", "first-item", "last-item",
 	)
 	if byAction["config-cache"].label != "Show search cache path" {

@@ -6,25 +6,25 @@
    ›  Server address         │ Not configured
       Username               │ Not configured
       Password               │ Not configured
+      Active profile         │ Legacy single-server config
+      Startup profile        │ Legacy single-server config
+      CA bundle              │ System trust store
 
    View
-      TUI by default         │ Disabled
-      Color scheme           │ Default
-      Data units             │ Human-readable
-
-   Search             Configure qBittorrent
-      Default provid
-                      › Server: http://localhost:8080
-   Files                qBittorrent Web API address
-      Config file  │    Username: admin
-      Search cache │    Web API username
-                        Password: Password required for first connection
+      TUI by default  Configure qBittorrent
+      Color scheme
+      Data units      › Server: http://localhost:8080
+      Refresh interv    qBittorrent Web API address
+                        Username: admin
+   Search               Web API username
+      Default provid    Password: Password required for first connection
                         Typed characters are hidden; a password is required
-                        TUI default: no
-                        Start qbitctl in the TUI by default
+   Files                TUI default: no
+      Config file  │    Start qbitctl in the TUI by default
+      Search cache │    CA bundle: System trust store
+                        Optional PEM CA bundle path; blank keeps the saved setting
 
                       tab next   enter submit   esc cancel
-
 
 
 

@@ -59,7 +59,9 @@ jobs:
           else
             echo 'Go cache exact hit: ${{ steps.go.outputs.cache-hit }}' >> "$GITHUB_STEP_SUMMARY"
           fi
-      - name: Check formatting, tests, smoke, and release helpers on Unix
+      # make ci includes smoke_pty.py. Keep this on Unix: the PTY implementation
+      # depends on Unix pty support, while Windows runs its native smoke below.
+      - name: Check formatting, tests, smoke, and release helpers on Unix (PTY smoke)
         if: runner.os != 'Windows'
         run: make ci
       - name: Exercise the installer on macOS
@@ -75,6 +77,12 @@ jobs:
           python scripts/smoke_native.py ./qbitctl-smoke.exe
           bash scripts/test_release_helpers.sh
           bash scripts/test_release_targets.sh
+      - name: Exercise the verified PowerShell installer on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          POWERSHELL_TELEMETRY_OPTOUT: '1'
+        run: pwsh -NoLogo -NoProfile -File scripts/test_install.ps1
       - name: Save Go cache
         if: runner.os != 'Windows' && github.ref == 'refs/heads/main' && steps.go.outputs.cache-hit != 'true'
         continue-on-error: true

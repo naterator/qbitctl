@@ -464,25 +464,28 @@ def main():
             recording.hold(0.8)
             recording.key(b"escape")
 
-            # Walk through the grouped settings with arrows and j/k.
+            # Walk through the grouped settings through named palette actions.
+            # This keeps the recording stable when read-only rows are added to
+            # the Config page between releases.
             recording.key(b"4", "Configuration")
             recording.hold(1.4)
-            recording.key("down")
-            recording.key(b"j")
-            recording.key("down")
+            recording.key(b"\x10", "Command palette")
+            recording.type_text("toggle tui default")
             recording.key(b"enter", "TUI startup preference saved")
             recording.hold(1.0)
 
             # Preview a color scheme without saving it.
-            recording.key("down")
+            recording.key(b"\x10", "Command palette")
+            recording.type_text("choose color scheme")
             recording.key(b"enter", "Color scheme")
             recording.key("down")
             recording.hold(1.2)
             recording.key(b"escape")
 
             # Show the saved bytes mode on the queue, then restore human units.
-            recording.key(b"j")
-            recording.key(b"enter", "Bytes")
+            recording.key(b"\x10", "Command palette")
+            recording.type_text("toggle data units")
+            recording.key(b"enter", "Data units saved")
             saved_config = json.loads((base / "config.json").read_text())
             if saved_config.get("data_units") != "bytes":
                 raise RuntimeError("the TUI did not save the bytes display mode")
@@ -491,11 +494,14 @@ def main():
             recording.wait("4294967296 B", units_start)
             recording.hold(1.2)
             recording.key(b"4", "Configuration")
-            recording.key(b"enter", "Human-readable")
+            recording.key(b"\x10", "Command palette")
+            recording.type_text("toggle data units")
+            recording.key(b"enter", "Data units saved")
             recording.hold(0.8)
 
             # The Search section opens the same default-provider picker.
-            recording.key("down")
+            recording.key(b"\x10", "Command palette")
+            recording.type_text("choose default provider")
             recording.key(b"enter", "Choose search provider")
             recording.hold(0.8)
             recording.key(b"escape")
@@ -508,6 +514,15 @@ def main():
             recording.key(b"enter", "Search cache")
             recording.hold(0.8)
             recording.key(b"1")
+
+            # Show the selected torrent's tracker status from its live detail
+            # tabs, then keep the existing overview refresh shot below.
+            recording.key(b"enter", "Full Path")
+            tracker_start = len(recording.output)
+            recording.key(b"2")
+            recording.wait("tracker.example", tracker_start)
+            recording.hold(0.8)
+            recording.key(b"escape")
 
             # Let the open transfer details show progress from the next poll.
             recording.key(b"enter", "Full Path")

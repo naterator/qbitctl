@@ -39,6 +39,7 @@ type completionCacheTorrent struct {
 type completionCacheSnapshot struct {
 	URL       string                   `json:"url"`
 	User      string                   `json:"user"`
+	Profile   string                   `json:"profile,omitempty"`
 	UpdatedAt int64                    `json:"updated_at"`
 	Torrents  []completionCacheTorrent `json:"torrents"`
 }
@@ -60,14 +61,15 @@ func completionCachePath() (string, error) {
 	return filepath.Join(base, completionCacheDirName, completionCacheFileName), nil
 }
 
-func completionCacheScope(setup qbt.Setup) (string, string, bool) {
+func completionCacheScope(setup qbt.Setup) (string, string, string, bool) {
 	urlValue := strings.TrimRight(strings.TrimSpace(setup.URL), "/")
 	user := strings.TrimSpace(setup.User)
-	return urlValue, user, urlValue != "" && user != ""
+	profile := strings.TrimSpace(setup.Profile)
+	return urlValue, user, profile, urlValue != "" && user != ""
 }
 
 func readCompletionCache(setup qbt.Setup, now time.Time) (completionCacheSnapshot, time.Duration, bool, error) {
-	urlValue, user, ok := completionCacheScope(setup)
+	urlValue, user, profile, ok := completionCacheScope(setup)
 	if !ok {
 		return completionCacheSnapshot{}, 0, false, nil
 	}
@@ -94,7 +96,7 @@ func readCompletionCache(setup qbt.Setup, now time.Time) (completionCacheSnapsho
 		}
 	}
 	for _, snapshot := range cache.Snapshots {
-		if snapshot.URL != urlValue || snapshot.User != user || snapshot.UpdatedAt <= 0 {
+		if snapshot.URL != urlValue || snapshot.User != user || snapshot.Profile != profile || snapshot.UpdatedAt <= 0 {
 			continue
 		}
 		age := now.Sub(time.Unix(snapshot.UpdatedAt, 0))
@@ -107,7 +109,7 @@ func readCompletionCache(setup qbt.Setup, now time.Time) (completionCacheSnapsho
 }
 
 func writeCompletionCache(setup qbt.Setup, torrents []qbt.TorrentInfo, now time.Time) error {
-	urlValue, user, ok := completionCacheScope(setup)
+	urlValue, user, profile, ok := completionCacheScope(setup)
 	if !ok {
 		return nil
 	}
@@ -126,7 +128,7 @@ func writeCompletionCache(setup qbt.Setup, torrents []qbt.TorrentInfo, now time.
 			Name: qbt.SanitizeServerText(torrent.Name),
 		})
 	}
-	snapshot := completionCacheSnapshot{URL: urlValue, User: user, UpdatedAt: now.Unix(), Torrents: entries}
+	snapshot := completionCacheSnapshot{URL: urlValue, User: user, Profile: profile, UpdatedAt: now.Unix(), Torrents: entries}
 	return configfile.UpdateCache(path, func(object configfile.Object) (bool, error) {
 		cache := completionCacheFile{Version: completionCacheVersion}
 		if raw := object["snapshots"]; len(raw) != 0 {
@@ -138,7 +140,7 @@ func writeCompletionCache(setup qbt.Setup, torrents []qbt.TorrentInfo, now time.
 			if len(updated) == completionCacheScopeLimit {
 				break
 			}
-			if previous.URL == urlValue && previous.User == user {
+			if previous.URL == urlValue && previous.User == user && previous.Profile == profile {
 				continue
 			}
 			age := now.Sub(time.Unix(previous.UpdatedAt, 0))

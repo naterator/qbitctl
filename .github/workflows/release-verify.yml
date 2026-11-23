@@ -114,6 +114,11 @@ jobs:
           - name: Windows x86-64
             runner: windows-2025
             kind: windows
+            asset: qbitctl-windows-amd64.exe
+          - name: Windows ARM64
+            runner: windows-11-arm
+            kind: windows
+            asset: qbitctl-windows-arm64.exe
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     permissions:
@@ -125,6 +130,7 @@ jobs:
       PREVIOUS_TAG: ${{ needs.releases.outputs.previous }}
       HAS_ARCHIVES: ${{ needs.releases.outputs.archives }}
       GH_TOKEN: ${{ github.token }}
+      INSTALLER_REF: ${{ github.workflow_sha }}
     steps:
       - name: Verify Unix installer and updater
         if: matrix.kind == 'unix'
@@ -228,7 +234,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          $asset = 'qbitctl-windows-amd64.exe'
+          $asset = '${{ matrix.asset }}'
           $path = Join-Path $env:RUNNER_TEMP $asset
           gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $asset --dir $env:RUNNER_TEMP --clobber
           gh release verify-asset $env:RELEASE_TAG $path --repo $env:GITHUB_REPOSITORY
@@ -236,6 +242,23 @@ jobs:
           if ($version.Trim() -ne "qbitctl $env:RELEASE_TAG") {
             throw "Expected qbitctl $env:RELEASE_TAG, got $version"
           }
+
+          # Exercise the user-facing installer against the same immutable
+          # release. It verifies the ZIP attestation and SHA-256 before it can
+          # replace anything, and does not modify PATH unless explicitly asked.
+          $installer = Join-Path $env:RUNNER_TEMP 'qbitctl-install.ps1'
+          Invoke-WebRequest -UseBasicParsing "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:INSTALLER_REF/scripts/install.ps1" -OutFile $installer
+          $installRoot = Join-Path $env:RUNNER_TEMP 'qbitctl-user-install'
+          pwsh -NoLogo -NoProfile -File $installer -Repository $env:GITHUB_REPOSITORY -Version $env:RELEASE_TAG -InstallDir $installRoot
+          $installed = Join-Path $installRoot 'qbitctl.exe'
+          if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
+            throw "PowerShell installer did not create $installed"
+          }
+          & $installed version | Tee-Object -Variable installedVersion
+          if ($installedVersion.Trim() -ne "qbitctl $env:RELEASE_TAG") {
+            throw "Expected installed qbitctl $env:RELEASE_TAG, got $installedVersion"
+          }
+
           if ($env:PREVIOUS_TAG) {
             $upgrade = Join-Path $env:RUNNER_TEMP 'qbitctl-upgrade'
             New-Item -ItemType Directory -Path $upgrade -Force | Out-Null
@@ -248,8 +271,10 @@ jobs:
               throw "Expected upgraded qbitctl $env:RELEASE_TAG, got $updatedVersion"
             }
             $priorAssets = gh release view $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
-            if (($env:HAS_ARCHIVES -eq 'true') -and ($priorAssets -contains 'qbitctl-windows-amd64.zip')) {
-              if (-not ($update -match 'using qbitctl-windows-amd64\.zip$')) {
+            $previousArchive = $asset -replace '\.exe$', '.zip'
+            if (($env:HAS_ARCHIVES -eq 'true') -and ($priorAssets -contains $previousArchive)) {
+              $escapedArchive = [regex]::Escape($previousArchive)
+              if (-not ($update -match "using $escapedArchive`$")) {
                 throw 'The updater did not report the compressed Windows asset'
               }
             }

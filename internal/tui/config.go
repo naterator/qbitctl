@@ -19,8 +19,10 @@ import (
 // ever loading or rendering the secret.
 type setupState struct {
 	path        string
+	profile     string
 	url         string
 	user        string
+	caFile      string
 	hasPassword bool
 	tuiDefault  bool
 	ready       bool
@@ -29,8 +31,10 @@ type setupState struct {
 func setupStateFromClient(setup client.Setup) setupState {
 	return setupState{
 		path:        setup.Path,
+		profile:     setup.Profile,
 		url:         setup.URL,
 		user:        setup.User,
+		caFile:      setup.CAFile,
 		hasPassword: setup.HasPassword,
 		tuiDefault:  setup.TUIDefault,
 		ready:       setup.Ready(),
@@ -41,7 +45,7 @@ func savedPasswordMetadata(setup client.Setup) client.Setup {
 	if setup.Path == "" {
 		return setup
 	}
-	saved, err := client.ReadSetup(client.Options{ConfigPath: setup.Path})
+	saved, err := client.ReadSetup(client.Options{ConfigPath: setup.Path, Profile: setup.Profile})
 	if err == nil {
 		// URL/user may be supplied by flags. Only replace the password metadata
 		// from the config-only read so --pass is never presented as saved.
@@ -88,7 +92,7 @@ func (m *model) toggleDataUnits() tea.Cmd {
 	})
 }
 
-func (m *model) saveConfig(values client.Credentials, tuiDefault bool) tea.Cmd {
+func (m *model) saveConfig(values client.Credentials, caFile string, tuiDefault bool) tea.Cmd {
 	if m.busy != "" {
 		if m.dialog != nil {
 			m.dialog.status = "Finish the current request first"
@@ -119,18 +123,29 @@ func (m *model) saveConfig(values client.Credentials, tuiDefault bool) tea.Cmd {
 		}
 		return nil
 	}
+	profile := strings.TrimSpace(m.setup.profile)
 	m.dialog = nil
 	return m.startWork(configWork, "Testing connection and saving configuration", func(ctx context.Context) workDone {
-		app, err := client.ConnectAndSaveSetup(ctx, path, values, tuiDefault)
+		var app *client.App
+		var err error
+		if profile != "" {
+			app, err = client.ConnectAndSaveProfileSetup(ctx, path, profile, values, caFile)
+		} else {
+			app, err = client.ConnectAndSaveSetupWithCA(ctx, path, values, caFile, tuiDefault)
+		}
 		if err != nil {
 			return workDone{err: err}
 		}
 		return workDone{
 			app: app,
 			setup: setupState{
-				path:        path,
-				url:         values.URL,
-				user:        values.User,
+				path:    path,
+				profile: profile,
+				url:     values.URL,
+				user:    values.User,
+				// The client resolves saved relative paths before connecting, so
+				// retain the effective path shown by the authenticated app.
+				caFile:      app.CAFile,
 				hasPassword: true,
 				tuiDefault:  tuiDefault,
 				ready:       true,
@@ -156,6 +171,8 @@ func (m *model) resetRemoteState() {
 	m.query = ""
 	m.filter = ""
 	m.stateFilter = "all"
+	m.categoryFilter = ""
+	m.tagFilter = ""
 	m.resultFilter = resultFilter{}
 	m.resultEditor = nil
 	m.searchPlugin = defaultSearchPluginSelection
@@ -189,7 +206,7 @@ func (m *model) setDefaultSearchPlugin(selection string) error {
 	}
 	var err error
 	if path != "" {
-		err = client.SetDefaultSearchPlugin(path, selection)
+		err = client.SetDefaultSearchPluginForProfile(path, m.setup.profile, selection)
 	}
 	// Apply the in-memory choice even when persistence fails. The user can
 	// continue this session, while the notice makes the persistence failure
@@ -344,6 +361,8 @@ func runConfigurableSession(sessionCtx context.Context, stop context.CancelFunc,
 	if output == nil {
 		output = os.Stdout
 	}
+	m.output = output
+	m.tmux = strings.TrimSpace(os.Getenv("TMUX")) != ""
 	program := tea.NewProgram(m, tea.WithContext(sessionCtx), tea.WithoutSignalHandler(), tea.WithInput(input), tea.WithOutput(output))
 	_, err := program.Run()
 	if errors.Is(err, tea.ErrProgramKilled) && sessionCtx.Err() != nil {

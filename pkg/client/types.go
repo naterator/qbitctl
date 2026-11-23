@@ -136,12 +136,19 @@ type App struct {
 	// useful to callers even when credentials came from command-line flags and
 	// no file existed yet, in which case it points at the default save target.
 	configPath string
-	Stdout     io.Writer
-	Stderr     io.Writer
-	Ctx        context.Context
+	// profileName is the selected named profile, empty for the legacy
+	// single-server configuration. It is intentionally kept separate from the
+	// startup default so a session-only --profile switch never rewrites config.
+	profileName string
+	Stdout      io.Writer
+	Stderr      io.Writer
+	Ctx         context.Context
 	// DataUnits controls byte and transfer-rate formatting. The zero value is
 	// intentionally equivalent to DataUnitsHuman.
 	DataUnits DataUnits
+	// CAFile is the effective PEM bundle used by this app's qBittorrent HTTP
+	// client. It is empty when the system trust store is sufficient.
+	CAFile string
 
 	// appVersion and apiVersion are populated by CheckCompatibility. Keeping
 	// the validated pair on the authenticated app lets the TUI and commands
@@ -162,15 +169,30 @@ func (a *App) ConfigPath() string {
 	return a.configPath
 }
 
+// ProfileName reports the named profile used by this authenticated session.
+// Empty means the legacy single-server configuration or an unselected profile.
+func (a *App) ProfileName() string {
+	if a == nil {
+		return ""
+	}
+	return a.profileName
+}
+
 type Options struct {
 	ConfigPath string
-	URL        string
-	User       string
-	Pass       string
-	Hash       string
+	// Profile selects a saved named server profile for this invocation. It is
+	// session-only; use qbitctl profile use to change the startup default.
+	Profile string
+	URL     string
+	User    string
+	Pass    string
+	Hash    string
 	// DataUnits is an explicit command-line override. Empty means use the
 	// optional config preference, or DataUnitsHuman when it is absent/invalid.
 	DataUnits DataUnits
+	// CAFile is an explicit PEM CA bundle override. Empty means use the
+	// selected profile's saved preference, if present.
+	CAFile string
 	// HTTPTimeout bounds an individual qBittorrent API request. Zero uses the
 	// operation-specific defaults. The login and logout operations retain their
 	// shorter safety deadlines.
@@ -210,5 +232,5 @@ func (a *App) ConnectionOptions() Options {
 	if a == nil {
 		return Options{}
 	}
-	return Options{ConfigPath: a.configPath, URL: a.creds.URL, User: a.creds.User, DataUnits: a.DataUnits}
+	return Options{ConfigPath: a.configPath, Profile: a.profileName, URL: a.creds.URL, User: a.creds.User, DataUnits: a.DataUnits, CAFile: a.CAFile}
 }

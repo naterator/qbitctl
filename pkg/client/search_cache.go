@@ -68,7 +68,8 @@ type searchCacheResult struct {
 
 // CachedSearch is one unexpired local search snapshot. It contains only the
 // display data needed to reprint results and the IDs used by add --search-id.
-// Download URLs are deliberately kept private to the cache implementation.
+// Download URLs are deliberately kept out of the public history response even
+// though an in-memory SearchResult can expose one to an interactive client.
 type CachedSearch struct {
 	SavedAt time.Time
 	Query   string
@@ -120,7 +121,8 @@ func (a *App) CacheSearchResultsForQuery(query string, results []SearchResult) e
 		}
 		latest := searchSnapshot{searchScope: a.searchScope(), SavedAt: now.Unix(), Query: strings.TrimSpace(query)}
 		for i, result := range results {
-			if !isSearchDownloadURL(result.downloadURL) {
+			downloadURL := result.DownloadURL()
+			if !isSearchDownloadURL(downloadURL) {
 				continue
 			}
 			id, err := newSearchCacheID(usedIDs)
@@ -130,7 +132,7 @@ func (a *App) CacheSearchResultsForQuery(query string, results []SearchResult) e
 			usedIDs[id] = struct{}{}
 			ids[i] = id
 			latest.Results = append(latest.Results, searchCacheResult{
-				ID: id, URL: result.downloadURL, Plugin: result.pluginName,
+				ID: id, URL: downloadURL, Plugin: result.pluginName,
 				Name: result.Name, Size: result.Size, Seeders: result.Seeders,
 				Leechers: result.Leechers, Source: result.Source,
 			})

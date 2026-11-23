@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -362,14 +363,18 @@ http {{
     )
     if result.returncode != 0:
         raise RuntimeError("failed to start nginx HTTPS sidecar: " + redact(result.stderr or result.stdout))
+    tls = ssl.create_default_context(cafile=str(certificate))
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
-            with socket.create_connection(("127.0.0.1", https_port), timeout=1):
+            with (
+                socket.create_connection(("127.0.0.1", https_port), timeout=1) as conn,
+                tls.wrap_socket(conn, server_hostname="127.0.0.1"),
+            ):
                 return certificate, key
         except OSError:
             time.sleep(0.25)
-    raise RuntimeError("nginx HTTPS sidecar did not start listening")
+    raise RuntimeError("nginx HTTPS sidecar did not complete a TLS handshake")
 
 
 def wait_for_password(container: str, timeout: float = 60.0) -> str:
@@ -409,18 +414,14 @@ def run_cli(
     check: bool = True,
     timeout: float = 30.0,
     env_overrides: dict[str, str] | None = None,
+    use_saved_connection: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    command = [
-        str(binary),
-        "--url",
-        url,
-        "--user",
-        "admin",
-        "--pass",
-        password,
-        *args,
-    ]
+    command = [str(binary)]
+    if not use_saved_connection:
+        command.extend(("--url", url, "--user", "admin", "--pass", password))
+    command.extend(args)
     env = dict(os.environ)
+    env.pop("QBITCTL_PASSWORD", None)
     env.update(
         {
             "XDG_CONFIG_HOME": str(config_home),
@@ -649,6 +650,145 @@ def wait_for_torrent(
     raise RuntimeError(f"timed out waiting for torrent {name!r} to be {expected}")
 
 
+def verify_profiles(binary: Path, root: Path, url: str, https_url: str, password: str, certificate: Path) -> None:
+    config_home = root / "profiles-config-home"
+    cli = partial(run_cli, binary, url, password, root, config_home, use_saved_connection=True)
+    no_system_ca = {"SSL_CERT_FILE": ""}
+    password_env = {**no_system_ca, "QBITCTL_PASSWORD": password}
+    cli("--url", url, "--user", "admin", "config", "write", env_overrides=password_env)
+    config_file = config_home / "qbitctl" / "config.json"
+    if "profiles" in json.loads(config_file.read_text(encoding="utf-8")):
+        raise RuntimeError("qbitctl migrated a single connection before a second profile was added")
+    cli("tui-default", "on")
+    set_saved_default_search_plugin(config_home, "all")
+
+    cli("--url", https_url, "--user", "admin", "--ca-file", certificate.name,
+        "profile", "add", "homelab", env_overrides=password_env)
+    cli("--profile", "homelab", "info", env_overrides=no_system_ca)
+    cli("--profile", "default", "info", env_overrides=no_system_ca)
+    saved = json.loads(config_file.read_text(encoding="utf-8"))
+    if saved.get("default_profile") != "default":
+        raise RuntimeError("Selecting a profile changed the startup default")
+    if "* default\t" not in cli("profile", "list", env_overrides=no_system_ca).stdout:
+        raise RuntimeError("qbitctl did not mark the original profile as the startup default")
+    for profile in ("default", "homelab"):
+        if not saved["profiles"][profile].get("password", "").startswith("enc:v2:"):
+            raise RuntimeError(f"qbitctl did not encrypt the password for profile {profile!r}")
+    if saved.get("ui", {}).get("tui_default") is not True:
+        raise RuntimeError("Profile migration lost the global TUI preference")
+    if (saved["profiles"]["default"].get("default_search_plugin") != "all"
+            or "default_search_plugin" in saved["profiles"]["homelab"]):
+        raise RuntimeError("qbitctl did not preserve the search preference on its original profile")
+    saved_ca = Path(saved["profiles"]["homelab"].get("ca_file", ""))
+    if (not saved_ca.is_absolute() or saved_ca.resolve() != certificate.resolve()
+            or "ca_file" in saved["profiles"]["default"]):
+        raise RuntimeError("qbitctl did not scope the saved CA file to the HTTPS profile")
+    missing = cli("--profile", "missing", "info", check=False, env_overrides=no_system_ca)
+    if missing.returncode == 0 or "missing" not in missing.stderr:
+        raise RuntimeError("qbitctl did not reject an unknown profile")
+
+    cli("profile", "use", "homelab", env_overrides=no_system_ca)
+    saved = json.loads(config_file.read_text(encoding="utf-8"))
+    if saved.get("default_profile") != "homelab":
+        raise RuntimeError("qbitctl did not save the requested startup default profile")
+    batch = root / "profile-batch.txt"
+    batch.write_text("info --json\ntransfer mode\ncategories list --json\ntags list --json\n", encoding="utf-8")
+    cli("batch", str(batch), env_overrides=no_system_ca)
+
+    cli("--profile", "default", "--url", https_url, "--user", "admin", "--ca-file", certificate.name,
+        "config", "write", env_overrides=password_env)
+    cli("--profile", "default", "info", env_overrides=no_system_ca)
+    saved = json.loads(config_file.read_text(encoding="utf-8"))
+    if (saved.get("default_profile") != "homelab"
+            or any(key in saved for key in ("url", "user", "password", "ca_file"))):
+        raise RuntimeError("Writing one profile changed the startup default or wrote global connection settings")
+    if any(key in saved["profiles"]["default"] for key in ("ui", "profiles", "default_profile")):
+        raise RuntimeError("Writing one profile copied global settings into its profile entry")
+
+
+def verify_transfer_controls(cli, opener, url: str) -> None:
+    def verify_mode(expected: bytes, mode: str) -> None:
+        with opener.open(url + "/api/v2/transfer/speedLimitsMode", timeout=10) as response:
+            if response.read().strip() != expected:
+                raise RuntimeError("qbitctl did not set the requested global speed mode")
+        if cli("transfer", "mode").stdout.strip() != mode:
+            raise RuntimeError("qbitctl did not show the current global speed mode")
+
+    def verify_limits(download: int, upload: int) -> None:
+        info = json.loads(cli("transfer", "info", "--json").stdout)
+        actual = (info.get("dl_rate_limit"), info.get("up_rate_limit"))
+        if actual != (download, upload):
+            raise RuntimeError(f"qbitctl transfer limits were {actual!r}, expected {(download, upload)!r}")
+
+    cli("transfer", "mode", "normal")
+    verify_mode(b"0", "normal")
+    cli("transfer", "set", "download", "131072")
+    cli("transfer", "set", "upload", "65536")
+    verify_limits(131072, 65536)
+
+    for _ in range(2):
+        cli("transfer", "mode", "alternate")
+        verify_mode(b"1", "alternate")
+    cli("transfer", "set", "download", "262144")
+    cli("transfer", "set", "upload", "196608")
+    verify_limits(262144, 196608)
+    cli("transfer", "mode", "normal")
+    verify_mode(b"0", "normal")
+    verify_limits(131072, 65536)
+    cli("transfer", "set", "download", "0")
+    cli("transfer", "set", "upload", "0")
+
+
+def verify_categories_and_tags(cli, opener, url: str, torrent_hash: str) -> None:
+    def catalog(resource: str):
+        with opener.open(f"{url}/api/v2/torrents/{resource}", timeout=10) as response:
+            return json.load(response)
+
+    def verify_category_paths(name: str, save: str, download: str) -> None:
+        entry = catalog("categories").get(name, {})
+        actual = (str(entry.get("savePath")).rstrip("/"), str(entry.get("download_path")).rstrip("/"))
+        if actual != (save, download):
+            raise RuntimeError(f"qbitctl category paths were {actual!r}, expected {(save, download)!r}")
+
+    category = "qbitctl-catalog-fixture"
+    download = "/downloads/catalog-incomplete"
+    cli("categories", "create", category, "/downloads/catalog", "--download-path", download)
+    verify_category_paths(category, "/downloads/catalog", download)
+    if category not in cli("categories", "list").stdout:
+        raise RuntimeError("qbitctl categories did not include the category it created")
+    cli("categories", "edit", category, "/downloads/catalog-edited")
+    verify_category_paths(category, "/downloads/catalog-edited", download)
+    cli("categories", "edit", category, "--download-path", download + "-edited")
+    verify_category_paths(category, "/downloads/catalog-edited", download + "-edited")
+    cli("categories", "remove", category)
+    if category in catalog("categories"):
+        raise RuntimeError("qbitctl did not remove the fixture category")
+
+    tag = "qbitctl-catalog-test-tag"
+    cli("tags", "create", tag)
+    if tag not in catalog("tags") or tag not in cli("tags", "list").stdout:
+        raise RuntimeError("qbitctl did not create and list the global tag")
+
+    def wait_for_torrent_tag(present: bool) -> None:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            tags = {value.strip() for value in cli("get", "tags", torrent_hash).stdout.split(",")}
+            if (tag in tags) == present:
+                return
+            time.sleep(0.25)
+        raise RuntimeError(f"qbitctl did not update the torrent's tag membership to {present}")
+
+    cli("tags", "add", tag, torrent_hash)
+    wait_for_torrent_tag(True)
+    cli("tags", "remove", tag, torrent_hash)
+    wait_for_torrent_tag(False)
+    if tag not in catalog("tags"):
+        raise RuntimeError("Removing a tag from one torrent also removed the global tag")
+    cli("tags", "delete", tag)
+    if tag in catalog("tags"):
+        raise RuntimeError("qbitctl did not delete the global tag")
+
+
 def verify_tracker_edits(cli, torrent_hash: str) -> None:
     original = "http://127.0.0.1:1/announce?passkey=fixture-one"
     replacement = "http://127.0.0.1:1/announce?passkey=fixture-two"
@@ -871,12 +1011,22 @@ def run(args: argparse.Namespace) -> None:
             print(f"qBittorrent {args.version}: authenticating")
             wait_for_ready(binary, url, password, root, config_home)
             certificate, _ = start_https_proxy(network, proxy_container, web_port, https_port, root)
+            https_url = f"https://127.0.0.1:{https_port}/qbt"
+            no_system_ca = {"SSL_CERT_FILE": ""}
+            https_cli = partial(run_cli, binary, https_url, password, root, config_home, env_overrides=no_system_ca)
+            untrusted = https_cli("info", check=False)
+            if untrusted.returncode == 0 or "certificate" not in untrusted.stderr.lower():
+                output = redact(untrusted.stdout + untrusted.stderr, password).strip()
+                raise RuntimeError(f"qbitctl did not reject the untrusted test certificate: {output}")
+            https_cli("--ca-file", str(certificate), "info")
+            verify_profiles(binary, root, url, https_url, password, certificate)
             os.environ["SSL_CERT_FILE"] = str(certificate)
             # Completion reads the saved setup because Cobra's hidden
             # __complete command skips the normal pre-run password handling.
             run_cli(binary, url, password, root, config_home, "config", "write")
             cli = partial(run_cli, binary, url, password, root, config_home)
             config_file = config_home / "qbitctl" / "config.json"
+            verify_transfer_controls(cli, authenticated_opener(url, password), url)
             install_search_plugin(
                 url,
                 password,
@@ -1278,6 +1428,7 @@ def run(args: argparse.Namespace) -> None:
             if batch_output != ["qbitctl-compat-fixture.bin"] * 2:
                 raise RuntimeError(f"qbitctl batch returned {batch_output!r}")
 
+            verify_categories_and_tags(cli, opener, url, torrent_hash)
             verify_files_and_peers(cli, torrent_hash)
             verify_tracker_edits(cli, torrent_hash)
             cli("queue", "top", alt_search_hash)
@@ -1325,7 +1476,6 @@ def run(args: argparse.Namespace) -> None:
                     raise RuntimeError("qbitctl did not move and tag both selected torrents")
                 time.sleep(0.25)
 
-            https_url = f"https://127.0.0.1:{https_port}/qbt"
             https_env = {"SSL_CERT_FILE": str(certificate)}
             wait_for_ready(
                 binary,

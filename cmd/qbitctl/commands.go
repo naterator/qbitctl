@@ -22,7 +22,7 @@ func newConfigCmd(opts *CLIOptions) *cobra.Command {
 		Annotations: map[string]string{stdinModeAnnotation: stdinInteractive},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			in, out := cmd.InOrStdin(), cmd.OutOrStdout()
-			path, err := qbt.InteractiveConfigContext(cmd.Context(), in, out, makeHiddenInput(in, out), opts.ConfigPath)
+			path, err := qbt.InteractiveConfigProfileContext(cmd.Context(), in, out, makeHiddenInput(in, out), opts.ConfigPath, opts.Profile)
 			if err != nil {
 				return result(cmd, err)
 			}

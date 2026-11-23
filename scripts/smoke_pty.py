@@ -236,13 +236,14 @@ def stale_credential_recovery(session: Session):
 
 def inspect_torrent_details(session: Session):
     session.key("enter", "1 Overview")
-    session.key("2", "fixture-image.iso")
-    session.key("3", "192.0.2.9:51413")
+    session.key("3", "fixture-image.iso")
+    session.key("4", "192.0.2.9:51413")
     session.key("escape")
 
 
 def inspect_tracker_and_add_forms(session: Session):
-    session.key("t", "v full URL")
+    session.key("enter", "1 Overview")
+    session.key("2", "v full URL")
     session.key("v", "https://tracker.example/announce")
     session.key("escape")
     session.key("a", "Add torrent")

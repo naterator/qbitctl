@@ -49,6 +49,10 @@ func newClient(creds Credentials, stderr io.Writer) *Client {
 }
 
 func newClientWithTimeout(creds Credentials, stderr io.Writer, override time.Duration) (*Client, error) {
+	return newClientWithTimeoutAndCA(creds, stderr, override, "")
+}
+
+func newClientWithTimeoutAndCA(creds Credentials, stderr io.Writer, override time.Duration, caFile string) (*Client, error) {
 	timeouts, err := httpTimeoutsFor(override)
 	if err != nil {
 		return nil, err
@@ -66,6 +70,9 @@ func newClientWithTimeout(creds Credentials, stderr io.Writer, override time.Dur
 	// the server-issued session cookie between requests.
 	if httpClient.Jar == nil {
 		httpClient.Jar = jar
+	}
+	if httpClient, err = configureHTTPClientCA(httpClient, caFile); err != nil {
+		return nil, err
 	}
 	return &Client{
 		creds:        creds,

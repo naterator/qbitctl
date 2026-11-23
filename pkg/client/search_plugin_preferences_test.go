@@ -191,7 +191,7 @@ func TestResetDefaultSearchPluginIfMatchesIsAtomicAndServerScoped(t *testing.T) 
 		t.Fatalf("other-server reset = %q, %v; want jackett", got, err)
 	}
 
-	app := &App{configPath: path, creds: Credentials{URL: "https://qbt.example", User: "admin"}}
+	app := &App{configPath: path, creds: Credentials{URL: "https://qbt.example/webui/", User: "admin"}}
 	if err := app.ResetDefaultSearchPluginIfMatches("missing"); err != nil {
 		t.Fatal(err)
 	}

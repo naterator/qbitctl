@@ -12,25 +12,56 @@ import (
 // the client deliberately does not send those selectors to older Web APIs.
 func listTorrentFilter(state, category, tag string) (qbt.TorrentListFilter, error) {
 	state = strings.ToLower(strings.TrimSpace(state))
-	switch state {
-	case "", "all", "any":
-		state = ""
-	case "active", "downloading", "completed", "inactive", "running", "stalled":
-	case "stalled-uploading", "stalled_uploading":
-		state = "stalled_uploading"
-	case "stalled-downloading", "stalled_downloading":
-		state = "stalled_downloading"
-	case "seeding", "uploading":
-		state = "seeding"
-	case "stopped", "paused":
-		state = "stopped"
-	case "error", "errored":
-		state = "errored"
-	case "queued", "checking":
-		// qBittorrent has no corresponding info filter. The client applies
-		// these two states after retrieving the queue.
-	default:
+	if !qbt.IsTorrentStateFilter(state) {
 		return qbt.TorrentListFilter{}, fmt.Errorf("unsupported list state %q", state)
+	}
+	switch qbt.NormalizeTorrentStateFilter(state) {
+	case "":
+		state = ""
+	case "stalled-uploading":
+		state = "stalled_uploading"
+	case "stalled-downloading":
+		state = "stalled_downloading"
+	case "seeding":
+		state = "seeding"
+	case "stopped":
+		state = "stopped"
+	case "error":
+		state = "errored"
+	case "missingfiles":
+		state = "missingFiles"
+	case "forceddl":
+		state = "forcedDL"
+	case "forcedup":
+		state = "forcedUP"
+	case "metadl":
+		state = "metaDL"
+	case "forcedmetadl":
+		state = "forcedMetaDL"
+	case "checkingdl":
+		state = "checkingDL"
+	case "checkingup":
+		state = "checkingUP"
+	case "checkingresumedata":
+		state = "checkingResumeData"
+	case "queueddl":
+		state = "queuedDL"
+	case "queuedup":
+		state = "queuedUP"
+	case "stalleddl":
+		state = "stalledDL"
+	case "stalledup":
+		state = "stalledUP"
+	case "stoppedld":
+		state = "stoppedDL"
+	case "stoppedup":
+		state = "stoppedUP"
+	case "pausedld":
+		state = "pausedDL"
+	case "pausedup":
+		state = "pausedUP"
+	default:
+		state = qbt.NormalizeTorrentStateFilter(state)
 	}
 	return qbt.TorrentListFilter{State: state, Category: category, Tag: tag}, nil
 }

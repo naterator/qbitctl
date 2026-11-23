@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"unicode"
 
@@ -16,6 +18,13 @@ const defaultSearchPluginConfigKey = "default_search_plugin"
 // contacting qBittorrent. Missing and empty values retain the normal enabled
 // provider-group default so older config files behave as before.
 func ReadDefaultSearchPlugin(path string) (string, error) {
+	return ReadDefaultSearchPluginForProfile(path, "")
+}
+
+// ReadDefaultSearchPluginForProfile reads the preference from one named
+// profile. The empty profile keeps legacy root-level behavior and resolves the
+// startup profile when a named profile config is present.
+func ReadDefaultSearchPluginForProfile(path, profile string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("config path is empty")
 	}
@@ -24,6 +33,11 @@ func ReadDefaultSearchPlugin(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	_, object, named, err := selectProfileObject(object, profile)
+	if err != nil {
+		return "", err
+	}
+	_ = named
 	value, ok := configValue(object, defaultSearchPluginConfigKey)
 	if !ok {
 		return DefaultSearchPlugins, nil
@@ -46,6 +60,12 @@ func ReadDefaultSearchPlugin(path string) (string, error) {
 // server, and callers validate it after connecting. Empty selection removes
 // the optional key and restores the normal enabled-provider default.
 func SetDefaultSearchPlugin(path, selection string) error {
+	return SetDefaultSearchPluginForProfile(path, "", selection)
+}
+
+// SetDefaultSearchPluginForProfile saves one provider preference inside the
+// selected profile, preserving the legacy root-level key for old configs.
+func SetDefaultSearchPluginForProfile(path, profile, selection string) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New("config path is empty")
 	}
@@ -53,7 +73,7 @@ func SetDefaultSearchPlugin(path, selection string) error {
 	selection = strings.TrimSpace(selection)
 	if selection == "" {
 		return configfile.Update(path, func(object configfile.Object) (bool, error) {
-			return deleteConfigValue(object, defaultSearchPluginConfigKey), nil
+			return updateProfileSearchPreference(object, profile, nil)
 		})
 	}
 	if !validDefaultSearchPluginValue(selection) {
@@ -68,9 +88,42 @@ func SetDefaultSearchPlugin(path, selection string) error {
 	}
 
 	return configfile.Update(path, func(object configfile.Object) (bool, error) {
-		setConfigValue(object, defaultSearchPluginConfigKey, encoded)
-		return true, nil
+		return updateProfileSearchPreference(object, profile, encoded)
 	})
+}
+
+func updateProfileSearchPreference(root configfile.Object, profile string, value json.RawMessage) (bool, error) {
+	name, selected, named, err := selectProfileObject(root, profile)
+	if err != nil {
+		return false, err
+	}
+	if value == nil {
+		if !named {
+			return deleteConfigValue(root, defaultSearchPluginConfigKey), nil
+		}
+		changed := deleteConfigValue(selected, defaultSearchPluginConfigKey)
+		if !changed {
+			return false, nil
+		}
+	} else {
+		setConfigValue(selected, defaultSearchPluginConfigKey, value)
+	}
+	if !named {
+		return true, nil
+	}
+	profiles, _, err := profileObject(root)
+	if err != nil {
+		return false, err
+	}
+	encoded, err := json.Marshal(selected)
+	if err != nil {
+		return false, err
+	}
+	profiles[name] = encoded
+	if err := writeProfiles(root, profiles); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ResetDefaultSearchPluginIfMatches removes a saved provider only when it is
@@ -86,8 +139,12 @@ func (a *App) ResetDefaultSearchPluginIfMatches(selection string) error {
 	if !validDefaultSearchPluginValue(selection) {
 		return codedErrf(ExitBadArgs, "invalid saved search plugin")
 	}
-	return configfile.Update(a.ConfigPath(), func(object configfile.Object) (bool, error) {
-		value, ok := configValue(object, defaultSearchPluginConfigKey)
+	return configfile.Update(a.ConfigPath(), func(root configfile.Object) (bool, error) {
+		name, selected, named, err := selectProfileObject(root, a.profileName)
+		if err != nil {
+			return false, err
+		}
+		value, ok := configValue(selected, defaultSearchPluginConfigKey)
 		if !ok {
 			return false, nil
 		}
@@ -100,22 +157,61 @@ func (a *App) ResetDefaultSearchPluginIfMatches(selection string) error {
 		// same config file. In that case an uninstall must not clear the other
 		// server's preference.
 		var disk configFile
-		if raw, ok := configValue(object, "url"); ok {
+		if raw, ok := configValue(selected, "url"); ok {
 			if err := json.Unmarshal(raw, &disk.URL); err != nil {
 				return false, err
 			}
 		}
-		if raw, ok := configValue(object, "user"); ok {
+		if raw, ok := configValue(selected, "user"); ok {
 			if err := json.Unmarshal(raw, &disk.User); err != nil {
 				return false, err
 			}
 		}
 		if disk.User == "" || a.creds.User == "" || disk.User != a.creds.User ||
-			!sameCredentialOrigin(disk.URL, a.creds.URL) {
+			!samePreferenceOrigin(disk.URL, a.creds.URL) {
 			return false, nil
 		}
-		return deleteConfigValue(object, defaultSearchPluginConfigKey), nil
+		changed := deleteConfigValue(selected, defaultSearchPluginConfigKey)
+		if !changed || !named {
+			return changed, nil
+		}
+		profiles, _, err := profileObject(root)
+		if err != nil {
+			return false, err
+		}
+		encoded, err := json.Marshal(selected)
+		if err != nil {
+			return false, err
+		}
+		profiles[name] = encoded
+		if err := writeProfiles(root, profiles); err != nil {
+			return false, err
+		}
+		return true, nil
 	})
+}
+
+// samePreferenceOrigin includes the reverse-proxy base path. Credential
+// reuse intentionally ignores paths, but a search preference belongs to the
+// actual qBittorrent Web UI instance behind that path.
+func samePreferenceOrigin(left, right string) bool {
+	leftURL, leftErr := url.Parse(strings.TrimSpace(left))
+	rightURL, rightErr := url.Parse(strings.TrimSpace(right))
+	if leftErr != nil || rightErr != nil || leftURL.Scheme == "" || leftURL.Host == "" || rightURL.Scheme == "" || rightURL.Host == "" {
+		return false
+	}
+	if !strings.EqualFold(leftURL.Scheme, rightURL.Scheme) || !strings.EqualFold(leftURL.Hostname(), rightURL.Hostname()) || credentialPort(leftURL) != credentialPort(rightURL) {
+		return false
+	}
+	leftPath := strings.TrimRight(path.Clean("/"+strings.TrimSpace(leftURL.EscapedPath())), "/")
+	rightPath := strings.TrimRight(path.Clean("/"+strings.TrimSpace(rightURL.EscapedPath())), "/")
+	if leftPath == "" {
+		leftPath = "/"
+	}
+	if rightPath == "" {
+		rightPath = "/"
+	}
+	return leftPath == rightPath
 }
 
 // ValidateDefaultSearchPlugin validates a saved preference against the

@@ -19,8 +19,10 @@ type detailTab uint8
 
 const (
 	detailTabOverview detailTab = iota
+	detailTabTrackers
 	detailTabFiles
 	detailTabPeers
+	detailTabCount
 )
 
 type detailDialogState struct {
@@ -36,11 +38,12 @@ type detailDialogState struct {
 }
 
 type detailTabUpdate struct {
-	dialog *dialog
-	tab    detailTab
-	files  []client.TorrentFile
-	peers  client.TorrentPeers
-	err    error
+	dialog   *dialog
+	tab      detailTab
+	trackers []client.TrackerEntry
+	files    []client.TorrentFile
+	peers    client.TorrentPeers
+	err      error
 }
 
 func newDetailDialogState() *detailDialogState {
@@ -91,6 +94,8 @@ func (m *model) detailState(d *dialog) *detailDialogState {
 
 func detailTabLabel(tab detailTab) string {
 	switch tab {
+	case detailTabTrackers:
+		return "Trackers"
 	case detailTabFiles:
 		return "Files"
 	case detailTabPeers:
@@ -101,8 +106,8 @@ func detailTabLabel(tab detailTab) string {
 }
 
 func detailTabHeader(tab detailTab, width int) string {
-	parts := make([]string, 0, 3)
-	for _, current := range []detailTab{detailTabOverview, detailTabFiles, detailTabPeers} {
+	parts := make([]string, 0, detailTabCount)
+	for current := detailTabOverview; current < detailTabCount; current++ {
 		label := fmt.Sprintf("%d %s", int(current)+1, detailTabLabel(current))
 		if current == tab {
 			parts = append(parts, viewAccentStyle.Render("▸ "+label))
@@ -113,20 +118,22 @@ func detailTabHeader(tab detailTab, width int) string {
 	return viewFit(strings.Join(parts, "   "), width)
 }
 
-func (m *model) detailDialogLines(d *dialog, width int) []string {
+func (m *model) detailBodyLines(d *dialog, width int) []string {
 	state := m.detailState(d)
-	lines := []string{detailTabHeader(state.tab, width)}
 	switch state.tab {
 	case detailTabFiles:
 		state.fileCursor = min(max(0, len(filteredDetailFiles(state.files, state.fileFilter))-1), max(0, state.fileCursor))
-		lines = append(lines, m.detailFileLines(state, width)...)
+		return m.detailFileLines(state, width)
 	case detailTabPeers:
 		state.peerCursor = min(max(0, len(state.peers.Peers)-1), max(0, state.peerCursor))
-		lines = append(lines, m.detailPeerLines(state, width)...)
+		return m.detailPeerLines(state, width)
 	default:
-		lines = append(lines, dialogDetailLines(d.rows, width)...)
+		return dialogDetailLines(d.rows, width)
 	}
-	return lines
+}
+
+func detailBodyHeight(d *dialog, height int) int {
+	return max(1, d.bodyHeight(height)-2)
 }
 
 func (m *model) detailFileLines(state *detailDialogState, width int) []string {
@@ -218,7 +225,7 @@ func (m *model) detailPeerLines(state *detailDialogState, width int) []string {
 }
 
 func (m *model) updateTorrentDetailKey(d *dialog, name string) (bool, tea.Cmd) {
-	if d.torrentDetails == nil || d.torrentDetails.trackers {
+	if d.torrentDetails == nil {
 		return false, nil
 	}
 	state := m.detailState(d)
@@ -255,15 +262,20 @@ func (m *model) updateTorrentDetailKey(d *dialog, name string) (bool, tea.Cmd) {
 	case "o":
 		return true, m.loadDetailTab(detailTabOverview)
 	case "2":
-		return true, m.loadDetailTab(detailTabFiles)
+		return true, m.loadDetailTab(detailTabTrackers)
 	case "3":
+		return true, m.loadDetailTab(detailTabFiles)
+	case "4":
 		return true, m.loadDetailTab(detailTabPeers)
 	case "tab":
 		tab := state.tab
 		if state.pendingTab != nil {
 			tab = *state.pendingTab
 		}
-		return true, m.loadDetailTab((tab + 1) % 3)
+		return true, m.loadDetailTab((tab + 1) % detailTabCount)
+	}
+	if state.tab == detailTabTrackers {
+		return true, m.updateTrackerTab(name)
 	}
 	if state.tab == detailTabFiles {
 		files := filteredDetailFiles(state.files, state.fileFilter)
@@ -306,6 +318,8 @@ func (m *model) updateTorrentDetailKey(d *dialog, name string) (bool, tea.Cmd) {
 			state.peerCursor = min(max(0, count-1), state.peerCursor+1)
 			m.ensureDetailCursorVisible(d)
 			return true, nil
+		case "b", "B":
+			return true, m.openPeerBanDialog(d)
 		}
 	}
 	return false, nil
@@ -315,9 +329,10 @@ func (m *model) ensureDetailCursorVisible(d *dialog) {
 	if d == nil || d.detail == nil {
 		return
 	}
-	visible := dialogBodyHeight(m.heightForDialog())
-	lines := m.detailDialogLines(d, max(1, m.width))
-	line := 1
+	visible := detailBodyHeight(d, m.heightForDialog())
+	innerWidth, _ := dialogDimensions(m.width)
+	lines := m.detailBodyLines(d, innerWidth)
+	line := 0
 	if d.detail.tab == detailTabFiles {
 		line += d.detail.fileCursor
 		if d.detail.fileFilter != "" || d.detail.fileFilterActive {
@@ -348,7 +363,7 @@ func allPrintable(value string) bool {
 
 func (m *model) loadDetailTab(tab detailTab) tea.Cmd {
 	d := m.dialog
-	if d == nil || d.torrentDetails == nil || d.torrentDetails.trackers {
+	if d == nil || d.torrentDetails == nil {
 		return nil
 	}
 	state := m.detailState(d)
@@ -364,12 +379,28 @@ func (m *model) loadDetailTab(tab detailTab) tea.Cmd {
 	state.tab = tab
 	state.fileCursor, state.peerCursor = 0, 0
 	d.scroll = 0
-	if tab == detailTabOverview {
+	d.status = ""
+	if tab == detailTabOverview && d.rows != nil {
 		return nil
 	}
 	backend, target := m.backend, *d.torrentDetails
 	update := &detailTabUpdate{dialog: d, tab: tab}
 	switch tab {
+	case detailTabOverview:
+		return m.startWork(detailTabWork, "Loading torrent overview", func(ctx context.Context) workDone {
+			rows, err := backend.details(ctx, target.hash, false)
+			return workDone{rows: rows, detailTabUpdate: update, err: err}
+		})
+	case detailTabTrackers:
+		source, ok := backend.(trackerService)
+		if !ok {
+			d.status = "Tracker details are unavailable for this connection"
+			return nil
+		}
+		return m.startWork(detailTabWork, "Loading trackers", func(ctx context.Context) workDone {
+			update.trackers, update.err = source.trackers(ctx, target.hash)
+			return workDone{detailTabUpdate: update, err: update.err}
+		})
 	case detailTabFiles:
 		source, ok := backend.(torrentFilesService)
 		if !ok {
@@ -458,7 +489,9 @@ func (m *model) finishDetailTabWork(done workDone) {
 		return
 	}
 	state := m.detailState(m.dialog)
-	if update.tab == detailTabFiles {
+	if update.tab == detailTabOverview {
+		m.dialog.rows = done.rows
+	} else if update.tab == detailTabFiles {
 		state.files = append([]client.TorrentFile(nil), update.files...)
 		for index := range state.fileMarks {
 			found := false
@@ -474,6 +507,8 @@ func (m *model) finishDetailTabWork(done workDone) {
 		}
 	} else if update.tab == detailTabPeers {
 		state.peers.Merge(update.peers)
+	} else if update.tab == detailTabTrackers {
+		m.replaceTrackerEntries(update.trackers)
 	}
 	m.dialog.status = ""
 }

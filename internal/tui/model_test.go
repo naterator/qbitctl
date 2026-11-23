@@ -56,6 +56,29 @@ func TestRefreshIntervalAdaptsToQueueActivity(t *testing.T) {
 	}
 }
 
+func TestRefreshIntervalTracksServerStateWithoutQueueRebuild(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.replaceQueue([]client.TorrentInfo{{Hash: "idle", State: "stoppedDL"}})
+	if got := m.refreshInterval(); got != idleRefreshInterval {
+		t.Fatalf("initial idle refresh interval = %s, want %s", got, idleRefreshInterval)
+	}
+	download, upload := int64(42), int64(0)
+	m.updateQueueActivity(queueTransferState{download: &download, upload: &upload})
+	if got := m.refreshInterval(); got != activeRefreshInterval {
+		t.Fatalf("server-state active refresh interval = %s, want %s", got, activeRefreshInterval)
+	}
+	download = 0
+	m.updateQueueActivity(queueTransferState{download: &download, upload: &upload})
+	if got := m.refreshInterval(); got != idleRefreshInterval {
+		t.Fatalf("server-state idle refresh interval = %s, want %s", got, idleRefreshInterval)
+	}
+	m.queueActive = true
+	m.updateQueueActivity(queueTransferState{})
+	if got := m.refreshInterval(); got != activeRefreshInterval {
+		t.Fatalf("missing server-state rates changed refresh interval = %s, want %s", got, activeRefreshInterval)
+	}
+}
+
 func TestNoOpQueueWorkSkipsQueueRebuild(t *testing.T) {
 	m := newModel(t.Context(), nil)
 	m.page = queuePage

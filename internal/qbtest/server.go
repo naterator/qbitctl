@@ -58,6 +58,7 @@ type Server struct {
 	Torrents          any
 	Files             any
 	Trackers          any
+	Tags              []string
 	Categories        map[string]map[string]any
 	Forms             map[string][]url.Values
 	AddFiles          []UploadedTorrent
@@ -66,6 +67,10 @@ type Server struct {
 	AppVersion        string
 	APIVersion        string
 	TransferInfo      any
+	// SpeedLimitsMode is the plain-text value returned by
+	// transfer/speedLimitsMode ("0" for normal, "1" for alternate).
+	SpeedLimitsMode      string
+	SpeedLimitsModeCalls int
 }
 
 func New(t TestingT) *Server {
@@ -96,6 +101,15 @@ func (s *Server) nextStatus(path string) int {
 	status := queue[0]
 	s.StatusQueue[path] = queue[1:]
 	return status
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) nextBody(path string) (string, bool) {
@@ -244,10 +258,56 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(s.Categories)
+	case "/api/v2/torrents/tags":
+		_ = json.NewEncoder(w).Encode(s.Tags)
 	case "/api/v2/torrents/createCategory":
 		s.recordForm(r.URL.Path, r)
 		category := r.Form.Get("category")
-		s.Categories[category] = map[string]any{}
+		s.Categories[category] = map[string]any{"name": category, "savePath": r.Form.Get("savePath")}
+	case "/api/v2/torrents/editCategory":
+		s.recordForm(r.URL.Path, r)
+		category := r.Form.Get("category")
+		entry := s.Categories[category]
+		if entry == nil {
+			entry = map[string]any{"name": category}
+		}
+		entry["name"] = category
+		entry["savePath"] = r.Form.Get("savePath")
+		if enabled := r.Form.Get("downloadPathEnabled"); enabled != "" {
+			if enabled == "true" {
+				entry["download_path"] = r.Form.Get("downloadPath")
+			} else {
+				entry["download_path"] = false
+			}
+		}
+		s.Categories[category] = entry
+	case "/api/v2/torrents/removeCategories":
+		s.recordForm(r.URL.Path, r)
+		for _, category := range strings.Split(r.Form.Get("categories"), "\n") {
+			delete(s.Categories, category)
+		}
+	case "/api/v2/torrents/createTags":
+		s.recordForm(r.URL.Path, r)
+		for _, tag := range strings.Split(r.Form.Get("tags"), ",") {
+			tag = strings.TrimSpace(tag)
+			if tag == "" || containsString(s.Tags, tag) {
+				continue
+			}
+			s.Tags = append(s.Tags, tag)
+		}
+	case "/api/v2/torrents/deleteTags":
+		s.recordForm(r.URL.Path, r)
+		remove := make(map[string]struct{})
+		for _, tag := range strings.Split(r.Form.Get("tags"), ",") {
+			remove[strings.TrimSpace(tag)] = struct{}{}
+		}
+		kept := s.Tags[:0]
+		for _, tag := range s.Tags {
+			if _, ok := remove[tag]; !ok {
+				kept = append(kept, tag)
+			}
+		}
+		s.Tags = kept
 	case "/api/v2/torrents/add":
 		s.recordMultipartForm(r.URL.Path, r)
 	case "/api/v2/torrents/setCategory",
@@ -313,6 +373,24 @@ func (s *Server) Handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_ = json.NewEncoder(w).Encode(info)
+	case "/api/v2/transfer/speedLimitsMode":
+		s.SpeedLimitsModeCalls++
+		mode := s.SpeedLimitsMode
+		if mode == "" {
+			mode = "0"
+		}
+		_, _ = io.WriteString(w, mode)
+	case "/api/v2/transfer/toggleSpeedLimitsMode":
+		s.CallOrder = append(s.CallOrder, r.URL.Path)
+		if s.SpeedLimitsMode == "1" {
+			s.SpeedLimitsMode = "0"
+		} else {
+			s.SpeedLimitsMode = "1"
+		}
+	case "/api/v2/transfer/setDownloadLimit",
+		"/api/v2/transfer/setUploadLimit",
+		"/api/v2/transfer/banPeers":
+		s.recordForm(r.URL.Path, r)
 	default:
 		s.t.Fatalf("unexpected path: %s", r.URL.Path)
 	}

@@ -37,4 +37,4 @@
 
 
   ● Error  ·  server request failed
-  enter details   r refresh   q quit
+  r refresh   ctrl+p commands   q quit

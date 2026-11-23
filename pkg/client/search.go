@@ -27,9 +27,22 @@ type SearchResult struct {
 	Seeders  int    `json:"seeders"`
 	Leechers int    `json:"leechers"`
 	Source   string `json:"source"` // Hostname of the result page or plugin site.
+	// URL is the download target when the search plugin supplied one. It is
+	// intentionally omitted from normal JSON output; the local search cache is
+	// the durable store for add-by-ID, while the TUI may use this value for copy.
+	URL string `json:"-"`
 
 	downloadURL string
 	pluginName  string
+}
+
+// DownloadURL returns the plugin-supplied result target when one is known.
+// It is primarily useful to interactive clients offering copy/share actions.
+func (r SearchResult) DownloadURL() string {
+	if strings.TrimSpace(r.URL) != "" {
+		return strings.TrimSpace(r.URL)
+	}
+	return strings.TrimSpace(r.downloadURL)
 }
 
 // Search runs one job with the selected plugin and returns the results available
@@ -186,7 +199,7 @@ func (a *App) searchResults(ctx context.Context, params url.Values, plugin strin
 		}
 		results = append(results, SearchResult{
 			Name: item.Name, Size: item.Size, Seeders: item.Seeders, Leechers: item.Leechers,
-			Source:      searchSource(item.PageURL, item.SiteURL),
+			Source: searchSource(item.PageURL, item.SiteURL), URL: download,
 			downloadURL: download, pluginName: engine,
 		})
 	}

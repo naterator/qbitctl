@@ -186,28 +186,35 @@ func newRootCmd() *cobra.Command {
 	)
 
 	rootCmd.PersistentFlags().StringVarP(&opts.ConfigPath, "config", "c", "", "Alternate config file path")
+	rootCmd.PersistentFlags().StringVar(&opts.Profile, "profile", "", "Saved server profile for this invocation (session-only)")
 	rootCmd.PersistentFlags().StringVarP(&opts.URL, "url", "u", "", "qBittorrent WebUI URL")
 	rootCmd.PersistentFlags().StringVarP(&opts.User, "user", "U", "", "qBittorrent username")
 	rootCmd.PersistentFlags().StringVarP(&opts.Pass, "pass", "p", "", "qBittorrent password (visible in process arguments; prefer --pass-stdin or QBITCTL_PASSWORD)")
 	rootCmd.PersistentFlags().BoolVar(&passStdin, "pass-stdin", false, "Read the qBittorrent password from standard input")
+	rootCmd.PersistentFlags().StringVar(&opts.CAFile, "ca-file", "", "PEM CA bundle for the qBittorrent WebUI connection")
 	rootCmd.PersistentFlags().StringVar(&unitsValue, "units", "", "Data-size output units: human or bytes; empty uses config (human fallback)")
 	rootCmd.PersistentFlags().DurationVar(&opts.HTTPTimeout, "http-timeout", 0, "Maximum time for each qBittorrent request (default: 15s; full lists: 60s; uploads: 2m)")
 	rootCmd.MarkFlagsMutuallyExclusive("pass", "pass-stdin")
+	_ = rootCmd.RegisterFlagCompletionFunc("profile", completeProfileArgs)
 
 	rootCmd.AddCommand(
 		newConfigCmd(&opts),
+		newProfileCmd(&opts),
 		newTUIDefaultCmd(&opts),
 		newCompletionCmd(rootCmd),
 		newVersionCmd(),
 		newUpdateCmd(),
 		newBatchCmd(&opts),
 		newInfoCmd(&opts),
+		newTransferCmd(&opts),
 		newTUICmd(&opts),
 		newSearchCmd(&opts),
 		newFilesCmd(&opts),
 		newPeersCmd(&opts),
 		newTrackersCmd(&opts),
 		newAddCmd(&opts),
+		newCategoriesCmd(&opts),
+		newTagsCmd(&opts),
 		newListCmd(&opts),
 		newShowCmd(&opts),
 		newGetCmd(&opts),

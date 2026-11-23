@@ -209,15 +209,10 @@ func (a *App) FetchTorrentsContext(ctx context.Context, filter TorrentListFilter
 	if err := json.Unmarshal(body, &torrents); err != nil {
 		return nil, nil, codedErrf(ExitFetchFail, "Invalid JSON from torrent list")
 	}
-	if state := strings.ToLower(strings.TrimSpace(filter.State)); state == "queued" || state == "checking" {
+	if strings.TrimSpace(filter.State) != "" {
 		filtered := torrents[:0]
 		for _, torrent := range torrents {
-			value := strings.ToLower(torrent.State)
-			matches := state == "queued" && strings.Contains(value, "queued")
-			if state == "checking" {
-				matches = strings.Contains(value, "check")
-			}
-			if matches {
+			if MatchTorrentState(torrent, filter.State) {
 				filtered = append(filtered, torrent)
 			}
 		}

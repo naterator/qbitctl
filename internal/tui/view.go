@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"math"
 	"strings"
+	"time"
 	"unicode"
 
 	"charm.land/bubbles/v2/textinput"
@@ -76,6 +77,7 @@ func (m *model) View() tea.View {
 
 	v := tea.NewView(viewFillScreen(content, width, height))
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -242,23 +244,38 @@ func (m *model) viewQueueList(width, height int) []string {
 }
 
 func (m *model) viewQueueHeader(width int) string {
-	name, progress, state, speed := m.viewQueueColumns(width)
+	columns := m.viewQueueColumns(width)
 	parts := []string{
 		viewColumn("", 2),
-		viewColumn("Name", name),
-		viewColumn("Done", progress),
+		viewColumn("Name", columns.name),
+		viewColumn("Done", columns.progress),
 	}
-	if state > 0 {
-		parts = append(parts, viewColumn("State", state))
+	if columns.state > 0 {
+		parts = append(parts, viewColumn("State", columns.state))
 	}
-	if speed > 0 {
-		parts = append(parts, viewColumn("Down / Up", speed))
+	if columns.speed > 0 {
+		parts = append(parts, viewColumn("Down / Up", columns.speed))
+	}
+	if columns.size > 0 {
+		parts = append(parts, viewColumn("Size", columns.size))
+	}
+	if columns.ratio > 0 {
+		parts = append(parts, viewColumn("Ratio", columns.ratio))
+	}
+	if columns.eta > 0 {
+		parts = append(parts, viewColumn("ETA", columns.eta))
+	}
+	if columns.category > 0 {
+		parts = append(parts, viewColumn("Category", columns.category))
+	}
+	if columns.seeds > 0 {
+		parts = append(parts, viewColumn("Seeds", columns.seeds))
 	}
 	return viewMutedStyle.Render(strings.Join(parts, " "))
 }
 
 func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) string {
-	name, progress, state, speed := m.viewQueueColumns(width)
+	columns := m.viewQueueColumns(width)
 	marker := "  "
 	if m.marked != nil && m.marked[t.Hash] {
 		marker = "* "
@@ -269,7 +286,7 @@ func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) str
 			marker = "›*"
 		}
 	}
-	progressText := viewProgress(t.Progress, progress)
+	progressText := viewProgress(t.Progress, columns.progress)
 	stateText := viewSafe(t.State)
 	if !selected {
 		progressText = viewAccentStyle.Render(progressText)
@@ -277,14 +294,43 @@ func (m *model) viewQueueRow(t client.TorrentInfo, selected bool, width int) str
 	}
 	parts := []string{
 		viewColumn(marker, 2),
-		viewColumn(viewSafe(t.Name), name),
-		viewColumn(progressText, progress),
+		viewColumn(viewSafe(t.Name), columns.name),
+		viewColumn(progressText, columns.progress),
 	}
-	if state > 0 {
-		parts = append(parts, viewColumn(stateText, state))
+	if columns.state > 0 {
+		parts = append(parts, viewColumn(stateText, columns.state))
 	}
-	if speed > 0 {
-		parts = append(parts, viewColumn(m.viewRate(t.DLSpeed)+" / "+m.viewRate(t.UpSpeed), speed))
+	if columns.speed > 0 {
+		parts = append(parts, viewColumn(m.viewRate(t.DLSpeed)+" / "+m.viewRate(t.UpSpeed), columns.speed))
+	}
+	if columns.size > 0 {
+		parts = append(parts, viewColumn(m.viewSize(t.TotalSize), columns.size))
+	}
+	if columns.ratio > 0 {
+		ratio := "∞"
+		if t.Ratio >= 0 {
+			ratio = fmt.Sprintf("%.2f", t.Ratio)
+		}
+		parts = append(parts, viewColumn(ratio, columns.ratio))
+	}
+	if columns.eta > 0 {
+		parts = append(parts, viewColumn(viewETA(t.ETA), columns.eta))
+	}
+	if columns.category > 0 {
+		category := viewSafe(t.Category)
+		if strings.TrimSpace(category) == "" {
+			category = "—"
+		}
+		parts = append(parts, viewColumn(category, columns.category))
+	}
+	if columns.seeds > 0 {
+		seeds := "—"
+		if t.TotalSeeders != nil {
+			seeds = fmt.Sprint(*t.TotalSeeders)
+		} else if t.ConnectedSeeds != nil {
+			seeds = fmt.Sprint(*t.ConnectedSeeds)
+		}
+		parts = append(parts, viewColumn(seeds, columns.seeds))
 	}
 	line := viewFit(strings.Join(parts, " "), width)
 	if selected {
@@ -490,7 +536,7 @@ func (m *model) viewResultFilterEditor(width int) []string {
 }
 
 func (m *model) viewSearchHeader(width int) string {
-	return viewMutedStyle.Render(m.viewSearchLine(width, "", "Title", "ID", "Size", "Seeds", "Source"))
+	return viewMutedStyle.Render(m.viewSearchLine(width, "", "Title", "ID", "Size", "Seeds", "Leech", "Source"))
 }
 
 func (m *model) viewSearchRow(r client.SearchResult, selected bool, width int) string {
@@ -502,14 +548,14 @@ func (m *model) viewSearchRow(r client.SearchResult, selected bool, width int) s
 	if selected {
 		marker = "›"
 	}
-	line := m.viewSearchLine(width, marker, viewSafe(r.Name), id, m.viewSize(r.Size), fmt.Sprintf("%d", r.Seeders), viewSafe(r.Source))
+	line := m.viewSearchLine(width, marker, viewSafe(r.Name), id, m.viewSize(r.Size), fmt.Sprintf("%d", r.Seeders), fmt.Sprintf("%d", r.Leechers), viewSafe(r.Source))
 	if selected {
 		return viewSelectedSty.Width(width).Render(line)
 	}
 	return line
 }
 
-func (m *model) viewSearchLine(width int, marker, title, id, size, seeds, source string) string {
+func (m *model) viewSearchLine(width int, marker, title, id, size, seeds, leechers, source string) string {
 	sizeWidth := 9
 	if m.dataUnits == client.DataUnitsBytes {
 		// An int64 can be 19 decimal digits. Keep room for the separating
@@ -518,6 +564,9 @@ func (m *model) viewSearchLine(width int, marker, title, id, size, seeds, source
 		sizeWidth = 21
 	}
 	columns := []string{viewColumn(size, sizeWidth), viewColumn(seeds, 5)}
+	if width >= 82 {
+		columns = append(columns, viewColumn(leechers, 6))
+	}
 	if width >= 58 {
 		columns = append(columns, viewColumn(id, 10))
 	}
@@ -632,7 +681,7 @@ func (m *model) viewFooter(width int) []string {
 			keys = []string{"p", "Providers", "/", "search", "s", "sort", "f", "filter", "esc", "clear", "enter", "add", "q", "quit"}
 		}
 	case serverPage:
-		keys = []string{"enter", "details", "r", "refresh", "q", "quit"}
+		keys = []string{"r", "refresh", "ctrl+p", "commands", "q", "quit"}
 	case configPage:
 		keys = []string{"↑/↓ · j/k", "move"}
 		if m.configSelection < int(configSettingConfigFile) {
@@ -695,36 +744,71 @@ func viewDetailWidth(width int) int {
 	return max(30, width/3)
 }
 
-func viewQueueColumns(width int) (name, progress, state, speed int) {
-	progress = 4
-	if width >= 62 {
-		progress = 15
-	}
-	fixed := 2 + progress + 2 // marker and separators
-	if width >= 34 {
-		state = 13
-		fixed += state + 1
-	}
-	if width >= 85 {
-		speed = 23
-		fixed += speed + 1
-	}
-	name = max(1, width-fixed)
-	return
+type queueColumnLayout struct {
+	name, progress, state, speed      int
+	size, ratio, eta, category, seeds int
 }
 
-func (m *model) viewQueueColumns(width int) (name, progress, state, speed int) {
-	name, progress, state, speed = viewQueueColumns(width)
-	if m.dataUnits == client.DataUnitsBytes && speed > 0 {
-		speed = 35
-		fixed := 2 + progress + 2
-		if state > 0 {
-			fixed += state + 1
-		}
-		fixed += speed + 1
-		name = max(1, width-fixed)
+func (m *model) viewQueueColumns(width int) queueColumnLayout {
+	columns := queueColumnLayout{progress: 4}
+	if width >= 62 {
+		columns.progress = 15
 	}
-	return
+	if width >= 34 {
+		columns.state = 13
+	}
+	if width >= 85 {
+		columns.speed = 23
+	}
+	if m.dataUnits == client.DataUnitsBytes && columns.speed > 0 {
+		columns.speed = 35
+	}
+	fixed := 2 + columns.progress + 2
+	if columns.state > 0 {
+		fixed += columns.state + 1
+	}
+	if columns.speed > 0 {
+		fixed += columns.speed + 1
+	}
+
+	// Wide is deliberately opt-in. Add fields only when the terminal can keep
+	// a useful name column; a narrow terminal therefore remains calm even when
+	// a user has saved the wide preference.
+	if m.queueColumns == queueColumnsWide {
+		for _, extra := range []struct {
+			width  int
+			target *int
+		}{
+			{10, &columns.size}, {8, &columns.ratio}, {9, &columns.eta}, {14, &columns.category}, {7, &columns.seeds},
+		} {
+			if width-fixed-extra.width-1 >= 18 {
+				*extra.target = extra.width
+				fixed += extra.width + 1
+			}
+		}
+	}
+	columns.name = max(1, width-fixed)
+	return columns
+}
+
+func viewETA(seconds int64) string {
+	if seconds < 0 {
+		return "—"
+	}
+	if seconds == 0 {
+		return "done"
+	}
+	duration := time.Duration(seconds) * time.Second
+	if duration >= 24*time.Hour {
+		return fmt.Sprintf("%dd", int(duration/(24*time.Hour)))
+	}
+	if duration >= time.Hour {
+		return fmt.Sprintf("%dh", int(duration/time.Hour))
+	}
+	if duration >= time.Minute {
+		return fmt.Sprintf("%dm", int(duration/time.Minute))
+	}
+	return fmt.Sprintf("%ds", int(duration/time.Second))
 }
 
 func viewWindowStart(index, count, visible int) int {

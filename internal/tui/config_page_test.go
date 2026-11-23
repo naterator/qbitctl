@@ -27,8 +27,8 @@ func TestConfigSettingsAreGroupedAndMaskSecrets(t *testing.T) {
 
 	plain := ansi.Strip(strings.Join(m.viewConfigSettings(80, 24), "\n"))
 	for _, want := range []string{
-		"Connection", "Server address", "Username", "Password", "••••••••  saved (hidden)",
-		"View", "TUI by default", "Color scheme", "Data units", "Human-readable",
+		"Connection", "Server address", "Username", "Password", "Active profile", "Legacy single-server config", "Startup profile", "CA bundle", "System trust store", "••••••••  saved (hidden)",
+		"View", "TUI by default", "Color scheme", "Data units", "Human-readable", "Refresh interval", "Adaptive (5s active / 15s idle)",
 		"Search", "Default provider", "Enabled search plugins", "Files", "Config file", "Search cache",
 	} {
 		if !strings.Contains(plain, want) {
@@ -86,39 +86,77 @@ func TestConfigSelectionMovesAndActivatesSettings(t *testing.T) {
 
 	m.dialog = nil
 	m.setup.tuiDefault = false
-	m.configSelection = 3
+	m.configSelection = int(configSettingTUIDefault)
 	m.activateConfigSetting()
 	if !m.setup.tuiDefault {
 		t.Fatal("TUI default activation did not toggle the setting")
 	}
 
-	m.configSelection = 4
+	m.configSelection = int(configSettingTheme)
 	m.activateConfigSetting()
 	if m.dialog == nil || m.dialog.kind != dialogTheme {
 		t.Fatalf("color scheme activation opened %#v, want theme picker", m.dialog)
 	}
 	m.dialog = nil
 
-	m.configSelection = 5
+	m.configSelection = int(configSettingDataUnits)
 	m.dataUnits = client.DataUnitsHuman
 	m.activateConfigSetting()
 	if m.dataUnits != client.DataUnitsBytes {
 		t.Fatalf("data units activation = %q, want bytes", m.dataUnits)
 	}
 
-	m.configSelection = 6
+	m.configSelection = int(configSettingRefreshInterval)
+	m.dialog = nil
+	m.activateConfigSetting()
+	if m.dialog == nil || m.dialog.kind != dialogRefreshInterval {
+		t.Fatalf("refresh interval activation opened %#v, want refresh interval dialog", m.dialog)
+	}
+
+	m.configSelection = int(configSettingSearchProvider)
 	m.dialog = nil
 	m.activateConfigSetting()
 	if m.dialog == nil || m.dialog.kind != dialogSearchPlugins {
 		t.Fatalf("provider activation opened %#v, want provider picker", m.dialog)
 	}
 
-	for index := 7; index < len(m.configSettings()); index++ {
+	for index, setting := range m.configSettings() {
+		if setting.id != configSettingConfigFile && setting.id != configSettingSearchCache {
+			continue
+		}
 		m.configSelection = index
 		m.dialog = nil
 		if cmd := m.activateConfigSetting(); cmd != nil || m.dialog != nil {
 			t.Fatalf("read-only file setting %d activated command=%v dialog=%#v", index, cmd != nil, m.dialog)
 		}
+	}
+}
+
+func TestConfigCAFieldUsesEffectivePathAndPreservesItInEditor(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.setup = setupState{
+		url:    "https://qbit.example",
+		user:   "admin",
+		caFile: "relative-ca.pem",
+	}
+
+	wantPath, err := filepath.Abs(m.setup.caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.caFileStatus(); got != wantPath {
+		t.Fatalf("CA status = %q, want effective absolute path %q", got, wantPath)
+	}
+
+	m.openConnectionEditor(false)
+	if m.dialog == nil || len(m.dialog.fields) != 4 {
+		t.Fatalf("connection editor = %#v, want four fields including CA bundle", m.dialog)
+	}
+	if got := m.dialog.fields[3].label; got != "CA bundle" {
+		t.Fatalf("last editor field label = %q, want CA bundle", got)
+	}
+	if got := m.dialog.value(3); got != m.setup.caFile {
+		t.Fatalf("CA editor value = %q, want saved path %q", got, m.setup.caFile)
 	}
 }
 

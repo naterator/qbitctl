@@ -6,22 +6,22 @@
    ›  Server address         │ Not configured
       Username               │ Not configured
       Password               │ Not configured
-
-   View               Color scheme
-      TUI by default
-      Color scheme    › Default · qbitctl's original palette
-      Data units        Ocean · Deep blue with bright cyan accents
-                        Forest · Calm green terminal garden
-   Search               Amber · Warm gold on dark brown
-      Default provid    Rose · Soft rose and plum
-                        Violet · Purple surfaces with cool highlights
-   Files                Monochrome · Quiet grayscale with clear hierarchy
-      Config file  │    Nord · Arctic blue-gray
-      Search cache │    Dracula · High-contrast purple night
+      Active profile
+      Startup profil  Color scheme
+      CA bundle
+                      › Default · qbitctl's original palette
+   View                 Ocean · Deep blue with bright cyan accents
+      TUI by default    Forest · Calm green terminal garden
+      Color scheme      Amber · Warm gold on dark brown
+      Data units        Rose · Soft rose and plum
+      Refresh interv    Violet · Purple surfaces with cool highlights
+                        Monochrome · Quiet grayscale with clear hierarchy
+   Search               Nord · Arctic blue-gray
+      Default provid    Dracula · High-contrast purple night
                         Solarized · Classic teal and gold
-                        Gruvbox · Earthy retro terminal colors
-                        Catppuccin · Pastel accents on mocha
-                        High contrast · Maximum separation for accessibility
+   Files                Gruvbox · Earthy retro terminal colors
+      Config file  │    Catppuccin · Pastel accents on mocha
+      Search cache │    High contrast · Maximum separation for accessibility
                         Paper · Light parchment with ink-blue accents
                         Midnight · Nearly black with electric cyan
                         Terminal · Green phosphor with old-school contrast

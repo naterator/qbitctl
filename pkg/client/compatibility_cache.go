@@ -25,6 +25,7 @@ const (
 type compatibilityCacheEntry struct {
 	URL        string `json:"url"`
 	User       string `json:"user"`
+	Profile    string `json:"profile,omitempty"`
 	AppVersion string `json:"app_version"`
 	APIVersion string `json:"api_version"`
 	CheckedAt  int64  `json:"checked_at"`
@@ -71,9 +72,10 @@ func (a *App) compatibilityOrigin() string {
 
 func (a *App) compatibilityScope() compatibilityCacheEntry {
 	return compatibilityCacheEntry{
-		URL:    strings.TrimRight(strings.TrimSpace(a.creds.URL), "/"),
-		User:   a.creds.User,
-		Origin: a.compatibilityOrigin(),
+		URL:     strings.TrimRight(strings.TrimSpace(a.creds.URL), "/"),
+		User:    a.creds.User,
+		Profile: a.profileName,
+		Origin:  a.compatibilityOrigin(),
 	}
 }
 
@@ -108,7 +110,7 @@ func (a *App) loadCompatibilityCache() (appVersion, apiVersion string, ok bool) 
 	scope := a.compatibilityScope()
 	now := time.Now()
 	for _, entry := range cache.Entries {
-		if entry.URL != scope.URL || entry.User != scope.User || entry.Origin != scope.Origin {
+		if entry.URL != scope.URL || entry.User != scope.User || entry.Profile != scope.Profile || entry.Origin != scope.Origin {
 			continue
 		}
 		age := now.Sub(time.Unix(entry.CheckedAt, 0))
@@ -132,6 +134,7 @@ func (a *App) saveCompatibilityCache(appVersion, apiVersion string) {
 	entry := compatibilityCacheEntry{
 		URL:        scope.URL,
 		User:       scope.User,
+		Profile:    scope.Profile,
 		Origin:     scope.Origin,
 		AppVersion: strings.TrimSpace(appVersion),
 		APIVersion: strings.TrimSpace(apiVersion),
@@ -144,7 +147,7 @@ func (a *App) saveCompatibilityCache(appVersion, apiVersion string) {
 		}
 		retained := make([]compatibilityCacheEntry, 0, compatibilityCacheMaxEntries)
 		for _, existing := range cache.Entries {
-			if existing.URL == entry.URL && existing.User == entry.User && existing.Origin == entry.Origin {
+			if existing.URL == entry.URL && existing.User == entry.User && existing.Profile == entry.Profile && existing.Origin == entry.Origin {
 				continue
 			}
 			if len(retained) >= compatibilityCacheMaxEntries-1 {
@@ -180,7 +183,7 @@ func (a *App) invalidateCompatibilityCache() {
 		}
 		retained := entries[:0]
 		for _, entry := range entries {
-			if entry.URL == scope.URL && entry.User == scope.User && entry.Origin == scope.Origin {
+			if entry.URL == scope.URL && entry.User == scope.User && entry.Profile == scope.Profile && entry.Origin == scope.Origin {
 				continue
 			}
 			retained = append(retained, entry)

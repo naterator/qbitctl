@@ -34,3 +34,11 @@ func TestListTorrentFilterRejectsUnknownState(t *testing.T) {
 		t.Fatal("listTorrentFilter unexpectedly accepted unknown state")
 	}
 }
+
+func TestListTorrentFilterAcceptsSharedStateVocabulary(t *testing.T) {
+	for _, state := range []string{"active", "downloading", "completed", "inactive", "running", "stalled", "queued", "checking", "moving", "forceddl", "checkingresumedata"} {
+		if _, err := listTorrentFilter(state, "", ""); err != nil {
+			t.Errorf("listTorrentFilter(%q) returned error: %v", state, err)
+		}
+	}
+}

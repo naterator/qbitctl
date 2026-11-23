@@ -73,6 +73,11 @@ func (m *model) paletteCommands() []dialogItem {
 			dialogItem{label: "Cancel plugin request", action: "cancel-plugin-request", description: "Stop the active search-plugin request", keys: "esc"},
 		)
 	}
+	if m.busy != "" && m.work == queueCatalogWork {
+		items = paletteGroup(items, "Queue filters",
+			dialogItem{label: "Cancel filter catalog", action: "cancel-queue-filter", description: "Stop loading categories or tags", keys: "esc"},
+		)
+	}
 	if m.busy != "" && m.work == connectWork {
 		items = paletteGroup(items, "Connection",
 			dialogItem{label: "Cancel connection", action: "cancel-connection", description: "Stop the connection attempt", keys: "esc"},
@@ -100,14 +105,23 @@ func (m *model) addQueuePaletteCommands(items *[]dialogItem, connected, idle boo
 		*items = paletteGroup(*items, "Queue",
 			dialogItem{label: "Filter queue", action: "filter", description: "Filter by name, hash, category, tags, or state", keys: "/"},
 			dialogItem{label: "Sort queue", action: "sort-queue", description: "Sort by size, ETA, speed, and other torrent fields", keys: "o"},
+			dialogItem{label: "Choose queue columns", action: "queue-columns", description: "Use compact or wide torrent columns", keys: "c"},
 		)
+		if connected {
+			*items = paletteGroup(*items, "Queue filters",
+				dialogItem{label: "Filter by category", action: "filter-category", description: "Choose a category from qBittorrent's catalog"},
+				dialogItem{label: "Filter by tag", action: "filter-tag", description: "Choose a tag from qBittorrent's catalog"},
+			)
+		}
 		if connected {
 			*items = paletteGroup(*items, "Queue",
 				dialogItem{label: "Refresh queue", action: "refresh", description: "Reload the torrent queue", keys: "r"},
 			)
 		}
 	}
-	if idle && (strings.TrimSpace(m.filter) != "" || (strings.TrimSpace(m.stateFilter) != "" && !strings.EqualFold(strings.TrimSpace(m.stateFilter), "all"))) {
+	if idle && (strings.TrimSpace(m.filter) != "" ||
+		(strings.TrimSpace(m.stateFilter) != "" && !strings.EqualFold(strings.TrimSpace(m.stateFilter), "all")) ||
+		strings.TrimSpace(m.categoryFilter) != "" || strings.TrimSpace(m.tagFilter) != "") {
 		*items = paletteGroup(*items, "Queue",
 			dialogItem{label: "Clear queue filter", action: "clear-queue-filter", description: "Show all torrents again", keys: ""},
 		)
@@ -124,6 +138,9 @@ func (m *model) addQueuePaletteCommands(items *[]dialogItem, connected, idle boo
 		}
 		*items = paletteGroup(*items, "Queue",
 			dialogItem{label: label, action: "toggle-mark", description: description, keys: "space"},
+		)
+		*items = paletteGroup(*items, "Queue",
+			dialogItem{label: "Copy hash or magnet", action: "copy", description: "Copy a torrent identifier to the terminal clipboard", keys: "y"},
 		)
 	}
 	if len(m.marked) > 0 {
@@ -214,6 +231,11 @@ func (m *model) addSearchPaletteCommands(items *[]dialogItem, connected, idle bo
 	}
 	if len(m.results) > 0 {
 		m.addListMovementCommands(items, len(m.results))
+		if _, ok := m.focusedResult(); ok {
+			*items = paletteGroup(*items, "Search results",
+				dialogItem{label: "Copy available result link", action: "copy", description: "Copy a magnet or download URL when supplied by the plugin", keys: "y"},
+			)
+		}
 	}
 }
 
@@ -223,12 +245,11 @@ func (m *model) addServerPaletteCommands(items *[]dialogItem, connected, idle bo
 	}
 	*items = paletteGroup(*items, "Server",
 		dialogItem{label: "Refresh server info", action: "refresh", description: "Reload qBittorrent server and transfer statistics", keys: "r"},
+		dialogItem{label: "Set global download limit", action: "server-download-limit", description: "Edit the active global download limit", keys: ""},
+		dialogItem{label: "Set global upload limit", action: "server-upload-limit", description: "Edit the active global upload limit", keys: ""},
+		dialogItem{label: "Use normal speed limits", action: "server-mode-normal", description: "Activate qBittorrent's normal speed-limit schedule", keys: ""},
+		dialogItem{label: "Use alternate speed limits", action: "server-mode-alternate", description: "Activate qBittorrent's alternate speed-limit schedule", keys: ""},
 	)
-	if len(m.serverRows) > 0 {
-		*items = paletteGroup(*items, "Server",
-			dialogItem{label: "Server details", action: "server-details", description: "Inspect the loaded server statistics", keys: "enter"},
-		)
-	}
 }
 
 func (m *model) addConfigPaletteCommands(items *[]dialogItem, idle bool) {
@@ -236,14 +257,18 @@ func (m *model) addConfigPaletteCommands(items *[]dialogItem, idle bool) {
 		return
 	}
 	*items = paletteGroup(*items, "Connection",
+		dialogItem{label: "Switch server profile", action: "switch-profile", description: "Use another saved qBittorrent server for this session"},
+		dialogItem{label: "Set startup profile", action: "startup-profile", description: "Choose the profile used on the next launch"},
 		dialogItem{label: "Edit server address", action: "config-server", description: "Change the qBittorrent Web API address"},
 		dialogItem{label: "Edit username", action: "config-username", description: "Change the Web API username"},
 		dialogItem{label: "Edit password", action: "config-password", description: "Change the saved Web API password"},
+		dialogItem{label: "Edit CA bundle", action: "config-ca", description: "Change the optional PEM trust bundle path"},
 	)
 	*items = paletteGroup(*items, "View",
 		dialogItem{label: "Toggle TUI default", action: "config-default", description: "Choose whether qbitctl starts in the TUI"},
 		dialogItem{label: "Choose color scheme", action: "config-theme", description: "Preview and save a color scheme"},
 		dialogItem{label: "Toggle data units", action: "config-units", description: "Switch between human-readable and exact bytes"},
+		dialogItem{label: "Set refresh interval", action: "config-refresh", description: "Use adaptive refresh or a fixed interval"},
 	)
 	*items = paletteGroup(*items, "Search",
 		dialogItem{label: "Choose default provider", action: "config-provider", description: "Save the provider used by new searches"},

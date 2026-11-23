@@ -33,6 +33,9 @@ const (
 	dialogShareChoice         dialogKind = "share-choice"
 	dialogResultSort          dialogKind = "result-sort"
 	dialogQueueSort           dialogKind = "queue-sort"
+	dialogQueueColumns        dialogKind = "queue-columns"
+	dialogRefreshInterval     dialogKind = "refresh-interval"
+	dialogCopy                dialogKind = "copy"
 	dialogEditValue           dialogKind = "edit-value"
 	dialogMove                dialogKind = "move"
 	dialogRename              dialogKind = "rename"
@@ -46,9 +49,10 @@ const (
 	dialogSearchPluginManage  dialogKind = "search-plugin-manage"
 	dialogSearchPluginActions dialogKind = "search-plugin-actions"
 	dialogSearchPluginInstall dialogKind = "search-plugin-install"
-	dialogTrackers            dialogKind = "trackers"
+	dialogProfilePicker       dialogKind = "profile-picker"
 	dialogTrackerAdd          dialogKind = "tracker-add"
 	dialogTrackerEdit         dialogKind = "tracker-edit"
+	dialogTransferLimit       dialogKind = "transfer-limit"
 )
 
 type dialogField struct {
@@ -83,11 +87,15 @@ type dialog struct {
 	allItems []dialogItem
 	items    []dialogItem
 	selected int
+	// paletteStatic is used by category/tag queue filter pickers. Those
+	// palettes use the same keyboard and rendering path as the command palette,
+	// but must not be replaced by the contextual command list after background
+	// queue work completes.
+	paletteStatic bool
 
 	rows           []detailRow
 	scroll         int
 	torrentDetails *torrentDetailTarget
-	trackerHash    string
 	trackerTitle   string
 	trackerEntries []client.TrackerEntry
 	trackerReveal  bool
@@ -98,13 +106,18 @@ type dialog struct {
 	// confirmAction overrides the legacy remove action when a confirmation is
 	// used for another destructive mutation (for example share-limit action).
 	confirmAction string
+	// confirmParent returns to a live details dialog after a contextual
+	// confirmation, such as banning the selected peer.
+	confirmParent *dialog
 	// torrents are captured when the edit dialog opens. Marked rows are edited
 	// together, while an unmarked queue uses its focused row.
-	torrents   []client.TorrentInfo
-	mixed      bool
-	status     string
-	message    string
-	pluginName string
+	torrents       []client.TorrentInfo
+	mixed          bool
+	status         string
+	message        string
+	pluginName     string
+	copyValues     map[string]string
+	profileStartup bool
 }
 
 func newDialogField(label, value, placeholder, help string) dialogField {
@@ -277,7 +290,18 @@ func (d *dialog) stepScroll(delta, visible, count int) {
 }
 
 func (m *model) openAction(action string) tea.Cmd {
-	switch strings.ToLower(strings.TrimSpace(action)) {
+	rawAction := strings.TrimSpace(action)
+	if strings.HasPrefix(rawAction, queueFilterCategoryAction) {
+		m.dialog = nil
+		m.setCategoryFilter(strings.TrimPrefix(rawAction, queueFilterCategoryAction))
+		return nil
+	}
+	if strings.HasPrefix(rawAction, queueFilterTagAction) {
+		m.dialog = nil
+		m.setTagFilter(strings.TrimPrefix(rawAction, queueFilterTagAction))
+		return nil
+	}
+	switch strings.ToLower(rawAction) {
 	case "palette", "command":
 		m.openPaletteDialog()
 		return nil
@@ -293,6 +317,10 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "config", "config-page", "settings":
 		m.dialog = nil
 		return m.goTo(configPage)
+	case "profile", "profiles", "switch-profile":
+		return m.openProfilePicker()
+	case "startup-profile", "startup-profile-picker":
+		return m.openStartupProfilePicker()
 	case "previous-item":
 		return m.handleKey("up")
 	case "next-item":
@@ -317,6 +345,12 @@ func (m *model) openAction(action string) tea.Cmd {
 			m.cancelSearchPluginAction()
 		}
 		return nil
+	case "cancel-queue-filter":
+		if m.busy != "" && m.work == queueCatalogWork && m.cancel != nil {
+			m.cancel()
+			m.busy = "Canceling filter catalog"
+		}
+		return nil
 	case "cancel-connection":
 		if m.busy != "" && m.work == connectWork && m.cancel != nil {
 			m.connectCanceled = true
@@ -332,9 +366,13 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "filter":
 		m.openFilterDialog()
 		return nil
+	case "filter-category", "category-filter":
+		return m.openQueueCatalogAction("category")
+	case "filter-tag", "tag-filter":
+		return m.openQueueCatalogAction("tag")
 	case "clear-queue-filter":
 		if m.page == queuePage {
-			m.setFilter("", "all")
+			m.setQueueFilter(queueFilter{state: "all"})
 		}
 		return nil
 	case "clear-result-filter":
@@ -357,14 +395,36 @@ func (m *model) openAction(action string) tea.Cmd {
 			m.openSortDialog(dialogQueueSort)
 		}
 		return nil
+	case "queue-columns", "columns":
+		if m.page == queuePage {
+			m.openQueueColumnsDialog()
+		}
+		return nil
 	case "details":
 		m.dialog = nil
 		return m.loadDetails(false)
-	case "server-details":
-		if m.page == serverPage && len(m.serverRows) > 0 {
-			m.openDetailDialog("Server & transfers", m.serverRows)
+	case "copy":
+		return m.openCopyDialog()
+	case "server-download-limit", "transfer-download-limit":
+		if m.page == serverPage {
+			return m.openTransferLimitDialog(false)
 		}
 		return nil
+	case "server-upload-limit", "transfer-upload-limit":
+		if m.page == serverPage {
+			return m.openTransferLimitDialog(true)
+		}
+		return nil
+	case "server-mode-normal", "transfer-mode-normal", "server-mode-alternate", "transfer-mode-alternate":
+		if m.page != serverPage || m.busy != "" {
+			return nil
+		}
+		mode := "normal"
+		if strings.HasSuffix(strings.ToLower(action), "alternate") {
+			mode = "alternate"
+		}
+		m.dialog = nil
+		return m.launchAction("speed limits mode", actionRequest{kind: "transfer-mode", value: mode})
 	case "trackers":
 		m.dialog = nil
 		return m.loadDetails(true)
@@ -444,12 +504,16 @@ func (m *model) openAction(action string) tea.Cmd {
 		return m.openConfigSetting(configSettingUsername)
 	case "config-password":
 		return m.openConfigSetting(configSettingPassword)
+	case "config-ca":
+		return m.openConfigSetting(configSettingCAFile)
 	case "config-default":
 		return m.openConfigSetting(configSettingTUIDefault)
 	case "config-theme":
 		return m.openConfigSetting(configSettingTheme)
 	case "config-units":
 		return m.openConfigSetting(configSettingDataUnits)
+	case "config-refresh":
+		return m.openConfigSetting(configSettingRefreshInterval)
 	case "config-provider":
 		return m.openConfigSetting(configSettingSearchProvider)
 	case "config-file":
@@ -964,6 +1028,7 @@ func (m *model) openConnectionEditor(includeStartup bool) {
 		}
 		d.fields = append(d.fields, newDialogField("TUI default", defaultChoice, "yes or no", "Start qbitctl in the TUI by default"))
 	}
+	d.fields = append(d.fields, newDialogField("CA bundle", m.setup.caFile, "System trust store", "Optional PEM CA bundle path; blank keeps the saved setting"))
 	m.dialog = d
 	d.focusField(0)
 }
@@ -1017,7 +1082,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if d.kind == dialogTrackerAdd || d.kind == dialogTrackerEdit {
-			m.restoreTrackerListDialog()
+			m.closeTrackerForm()
 			return nil
 		}
 		if d.kind == dialogDetails && d.detail != nil && d.detail.fileFilterActive {
@@ -1026,6 +1091,10 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		}
 		if d.renamePath != nil {
 			m.dialog = d.renamePath.parent
+			return nil
+		}
+		if d.confirmParent != nil {
+			m.dialog = d.confirmParent
 			return nil
 		}
 		if d.kind == dialogSearchPlugins && m.searchPluginsLoading {
@@ -1037,8 +1106,8 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		m.dialog = nil
 		return nil
 	}
-	if d.kind == dialogTrackers || d.kind == dialogTrackerAdd || d.kind == dialogTrackerEdit {
-		return m.updateTrackerDialog(name, key)
+	if d.kind == dialogTrackerAdd || d.kind == dialogTrackerEdit {
+		return m.updateTrackerForm(name, key)
 	}
 
 	switch d.kind {
@@ -1073,7 +1142,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		d.refreshPalette()
 		return cmd
 
-	case dialogEditSelect, dialogShareChoice, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins, dialogSearchPluginManage, dialogSearchPluginActions:
+	case dialogEditSelect, dialogShareChoice, dialogResultSort, dialogQueueSort, dialogQueueColumns, dialogCopy, dialogTheme, dialogSearchPlugins, dialogSearchPluginManage, dialogSearchPluginActions, dialogProfilePicker:
 		if d.kind == dialogSearchPlugins && (name == "m" || name == "M") {
 			return m.openSearchPluginManagement()
 		}
@@ -1110,6 +1179,12 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				d.status = "Finish the current request first"
 				return nil
 			}
+			if d.kind == dialogCopy {
+				value := d.copyValues[d.items[d.selected].action]
+				m.dialog = nil
+				m.copyToTerminal(value)
+				return nil
+			}
 			if d.kind == dialogTheme {
 				id := themeID(d.items[d.selected].action)
 				if !knownTheme(id) {
@@ -1125,11 +1200,13 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				}
 				return nil
 			}
-			if d.kind == dialogResultSort || d.kind == dialogQueueSort {
+			if d.kind == dialogResultSort || d.kind == dialogQueueSort || d.kind == dialogQueueColumns {
 				action := d.items[d.selected].action
 				m.dialog = nil
 				if d.kind == dialogQueueSort {
 					m.setQueueSort(queueSort(action))
+				} else if d.kind == dialogQueueColumns {
+					m.setQueueColumns(queueColumnPreset(action))
 				} else {
 					m.setResultSort(resultSort(action))
 				}
@@ -1142,6 +1219,17 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				m.dialog = nil
 				m.setDefaultSearchPlugin(d.items[d.selected].action)
 				return nil
+			}
+			if d.kind == dialogProfilePicker {
+				name := d.items[d.selected].action
+				m.dialog = nil
+				if d.profileStartup {
+					if err := m.setStartupProfile(name); err != nil {
+						m.setNotice("Startup profile: "+err.Error(), true)
+					}
+					return nil
+				}
+				return m.switchProfile(name)
 			}
 			if d.kind == dialogSearchPluginManage {
 				return m.submitSearchPluginManagementSelection()
@@ -1218,11 +1306,12 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 		innerWidth, _ := dialogDimensions(m.width)
 		visible := dialogBodyHeight(m.heightForDialog())
 		count := len(dialogDetailLines(d.rows, innerWidth))
-		if d.kind == dialogDetails && d.torrentDetails != nil && !d.torrentDetails.trackers {
+		if d.kind == dialogDetails && d.torrentDetails != nil {
 			if handled, cmd := m.updateTorrentDetailKey(d, name); handled {
 				return cmd
 			}
-			count = len(m.detailDialogLines(d, innerWidth))
+			visible = detailBodyHeight(d, m.heightForDialog())
+			count = len(m.detailBodyLines(d, innerWidth))
 		}
 		if d.kind == dialogHelp {
 			visible, count = helpViewport(viewContentWidth(m.width), m.heightForDialog()-viewHeaderLines-viewFooterLines)
@@ -1252,14 +1341,14 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 			request := d.request
-			m.dialog = nil
+			m.dialog = d.confirmParent
 			action := d.confirmAction
 			if action == "" {
 				action = "remove"
 			}
 			return m.launchAction(action, request)
 		case "n", "N":
-			m.dialog = nil
+			m.dialog = d.confirmParent
 		}
 		return nil
 
@@ -1278,7 +1367,7 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 			return m.launchAction("delete", request)
 		}
 
-	case dialogSearch, dialogFilter, dialogAdd, dialogAddResult, dialogEditValue, dialogMove, dialogRename, dialogConfig, dialogSearchPluginInstall:
+	case dialogSearch, dialogFilter, dialogAdd, dialogAddResult, dialogEditValue, dialogMove, dialogRename, dialogConfig, dialogSearchPluginInstall, dialogRefreshInterval, dialogTransferLimit:
 		switch name {
 		case "tab":
 			return d.cycleField(false)
@@ -1404,10 +1493,27 @@ func (m *model) submitDialog() tea.Cmd {
 		m.dialog = nil
 		return m.launchAction("rename", actionRequest{kind: "rename", hashes: d.request.hashes, value: name})
 
+	case dialogTransferLimit:
+		if m.busy != "" {
+			d.status = "Finish the current request first"
+			return nil
+		}
+		value := strings.TrimSpace(d.value(0))
+		if value == "" {
+			d.status = "Enter a limit or unlimited"
+			return nil
+		}
+		request := d.request
+		request.value = value
+		m.dialog = nil
+		return m.launchAction("transfer limit", request)
+
 	case dialogConfig:
 		choice := "no"
-		if len(d.fields) > 3 {
+		caIndex := 3
+		if len(d.fields) > 4 {
 			choice = d.value(3)
+			caIndex = 4
 		} else if m.setup.tuiDefault {
 			choice = "yes"
 		}
@@ -1420,7 +1526,17 @@ func (m *model) submitDialog() tea.Cmd {
 			URL:  d.value(0),
 			User: d.value(1),
 			Pass: d.value(2),
-		}, tuiDefault)
+		}, d.value(caIndex), tuiDefault)
+
+	case dialogRefreshInterval:
+		interval, err := parseRefreshInterval(d.value(0))
+		if err != nil {
+			d.status = err.Error()
+			return nil
+		}
+		m.dialog = nil
+		m.setRefreshInterval(interval)
+		return nil
 	}
 	return nil
 }
@@ -1524,11 +1640,7 @@ func (m *model) dialogView(width, height int) string {
 		body = m.dialogPaletteLines(innerWidth, visible)
 		footer = viewKeys(innerWidth, "↑/↓", "move", "enter", "run")
 
-	case dialogTrackers:
-		body = trackerDialogLines(d, innerWidth, visible)
-		footer = viewKeys(innerWidth, "↑/↓", "select", "v", "full URL", "a", "add", "e", "edit", "d", "remove", "esc", "close")
-
-	case dialogEditSelect, dialogShareChoice, dialogResultSort, dialogQueueSort, dialogTheme, dialogSearchPlugins, dialogSearchPluginManage, dialogSearchPluginActions:
+	case dialogEditSelect, dialogShareChoice, dialogResultSort, dialogQueueSort, dialogQueueColumns, dialogCopy, dialogTheme, dialogSearchPlugins, dialogSearchPluginManage, dialogSearchPluginActions, dialogProfilePicker:
 		start := d.listStart(visible)
 		for i := start; i < min(len(d.items), start+visible); i++ {
 			item := d.items[i]
@@ -1556,18 +1668,32 @@ func (m *model) dialogView(width, height int) string {
 		}
 
 	case dialogDetails:
-		details := dialogDetailLines(d.rows, innerWidth)
-		if d.torrentDetails != nil && !d.torrentDetails.trackers {
-			details = m.detailDialogLines(d, innerWidth)
+		var details []string
+		footer = viewKeys(innerWidth, "↑/↓", "scroll", "esc", "close")
+		if d.torrentDetails == nil {
+			details = dialogDetailLines(d.rows, innerWidth)
+		} else {
+			state := m.detailState(d)
+			body = append(body, detailTabHeader(state.tab, innerWidth), "")
+			visible = detailBodyHeight(d, height)
+			if state.tab == detailTabTrackers {
+				body = append(body, trackerTabLines(d, innerWidth, visible)...)
+				footer = viewKeys(innerWidth, "↑/↓", "select", "v", "full URL", "a", "add", "e", "edit", "d", "remove", "tab", "tabs", "esc", "close")
+				break
+			}
+			details = m.detailBodyLines(d, innerWidth)
+			footer = viewKeys(innerWidth, "1/2/3/4", "tabs", "↑/↓", "scroll", "esc", "close")
+			switch state.tab {
+			case detailTabFiles:
+				footer = viewKeys(innerWidth, "space", "mark", "/", "filter", "0/n/6/7", "priority", "f2/f3", "rename", "tab", "tabs", "esc", "close")
+			case detailTabPeers:
+				footer = viewKeys(innerWidth, "b", "ban peer", "tab", "tabs", "esc", "close")
+			}
 		}
 		start := min(d.scroll, max(0, len(details)-visible))
 		body = append(body, details[start:min(len(details), start+visible)]...)
 		if len(details) == 0 {
 			body = append(body, viewMutedStyle.Render("No details available"))
-		}
-		footer = viewKeys(innerWidth, "1/2/3", "tabs", "↑/↓", "scroll", "esc", "close")
-		if d.detail != nil && d.detail.tab == detailTabFiles {
-			footer = viewKeys(innerWidth, "space", "mark", "/", "filter", "0/n/6/7", "priority", "f2/f3", "rename", "tab", "tabs", "esc", "close")
 		}
 
 	case dialogConfirm, dialogDelete:

@@ -10,7 +10,8 @@ import (
 const queuePreferencesFileName = "tui-queue.json"
 
 type queuePreferences struct {
-	Sort queueSort `json:"sort"`
+	Sort    queueSort         `json:"sort"`
+	Columns queueColumnPreset `json:"columns,omitempty"`
 }
 
 func loadQueuePreferences(path string) (queueSort, error) {
@@ -39,4 +40,31 @@ func saveQueuePreferences(path string, order queueSort) error {
 		return fmt.Errorf("invalid queue sort %q", order)
 	}
 	return writePreferences(path, "queue", map[string]string{"sort": string(order)})
+}
+
+func loadQueueColumns(path string) (queueColumnPreset, error) {
+	data, err := readPreferences(path, "queue")
+	if err != nil {
+		return queueColumnsCompact, err
+	}
+	if len(data) == 0 {
+		return queueColumnsCompact, nil
+	}
+	var disk queuePreferences
+	if err := json.Unmarshal(data, &disk); err != nil {
+		return queueColumnsCompact, err
+	}
+	if disk.Columns == "" {
+		return queueColumnsCompact, nil
+	}
+	preset := normalizeQueueColumnPreset(string(disk.Columns))
+	if preset != disk.Columns {
+		return queueColumnsCompact, fmt.Errorf("invalid queue columns %q", disk.Columns)
+	}
+	return preset, nil
+}
+
+func saveQueueColumns(path string, preset queueColumnPreset) error {
+	preset = normalizeQueueColumnPreset(string(preset))
+	return writePreferences(path, "queue", map[string]string{"columns": string(preset)})
 }

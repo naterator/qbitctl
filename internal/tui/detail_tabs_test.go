@@ -74,7 +74,7 @@ func TestDetailTabSwitchWaitsForActiveRefresh(t *testing.T) {
 	finishLiveDetailsCommand(t, m, m.loadDetails(false))
 
 	refresh := m.refreshTorrentDetails()
-	if cmd := m.update(tea.KeyPressMsg{Code: '3'}); cmd != nil || m.dialog.detail.tab != detailTabOverview {
+	if cmd := m.update(tea.KeyPressMsg{Code: '4'}); cmd != nil || m.dialog.detail.tab != detailTabOverview {
 		t.Fatal("peer tab changed before the current refresh completed")
 	}
 	finishLiveDetailsCommand(t, m, m.finishWork(refresh().(workDone)))
@@ -98,7 +98,7 @@ func TestDetailFilesTabLoadsSearchesSelectsAndChangesPriority(t *testing.T) {
 	m.backend = backend
 	finishLiveDetailsCommand(t, m, m.loadDetails(false))
 
-	cmd := m.update(tea.KeyPressMsg{Code: '2'})
+	cmd := m.update(tea.KeyPressMsg{Code: '3'})
 	done, ok := cmd().(workDone)
 	if !ok {
 		t.Fatalf("files tab command returned %T", cmd())
@@ -107,7 +107,7 @@ func TestDetailFilesTabLoadsSearchesSelectsAndChangesPriority(t *testing.T) {
 	if m.dialog.detail.tab != detailTabFiles || len(m.dialog.detail.files) != 2 {
 		t.Fatalf("files tab state = %#v", m.dialog.detail)
 	}
-	if frame := ansi.Strip(m.dialogView(100, 30)); !containsAll(frame, "folder/alpha.mkv", "folder/beta.srt", "2 Files") {
+	if frame := ansi.Strip(m.dialogView(100, 30)); !containsAll(frame, "folder/alpha.mkv", "folder/beta.srt", "3 Files") {
 		t.Fatalf("files dialog = %q", frame)
 	}
 
@@ -152,7 +152,7 @@ func TestDetailPeersTabMergesPartialUpdatesAndRetainsSelection(t *testing.T) {
 	m := newLiveDetailsModel(t, backend.liveDetailsService, torrent)
 	m.backend = backend
 	finishLiveDetailsCommand(t, m, m.loadDetails(false))
-	cmd := m.update(tea.KeyPressMsg{Code: '3'})
+	cmd := m.update(tea.KeyPressMsg{Code: '4'})
 	done := cmd().(workDone)
 	m.finishWork(done)
 	if m.dialog.detail.peers.Peers["peer"].Client != "Client A" {

@@ -52,6 +52,8 @@ func TestBatchValidatesParsedCommandsAndConnectionFlags(t *testing.T) {
 		{line: "-u http://example.test info", want: "--url"},
 		{line: "info -Uadmin", want: "--user"},
 		{line: "info --pass=secret", want: "--pass"},
+		{line: "info --ca-file another.pem", want: "--ca-file"},
+		{line: "--profile other info", want: "--profile"},
 		{line: "--http-timeout 90s info", want: "--http-timeout"},
 		{line: "batch", want: "not supported"},
 		{line: "tui", want: "not supported"},

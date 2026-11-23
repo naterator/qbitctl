@@ -202,33 +202,7 @@ func decryptPassword(value string) (string, error) {
 }
 
 func saveAuthFile(path string, creds Credentials) error {
-	if path == "" {
-		return fmt.Errorf("invalid path")
-	}
-
-	encodedPass, err := encryptPassword(creds.Pass)
-	if err != nil {
-		return err
-	}
-
-	return configfile.Update(path, func(object configfile.Object) (bool, error) {
-		urlValue, err := json.Marshal(creds.URL)
-		if err != nil {
-			return false, err
-		}
-		userValue, err := json.Marshal(creds.User)
-		if err != nil {
-			return false, err
-		}
-		passwordValue, err := json.Marshal(encodedPass)
-		if err != nil {
-			return false, err
-		}
-		setConfigValue(object, "url", urlValue)
-		setConfigValue(object, "user", userValue)
-		setConfigValue(object, "password", passwordValue)
-		return true, nil
-	})
+	return saveSetupConfigForProfile(path, "", creds, nil, nil, nil)
 }
 
 func setConfigValue(object configfile.Object, key string, value json.RawMessage) {
@@ -252,13 +226,17 @@ func configValue(object configfile.Object, key string) (json.RawMessage, bool) {
 	return nil, false
 }
 
-func migratePassword(path, previousPassword, encodedPassword string) error {
+func migratePasswordForProfile(path, profile, previousPassword, encodedPassword string) error {
 	encoded, err := json.Marshal(encodedPassword)
 	if err != nil {
 		return err
 	}
 	return configfile.Update(path, func(object configfile.Object) (bool, error) {
-		current, ok := configValue(object, "password")
+		selectedName, selected, named, err := selectProfileObject(object, profile)
+		if err != nil {
+			return false, err
+		}
+		current, ok := configValue(selected, "password")
 		if !ok {
 			return false, nil
 		}
@@ -272,9 +250,27 @@ func migratePassword(path, previousPassword, encodedPassword string) error {
 		if currentPassword != previousPassword {
 			return false, nil
 		}
-		setConfigValue(object, "password", encoded)
+		setConfigValue(selected, "password", encoded)
+		if named {
+			profiles, _, err := profileObject(object)
+			if err != nil {
+				return false, err
+			}
+			profileValue, err := json.Marshal(selected)
+			if err != nil {
+				return false, err
+			}
+			profiles[selectedName] = profileValue
+			if err := writeProfiles(object, profiles); err != nil {
+				return false, err
+			}
+		}
 		return true, nil
 	})
+}
+
+func migratePassword(path, previousPassword, encodedPassword string) error {
+	return migratePasswordForProfile(path, "", previousPassword, encodedPassword)
 }
 
 func warnLoosePermissions(path string, infoOut io.Writer) {
@@ -291,12 +287,17 @@ func warnLoosePermissions(path string, infoOut io.Writer) {
 	}
 }
 
-func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
+func loadAuthFileForProfile(path, profile string, infoOut io.Writer) (Credentials, bool, error) {
+	creds, loaded, _, err := loadAuthFileForProfileWithName(path, profile, infoOut)
+	return creds, loaded, err
+}
+
+func loadAuthFileForProfileWithName(path, profile string, infoOut io.Writer) (Credentials, bool, string, error) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Credentials{}, false, nil
+			return Credentials{}, false, "", nil
 		}
-		return Credentials{}, false, err
+		return Credentials{}, false, "", err
 	}
 
 	if infoOut != nil {
@@ -305,11 +306,15 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 
 	object, err := configfile.Read(path)
 	if err != nil {
-		return Credentials{}, true, err
+		return Credentials{}, true, "", err
 	}
-	diskConfig, err := decodeConfigFile(object)
+	selectedName, selectedObject, _, err := selectProfileObject(object, profile)
 	if err != nil {
-		return Credentials{}, true, err
+		return Credentials{}, true, "", err
+	}
+	diskConfig, err := decodeConfigFile(selectedObject)
+	if err != nil {
+		return Credentials{}, true, selectedName, err
 	}
 
 	var creds Credentials
@@ -320,23 +325,23 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 	case strings.HasPrefix(value, "enc:v2:"):
 		password, err := decryptPassword(value)
 		if err != nil {
-			return Credentials{}, true, err
+			return Credentials{}, true, selectedName, err
 		}
 		creds.Pass = password
 	case strings.HasPrefix(value, "enc:"):
-		return Credentials{}, true, errReenterEncryptedPassword
+		return Credentials{}, true, selectedName, errReenterEncryptedPassword
 	case looksLikeOpaqueCiphertext(value):
-		return Credentials{}, true, errUnsupportedPasswordFormat
+		return Credentials{}, true, selectedName, errUnsupportedPasswordFormat
 	default:
 		creds.Pass = value
 		if value != "" {
 			encoded, encodeErr := encryptPassword(value)
 			if encodeErr != nil && !isMasterKeyUnavailable(encodeErr) {
-				return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", encodeErr)
+				return Credentials{}, true, selectedName, fmt.Errorf("rewrite plaintext config file: %w", encodeErr)
 			}
 			if encodeErr == nil {
-				if migrateErr := migratePassword(path, value, encoded); migrateErr != nil {
-					return Credentials{}, true, fmt.Errorf("rewrite plaintext config file: %w", migrateErr)
+				if migrateErr := migratePasswordForProfile(path, selectedName, value, encoded); migrateErr != nil {
+					return Credentials{}, true, selectedName, fmt.Errorf("rewrite plaintext config file: %w", migrateErr)
 				}
 				if infoOut != nil {
 					fmt.Fprintf(infoOut, "[INFO] Migrated plaintext password in config file: %s\n", path)
@@ -347,7 +352,11 @@ func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
 		}
 	}
 
-	return creds, true, nil
+	return creds, true, selectedName, nil
+}
+
+func loadAuthFile(path string, infoOut io.Writer) (Credentials, bool, error) {
+	return loadAuthFileForProfile(path, "", infoOut)
 }
 
 func isMasterKeyUnavailable(err error) bool {
@@ -390,6 +399,11 @@ func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
 }
 
 func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, error) {
+	creds, path, _, err := initAuthWithPathAndProfile(opts, infoOut)
+	return creds, path, err
+}
+
+func initAuthWithPathAndProfile(opts Options, infoOut io.Writer) (Credentials, string, string, error) {
 	cli := Credentials{
 		URL:  opts.URL,
 		User: opts.User,
@@ -399,40 +413,43 @@ func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, err
 	var creds Credentials
 	loaded := false
 	selectedPath := ""
+	selectedProfile := ""
 
 	if configPath != "" {
 		fileInfo, err := os.Stat(configPath)
 		if err != nil || fileInfo.IsDir() {
-			return Credentials{}, configPath, codedErrf(ExitBadArgs, "Config file '%s' does not exist or is not readable", configPath)
+			return Credentials{}, configPath, "", codedErrf(ExitBadArgs, "Config file '%s' does not exist or is not readable", configPath)
 		}
 
-		loadedCreds, ok, err := loadAuthFile(configPath, infoOut)
+		loadedCreds, ok, profileName, err := loadAuthFileForProfileWithName(configPath, opts.Profile, infoOut)
 		if err != nil {
 			if errors.Is(err, errUnsupportedPasswordFormat) {
-				return Credentials{}, configPath, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, configPath)
+				return Credentials{}, configPath, profileName, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, configPath)
 			}
-			return Credentials{}, configPath, codedErrf(ExitFile, "Failed to load config file '%s': %v", configPath, err)
+			return Credentials{}, configPath, profileName, codedErrf(ExitFile, "Failed to load config file '%s': %v", configPath, err)
 		}
 		if ok {
 			creds = loadedCreds
 			loaded = true
 			selectedPath = configPath
+			selectedProfile = profileName
 		}
 	}
 
 	if !loaded {
 		for _, path := range defaultAuthSearchPaths() {
-			loadedCreds, ok, err := loadAuthFile(path, infoOut)
+			loadedCreds, ok, profileName, err := loadAuthFileForProfileWithName(path, opts.Profile, infoOut)
 			if err != nil {
 				if errors.Is(err, errUnsupportedPasswordFormat) {
-					return Credentials{}, path, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, path)
+					return Credentials{}, path, profileName, codedErrf(ExitFile, "%v. Run qbitctl config to rewrite %s", err, path)
 				}
-				return Credentials{}, path, codedErrf(ExitFile, "Failed to load %s: %v", path, err)
+				return Credentials{}, path, profileName, codedErrf(ExitFile, "Failed to load %s: %v", path, err)
 			}
 			if ok {
 				creds = loadedCreds
 				loaded = true
 				selectedPath = path
+				selectedProfile = profileName
 				break
 			}
 		}
@@ -442,7 +459,7 @@ func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, err
 	// not silently send it to a different host or scheme when a caller only
 	// overrides --url; require an explicit password for that transition.
 	if loaded && cli.URL != "" && cli.Pass == "" && creds.Pass != "" && !sameCredentialOrigin(creds.URL, cli.URL) {
-		return Credentials{}, selectedPath, codedErrf(ExitBadArgs, "Password required when changing server origin")
+		return Credentials{}, selectedPath, selectedProfile, codedErrf(ExitBadArgs, "Password required when changing server origin")
 	}
 
 	if cli.User != "" {
@@ -462,19 +479,19 @@ func initAuthWithPath(opts Options, infoOut io.Writer) (Credentials, string, err
 			if cli.URL != "" {
 				code = ExitBadArgs
 			}
-			return Credentials{}, selectedPath, codedErrf(code, "%v", err)
+			return Credentials{}, selectedPath, selectedProfile, codedErrf(code, "%v", err)
 		}
 		creds.URL = normalizedURL
 	}
 
 	if !canAttemptLogin(creds) {
-		return Credentials{}, selectedPath, codedErrf(ExitFile, "No credentials supplied")
+		return Credentials{}, selectedPath, selectedProfile, codedErrf(ExitFile, "No credentials supplied")
 	}
 
 	if selectedPath == "" {
 		selectedPath = defaultAuthPath()
 	}
-	return creds, selectedPath, nil
+	return creds, selectedPath, selectedProfile, nil
 }
 
 // sameCredentialOrigin compares the parts of a URL that scope a Web UI
@@ -528,7 +545,7 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 	app := &App{Ctx: ctx, Stdout: stdout, Stderr: stderr}
 	newAppDefaults(app)
 
-	creds, configPath, err := initAuthWithPath(*opts, app.Stderr)
+	creds, configPath, selectedProfile, err := initAuthWithPathAndProfile(*opts, app.Stderr)
 	if err != nil {
 		return nil, err
 	}
@@ -536,6 +553,17 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 	app.creds = creds
 	app.configPath = configPath
 	app.compatibilityCacheEnabled = opts.UseCompatibilityCache
+	app.profileName = selectedProfile
+	caExplicit := strings.TrimSpace(opts.CAFile) != ""
+	caFile := strings.TrimSpace(opts.CAFile)
+	if !caExplicit {
+		caFile, err = caFileForConnection(configPath, selectedProfile, opts.URL)
+		if err != nil {
+			return nil, codedErrf(ExitFile, "Failed to select CA file from config file '%s': %v", configPath, err)
+		}
+		caFile = strings.TrimSpace(caFile)
+	}
+	app.CAFile = caFile
 	// A malformed optional display preference must not prevent authentication.
 	app.DataUnits = DataUnitsHuman
 	if configured, readErr := ReadDataUnits(configPath); readErr == nil {
@@ -559,9 +587,13 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 		}
 		httpTimeout = configured
 	}
-	app.client, err = newClientWithTimeout(creds, app.Stderr, httpTimeout)
+	app.client, err = newClientWithTimeoutAndCA(creds, app.Stderr, httpTimeout, caFile)
 	if err != nil {
-		return nil, codedErrf(ExitBadArgs, "%v", err)
+		code := ExitFile
+		if caExplicit {
+			code = ExitBadArgs
+		}
+		return nil, codedErrf(code, "Failed to configure CA file '%s': %v", caFile, err)
 	}
 
 	if err := app.client.loginContext(app.context()); err != nil {
@@ -591,6 +623,11 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 	if opts.HTTPTimeout < 0 {
 		return codedErrf(ExitBadArgs, "http timeout must not be negative")
 	}
+	if opts.CAFile != "" {
+		if _, err := loadCAPool(opts.CAFile); err != nil {
+			return codedErrf(ExitBadArgs, "Invalid CA file '%s': %v", opts.CAFile, err)
+		}
+	}
 
 	urlValue := opts.URL
 	if urlValue == "" {
@@ -614,11 +651,15 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 		}
 	}
 
-	if err := saveAuthFile(outputPath, Credentials{
+	var caToSave *string
+	if opts.CAFile != "" {
+		caToSave = &opts.CAFile
+	}
+	if err := saveSetupConfigForProfile(outputPath, opts.Profile, Credentials{
 		URL:  normalizedURL,
 		User: userValue,
 		Pass: opts.Pass,
-	}); err != nil {
+	}, caToSave, nil, nil); err != nil {
 		return codedErrf(ExitFile, "Failed to save config file: %v", err)
 	}
 	if opts.HTTPTimeout > 0 {
@@ -626,7 +667,6 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 			return codedErrf(ExitFile, "Failed to save HTTP timeout: %v", err)
 		}
 	}
-
 	if infoOut != nil {
 		fmt.Fprintf(infoOut, "[INFO] Saved config to %s\n", outputPath)
 	}

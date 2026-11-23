@@ -21,8 +21,10 @@ import (
 // authenticate should use ConnectAndSaveSetup instead of reading config.json.
 type Setup struct {
 	Path        string
+	Profile     string
 	URL         string
 	User        string
+	CAFile      string
 	HasPassword bool
 	TUIDefault  bool
 }
@@ -85,20 +87,33 @@ func readSetup(opts Options) (Setup, error) {
 	if err != nil {
 		return Setup{}, err
 	}
-	setup := Setup{Path: path}
-	if value, ok := configValue(object, "url"); ok {
+	selectedName, selectedObject, _, err := selectProfileObject(object, opts.Profile)
+	if err != nil {
+		return Setup{}, err
+	}
+	setup := Setup{Path: path, Profile: selectedName}
+	if value, ok := configValue(selectedObject, "url"); ok {
 		setup.URL, err = decodeSetupString("url", value)
 		if err != nil {
 			return Setup{}, err
 		}
 	}
-	if value, ok := configValue(object, "user"); ok {
+	if value, ok := configValue(selectedObject, "user"); ok {
 		setup.User, err = decodeSetupString("user", value)
 		if err != nil {
 			return Setup{}, err
 		}
 	}
-	if value, ok := configValue(object, "password"); ok {
+	if strings.TrimSpace(opts.CAFile) == "" {
+		if value, ok := configValue(selectedObject, caFileConfigKey); ok {
+			setup.CAFile, err = decodeSetupString(caFileConfigKey, value)
+			if err != nil {
+				return Setup{}, err
+			}
+			setup.CAFile = strings.TrimSpace(setup.CAFile)
+		}
+	}
+	if value, ok := configValue(selectedObject, "password"); ok {
 		password, decodeErr := decodeSetupString("password", value)
 		if decodeErr != nil {
 			return Setup{}, decodeErr
@@ -127,6 +142,9 @@ func readSetup(opts Options) (Setup, error) {
 	}
 	if opts.User != "" {
 		setup.User = opts.User
+	}
+	if opts.CAFile != "" {
+		setup.CAFile = strings.TrimSpace(opts.CAFile)
 	}
 	if opts.Pass != "" {
 		setup.HasPassword = true
@@ -196,6 +214,52 @@ func ConnectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 }
 
 func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tuiDefault *bool) (*App, error) {
+	return connectAndSaveSetupWithCAProfile(ctx, path, "", creds, "", tuiDefault, false)
+}
+
+// ConnectAndSaveSetupWithCA validates and authenticates a setup using the
+// supplied PEM CA bundle before saving credentials and the bundle path.
+// Existing callers can continue using ConnectAndSaveSetup when they do not
+// need to change the trust configuration.
+func ConnectAndSaveSetupWithCA(ctx context.Context, path string, creds Credentials, caFile string, tuiDefault bool) (*App, error) {
+	return connectAndSaveSetupWithCAProfile(ctx, path, "", creds, caFile, &tuiDefault, false)
+}
+
+func connectAndSaveSetupWithCA(ctx context.Context, path string, creds Credentials, caFile string, tuiDefault *bool) (*App, error) {
+	return connectAndSaveSetupWithCAProfile(ctx, path, "", creds, caFile, tuiDefault, false)
+}
+
+// ConnectAndSaveProfileSetup authenticates a named profile and atomically
+// stores its credentials. The profile argument is session-specific; it does
+// not change the startup default. It is also suitable for adding a new
+// profile, in which case the supplied password must be explicit.
+func ConnectAndSaveProfileSetup(ctx context.Context, path, profile string, creds Credentials, caFile string) (*App, error) {
+	profile, err := normalizeProfileName(profile)
+	if err != nil {
+		return nil, err
+	}
+	return connectAndSaveSetupWithCAProfile(ctx, path, profile, creds, caFile, nil, false)
+}
+
+// ConnectAndAddProfileSetup authenticates a new profile and performs an
+// add-only atomic write after login. A concurrent writer cannot turn an add
+// into an accidental overwrite; AddProfileConfig rechecks membership while it
+// holds the config transaction lock.
+func ConnectAndAddProfileSetup(ctx context.Context, path, profile string, creds Credentials, caFile string) (*App, error) {
+	profile, err := normalizeProfileName(profile)
+	if err != nil {
+		return nil, err
+	}
+	return connectAndSaveSetupWithCAProfile(ctx, path, profile, creds, caFile, nil, true)
+}
+
+func connectAndSaveSetupWithCAProfile(ctx context.Context, path, profile string, creds Credentials, caFile string, tuiDefault *bool, addOnly bool) (*App, error) {
+	profile = strings.TrimSpace(profile)
+	if profile != "" {
+		if _, err := normalizeProfileName(profile); err != nil {
+			return nil, err
+		}
+	}
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("config path is empty")
 	}
@@ -207,7 +271,7 @@ func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 
 	var savedSnapshot *setupAuthSnapshot
 	if creds.Pass == "" {
-		savedURL, savedPassword, snapshot, err := readSavedPassword(path)
+		savedURL, savedPassword, snapshot, err := readSavedPasswordForProfile(path, profile)
 		if err != nil {
 			return nil, err
 		}
@@ -223,18 +287,50 @@ func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 	if creds.Pass == "" {
 		return nil, ErrSetupPasswordRequired
 	}
+	caFile = strings.TrimSpace(caFile)
+	caConfigured := caFile != ""
+	if !caConfigured {
+		var readErr error
+		caFile, readErr = caFileForConnection(path, profile, creds.URL)
+		if readErr != nil {
+			return nil, readErr
+		}
+	} else {
+		caFile, err = normalizeSavedCAFile(caFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if caFile != "" {
+		if _, err := loadCAPool(caFile); err != nil {
+			code := ExitFile
+			if caConfigured {
+				code = ExitBadArgs
+			}
+			return nil, codedErrf(code, "Invalid CA file '%s': %v", caFile, err)
+		}
+	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	app := &App{
-		Ctx:        ctx,
-		Stdout:     io.Discard,
-		Stderr:     io.Discard,
-		configPath: path,
-		creds:      creds,
+		Ctx:         ctx,
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+		configPath:  path,
+		creds:       creds,
+		profileName: profile,
+		CAFile:      caFile,
 	}
-	app.client = newClient(creds, io.Discard)
+	app.client, err = newClientWithTimeoutAndCA(creds, io.Discard, 0, caFile)
+	if err != nil {
+		code := ExitFile
+		if caConfigured {
+			code = ExitBadArgs
+		}
+		return nil, codedErrf(code, "Failed to configure CA file '%s': %v", caFile, err)
+	}
 
 	if err := app.client.loginContext(app.context()); err != nil {
 		app.Logout()
@@ -244,12 +340,22 @@ func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 		app.Logout()
 		return nil, err
 	}
-	if err := saveSetupConfig(path, creds, tuiDefault, savedSnapshot); err != nil {
+	var caToSave *string
+	if caConfigured {
+		caToSave = &caFile
+	}
+	var saveErr error
+	if addOnly {
+		saveErr = AddProfileConfig(path, profile, creds, caFile)
+	} else {
+		saveErr = saveSetupConfigForProfile(path, profile, creds, caToSave, tuiDefault, savedSnapshot)
+	}
+	if saveErr != nil {
 		app.Logout()
-		if errors.Is(err, ErrSetupChanged) {
-			return nil, err
+		if errors.Is(saveErr, ErrSetupChanged) {
+			return nil, saveErr
 		}
-		return nil, codedErrf(ExitFile, "Failed to save config file: %v", err)
+		return nil, codedErrf(ExitFile, "Failed to save config file: %v", saveErr)
 	}
 	return app, nil
 }
@@ -259,25 +365,34 @@ func connectAndSaveSetup(ctx context.Context, path string, creds Credentials, tu
 // succeeds. Errors are deliberately generic so malformed or encrypted values
 // cannot echo password-like strings to the setup UI.
 type setupAuthSnapshot struct {
+	profile  string
 	url      json.RawMessage
 	password json.RawMessage
 }
 
 func readSavedPassword(path string) (string, string, *setupAuthSnapshot, error) {
+	return readSavedPasswordForProfile(path, "")
+}
+
+func readSavedPasswordForProfile(path, profile string) (string, string, *setupAuthSnapshot, error) {
 	object, err := configfile.Read(path)
+	if err != nil {
+		return "", "", nil, err
+	}
+	selectedName, selectedObject, _, err := selectProfileObject(object, profile)
 	if err != nil {
 		return "", "", nil, err
 	}
 	var savedURL string
 	var savedURLRaw json.RawMessage
-	if value, ok := configValue(object, "url"); ok {
+	if value, ok := configValue(selectedObject, "url"); ok {
 		savedURL, err = decodeSetupString("url", value)
 		if err != nil {
 			return "", "", nil, err
 		}
 		savedURLRaw = append(json.RawMessage(nil), value...)
 	}
-	value, ok := configValue(object, "password")
+	value, ok := configValue(selectedObject, "password")
 	if !ok {
 		return savedURL, "", nil, nil
 	}
@@ -289,6 +404,7 @@ func readSavedPassword(path string) (string, string, *setupAuthSnapshot, error) 
 		return savedURL, "", nil, nil
 	}
 	snapshot := &setupAuthSnapshot{
+		profile:  selectedName,
 		url:      savedURLRaw,
 		password: append(json.RawMessage(nil), value...),
 	}
@@ -306,6 +422,14 @@ func readSavedPassword(path string) (string, string, *setupAuthSnapshot, error) 
 }
 
 func saveSetupConfig(path string, creds Credentials, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
+	return saveSetupConfigForProfile(path, "", creds, nil, tuiDefault, snapshot)
+}
+
+func saveSetupConfigWithCA(path string, creds Credentials, caFile *string, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
+	return saveSetupConfigForProfile(path, "", creds, caFile, tuiDefault, snapshot)
+}
+
+func saveSetupConfigForProfile(path, profile string, creds Credentials, caFile *string, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
 	encodedPassword, err := encryptPassword(creds.Pass)
 	if err != nil {
 		return err
@@ -322,17 +446,60 @@ func saveSetupConfig(path string, creds Credentials, tuiDefault *bool, snapshot 
 	if err != nil {
 		return err
 	}
+	if caFile != nil {
+		normalized, normalizeErr := normalizeSavedCAFile(*caFile)
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		caFile = &normalized
+	}
 	return configfile.Update(path, func(object configfile.Object) (bool, error) {
+		selectedName, selected, profiles, named, err := profileWriteTarget(object, strings.TrimSpace(profile))
+		if err != nil {
+			return false, err
+		}
+		currentDefault := ""
+		if named {
+			currentDefault = configuredDefaultProfile(object, profiles)
+		}
 		if snapshot != nil {
-			currentURL, urlOK := configValue(object, "url")
-			currentPassword, passwordOK := configValue(object, "password")
+			currentURL, urlOK := configValue(selected, "url")
+			currentPassword, passwordOK := configValue(selected, "password")
 			if !urlOK || !passwordOK || !bytes.Equal(currentURL, snapshot.url) || !bytes.Equal(currentPassword, snapshot.password) {
 				return false, ErrSetupChanged
 			}
 		}
-		setConfigValue(object, "url", urlValue)
-		setConfigValue(object, "user", userValue)
-		setConfigValue(object, "password", passwordValue)
+		setConfigValue(selected, "url", urlValue)
+		setConfigValue(selected, "user", userValue)
+		setConfigValue(selected, "password", passwordValue)
+		if caFile != nil {
+			if strings.TrimSpace(*caFile) == "" {
+				for existing := range selected {
+					if strings.EqualFold(existing, caFileConfigKey) {
+						delete(selected, existing)
+					}
+				}
+			} else {
+				encodedCA, err := json.Marshal(strings.TrimSpace(*caFile))
+				if err != nil {
+					return false, fmt.Errorf("encode config field %q: %w", caFileConfigKey, err)
+				}
+				setConfigValue(selected, caFileConfigKey, encodedCA)
+			}
+		}
+		if named {
+			encodedProfile, err := json.Marshal(selected)
+			if err != nil {
+				return false, err
+			}
+			profiles[selectedName] = encodedProfile
+			if currentDefault == "" {
+				setDefaultProfileInObject(object, selectedName)
+			}
+			if err := writeProfiles(object, profiles); err != nil {
+				return false, err
+			}
+		}
 		if tuiDefault == nil {
 			return true, nil
 		}
@@ -370,6 +537,13 @@ func InteractiveConfigAt(in io.Reader, out io.Writer, hiddenInput HiddenInputFun
 // exactly and skips the legacy save-path prompt; an empty path retains that
 // prompt with the default config path as its value.
 func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, hiddenInput HiddenInputFunc, path string) (string, error) {
+	return InteractiveConfigProfileContext(ctx, in, out, hiddenInput, path, "")
+}
+
+// InteractiveConfigProfileContext is the profile-aware setup flow used by
+// `qbitctl config --profile NAME`. The empty profile preserves the legacy
+// single-server behavior.
+func InteractiveConfigProfileContext(ctx context.Context, in io.Reader, out io.Writer, hiddenInput HiddenInputFunc, path, profile string) (string, error) {
 	if hiddenInput == nil {
 		hiddenInput = func(fn func() (string, error)) (string, error) { return fn() }
 	}
@@ -378,20 +552,20 @@ func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, 
 	if profilePath == "" {
 		profilePath = defaultAuthPath()
 	}
-	profile, err := readSetup(Options{ConfigPath: profilePath})
+	setup, err := readSetup(Options{ConfigPath: profilePath, Profile: profile})
 	if err != nil {
 		return "", err
 	}
 	urlDefault := defaultConfigURL
-	if strings.TrimSpace(profile.URL) != "" {
-		normalizedURL, validationErr := ValidateConfigURL(profile.URL)
+	if strings.TrimSpace(setup.URL) != "" {
+		normalizedURL, validationErr := ValidateConfigURL(setup.URL)
 		if validationErr != nil {
 			fmt.Fprintf(out, "[WARN] Saved URL is invalid (%v). Enter a new URL.\n", validationErr)
 		} else {
 			urlDefault = normalizedURL
 		}
 	}
-	userDefault := profile.User
+	userDefault := setup.User
 	if userDefault == "" {
 		userDefault = "admin"
 	}
@@ -426,11 +600,11 @@ func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, 
 		return "", errors.New("config path is empty")
 	}
 
-	app, err := connectAndSaveSetup(ctx, selectedPath, Credentials{
+	app, err := connectAndSaveSetupWithCAProfile(ctx, selectedPath, profile, Credentials{
 		URL:  urlValue,
 		User: userValue,
 		Pass: passwordValue,
-	}, nil)
+	}, "", nil, false)
 	if err != nil {
 		return "", err
 	}

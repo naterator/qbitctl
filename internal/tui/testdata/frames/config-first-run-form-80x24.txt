@@ -2,7 +2,6 @@
     1 Queue      2 Search      3 Server    ▸ 4 Config
   ────────────────────────────────────────────────────────────────────────────
    Configuration
-   Connection
 
     Configure qBittorrent
 
@@ -14,11 +13,12 @@
       Typed characters are hidden; a password is required
       TUI default: no
       Start qbitctl in the TUI by default
+      CA bundle: System trust store
+      Optional PEM CA bundle path; blank keeps the saved setting
 
     tab next   enter submit   esc cancel
 
-      Search cache │ /t/cache/qbitctl/search-results.json
 
-
+   Files
   ● Ready
   ↑/↓ · j/k move   enter change   q quit

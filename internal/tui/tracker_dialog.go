@@ -11,37 +11,23 @@ import (
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
-// trackerService is optional so the small compatibility services used by the
-// rest of the TUI tests do not need to implement tracker fetching. The real
-// HTTP adapter implements it and therefore gets the structured tracker
-// endpoint, including status, instead of the legacy comma-separated field.
+// trackerService loads structured tracker entries when the Trackers tab is
+// selected or refreshed.
 type trackerService interface {
 	trackers(context.Context, string) ([]client.TrackerEntry, error)
 }
 
-func (m *model) openTrackerDialog(title, hash string, entries []client.TrackerEntry) {
-	m.dialog = &dialog{
-		kind:           dialogTrackers,
-		title:          title,
-		trackerHash:    hash,
-		trackerTitle:   title,
-		trackerEntries: append([]client.TrackerEntry(nil), entries...),
-	}
-}
-
-func (m *model) restoreTrackerListDialog() {
+func (m *model) closeTrackerForm() {
 	d := m.dialog
-	if d == nil {
+	if d == nil || (d.kind != dialogTrackerAdd && d.kind != dialogTrackerEdit) {
 		return
 	}
-	d.kind = dialogTrackers
+	d.kind = dialogDetails
+	d.title, d.trackerTitle = d.trackerTitle, ""
 	d.fields = nil
 	d.focus = 0
 	d.request = actionRequest{}
 	d.status = ""
-	if d.trackerTitle != "" {
-		d.title = d.trackerTitle
-	}
 	m.ensureTrackerSelectionVisible()
 }
 
@@ -74,41 +60,45 @@ func (m *model) replaceTrackerEntries(entries []client.TrackerEntry) {
 	m.ensureTrackerSelectionVisible()
 }
 
-func (m *model) updateTrackerDialog(name string, key tea.KeyPressMsg) tea.Cmd {
+func (m *model) updateTrackerTab(name string) tea.Cmd {
 	d := m.dialog
-	if d == nil {
-		return nil
-	}
-	if d.kind == dialogTrackers {
-		switch name {
-		case "up", "k":
-			m.stepTrackerSelection(-1)
-		case "down", "j":
-			m.stepTrackerSelection(1)
-		case "pgup", "ctrl+u":
-			m.stepTrackerSelection(-m.trackerVisibleRows())
-		case "pgdown", "ctrl+d":
-			m.stepTrackerSelection(m.trackerVisibleRows())
-		case "home", "g":
-			d.selected = 0
-			d.scroll = 0
-		case "end", "G", "shift+g":
-			d.selected = max(0, len(d.trackerEntries)-1)
-			m.ensureTrackerSelectionVisible()
-		case "v", "V":
-			// Full URLs are never shown accidentally: the user must explicitly
-			// toggle this view, or enter edit mode for one selected tracker.
-			d.trackerReveal = !d.trackerReveal
-		case "a", "A":
-			m.openTrackerAddDialog()
-		case "e", "E":
-			m.openTrackerEditDialog()
-		case "d", "D", "x", "X":
-			return m.removeSelectedTracker()
+	switch name {
+	case "up", "k":
+		m.stepTrackerSelection(-1)
+	case "down", "j":
+		m.stepTrackerSelection(1)
+	case "pgup", "ctrl+u":
+		m.stepTrackerSelection(-m.trackerVisibleRows())
+	case "pgdown", "ctrl+d":
+		m.stepTrackerSelection(m.trackerVisibleRows())
+	case "home", "g":
+		d.selected, d.scroll = 0, 0
+	case "end", "G", "shift+g":
+		d.selected = max(0, len(d.trackerEntries)-1)
+		m.ensureTrackerSelectionVisible()
+	case "v", "V":
+		// Full URLs can include private tracker credentials.
+		d.trackerReveal = !d.trackerReveal
+	case "a", "A", "e", "E":
+		if m.busy != "" {
+			d.status = "Finish the current request first"
+			return nil
 		}
-		return nil
+		if name == "a" || name == "A" {
+			m.openTrackerAddDialog()
+		} else {
+			m.openTrackerEditDialog()
+		}
+	case "d", "D", "x", "X":
+		return m.removeSelectedTracker()
+	case "r", "R":
+		return m.refreshTorrentDetails()
 	}
+	return nil
+}
 
+func (m *model) updateTrackerForm(name string, key tea.KeyPressMsg) tea.Cmd {
+	d := m.dialog
 	switch name {
 	case "tab":
 		return d.cycleField(false)
@@ -129,7 +119,7 @@ func (m *model) trackerVisibleRows() int {
 	if m.dialog == nil {
 		return 1
 	}
-	return max(1, m.dialog.bodyHeight(m.heightForDialog()))
+	return detailBodyHeight(m.dialog, m.heightForDialog())
 }
 
 func (m *model) stepTrackerSelection(delta int) {
@@ -162,20 +152,20 @@ func (m *model) ensureTrackerSelectionVisible() {
 
 func (m *model) openTrackerAddDialog() {
 	d := m.dialog
-	if d == nil || strings.TrimSpace(d.trackerHash) == "" {
+	if d == nil || d.torrentDetails == nil || strings.TrimSpace(d.torrentDetails.hash) == "" {
 		return
 	}
 	d.kind = dialogTrackerAdd
-	d.title = "Add tracker"
+	d.trackerTitle, d.title = d.title, "Add tracker"
 	d.status = ""
 	d.fields = []dialogField{newDialogField("URL", "", "https://tracker.example/announce", "Enter one tracker URL")}
-	d.request = actionRequest{kind: "tracker-add", hashes: d.trackerHash}
+	d.request = actionRequest{kind: "tracker-add", hashes: d.torrentDetails.hash}
 	d.focusField(0)
 }
 
 func (m *model) openTrackerEditDialog() {
 	d := m.dialog
-	if d == nil || d.selected < 0 || d.selected >= len(d.trackerEntries) {
+	if d == nil || d.torrentDetails == nil || d.selected < 0 || d.selected >= len(d.trackerEntries) {
 		return
 	}
 	entry := d.trackerEntries[d.selected]
@@ -187,16 +177,16 @@ func (m *model) openTrackerEditDialog() {
 	// needed for qBittorrent's editTracker match and is visible only after the
 	// user asks to edit this row.
 	d.kind = dialogTrackerEdit
-	d.title = "Edit tracker"
+	d.trackerTitle, d.title = d.title, "Edit tracker"
 	d.status = ""
 	d.fields = []dialogField{newDialogField("URL", entry.URL, "https://tracker.example/announce", "Replace with the new announce URL")}
-	d.request = actionRequest{kind: "tracker-edit", hashes: d.trackerHash, original: entry.URL}
+	d.request = actionRequest{kind: "tracker-edit", hashes: d.torrentDetails.hash, original: entry.URL}
 	d.focusField(0)
 }
 
 func (m *model) removeSelectedTracker() tea.Cmd {
 	d := m.dialog
-	if d == nil || d.selected < 0 || d.selected >= len(d.trackerEntries) {
+	if d == nil || d.torrentDetails == nil || d.selected < 0 || d.selected >= len(d.trackerEntries) {
 		return nil
 	}
 	if m.busy != "" {
@@ -211,7 +201,7 @@ func (m *model) removeSelectedTracker() tea.Cmd {
 	d.status = "Removing tracker…"
 	return m.launchAction("tracker-remove", actionRequest{
 		kind:   "tracker-remove",
-		hashes: d.trackerHash,
+		hashes: d.torrentDetails.hash,
 		value:  entry.URL,
 	})
 }
@@ -243,12 +233,9 @@ func trackerURLIsEditable(raw string) bool {
 	return !strings.HasPrefix(value, "** [")
 }
 
-func trackerDialogLines(d *dialog, width, visible int) []string {
-	if d == nil || len(d.trackerEntries) == 0 {
+func trackerTabLines(d *dialog, width, visible int) []string {
+	if len(d.trackerEntries) == 0 {
 		return []string{viewMutedStyle.Render("No trackers available")}
-	}
-	if visible < 1 {
-		visible = 1
 	}
 	start := min(max(0, d.scroll), max(0, len(d.trackerEntries)-visible))
 	end := min(len(d.trackerEntries), start+visible)
@@ -260,12 +247,10 @@ func trackerDialogLines(d *dialog, width, visible int) []string {
 			location = entry.URL
 		}
 		line := fmt.Sprintf("%s  ·  %s", viewSafe(location), viewSafe(client.TrackerStatusLabel(entry.Status)))
-		line = viewFit(line, width)
 		if i == d.selected {
-			line = "› " + line
-			line = viewSelectedSty.Width(width).Render(line)
+			line = viewSelectedSty.Width(width).Render(viewFit("› "+line, width))
 		} else {
-			line = "  " + line
+			line = viewFit("  "+line, width)
 		}
 		lines = append(lines, line)
 	}

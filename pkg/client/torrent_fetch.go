@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+// TorrentListFilter contains the filters accepted by qBittorrent's torrent
+// list endpoint. Empty values leave that dimension unfiltered.
+type TorrentListFilter struct {
+	State    string
+	Category string
+	Tag      string
+}
+
 // ResolveHash resolves one full hash or prefix and verifies it exists on the
 // qBittorrent server. Full hashes therefore make one filtered API request.
 func (a *App) ResolveHash(hash string) (string, error) {
@@ -168,7 +176,28 @@ func (a *App) FetchAllTorrents() ([]TorrentInfo, []byte, error) {
 }
 
 func (a *App) FetchAllTorrentsContext(ctx context.Context) ([]TorrentInfo, []byte, error) {
-	body, err := a.client.requestContext(ctx, http.MethodGet, "/api/v2/torrents/info", nil)
+	return a.FetchTorrentsContext(ctx, TorrentListFilter{})
+}
+
+// FetchTorrentsContext fetches torrents using qBittorrent's native list
+// filters. Keeping the parameters on the request lets the server avoid
+// serializing unrelated queue rows for filtered CLI output.
+func (a *App) FetchTorrentsContext(ctx context.Context, filter TorrentListFilter) ([]TorrentInfo, []byte, error) {
+	params := url.Values{}
+	if value := strings.TrimSpace(filter.State); value != "" && !isLocalTorrentState(value) {
+		params.Set("filter", value)
+	}
+	if value := strings.TrimSpace(filter.Category); value != "" {
+		params.Set("category", value)
+	}
+	if value := strings.TrimSpace(filter.Tag); value != "" {
+		params.Set("tag", value)
+	}
+	var requestParams url.Values
+	if len(params) > 0 {
+		requestParams = params
+	}
+	body, err := a.client.requestContext(ctx, http.MethodGet, "/api/v2/torrents/info", requestParams)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, nil, fmt.Errorf("failed to fetch torrent list: %w", err)
@@ -180,6 +209,29 @@ func (a *App) FetchAllTorrentsContext(ctx context.Context) ([]TorrentInfo, []byt
 	if err := json.Unmarshal(body, &torrents); err != nil {
 		return nil, nil, codedErrf(ExitFetchFail, "Invalid JSON from torrent list")
 	}
+	if state := strings.ToLower(strings.TrimSpace(filter.State)); state == "queued" || state == "checking" {
+		filtered := torrents[:0]
+		for _, torrent := range torrents {
+			value := strings.ToLower(torrent.State)
+			matches := state == "queued" && strings.Contains(value, "queued")
+			if state == "checking" {
+				matches = strings.Contains(value, "check")
+			}
+			if matches {
+				filtered = append(filtered, torrent)
+			}
+		}
+		torrents = filtered
+	}
 
 	return torrents, body, nil
+}
+
+func isLocalTorrentState(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "queued", "checking":
+		return true
+	default:
+		return false
+	}
 }

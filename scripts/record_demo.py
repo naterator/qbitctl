@@ -504,7 +504,8 @@ def main():
             recording.type_text("search cache")
             recording.wait("Show search cache path", palette_start)
             recording.hold(0.8)
-            recording.key(b"enter", "search-results.json")
+            # A long temporary directory can truncate the displayed path.
+            recording.key(b"enter", "Search cache")
             recording.hold(0.8)
             recording.key(b"1")
 

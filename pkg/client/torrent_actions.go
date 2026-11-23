@@ -28,13 +28,21 @@ const (
 var errTorrentFileTooLarge = errors.New("torrent file exceeds the 63 MiB upload limit")
 
 // AddTorrentOptions controls the settings qBittorrent applies while adding a
-// torrent. Empty category/save path values use qBittorrent's defaults. A
-// stopped torrent is opt-in so the zero value retains the normal auto-start
-// behavior.
+// torrent. Empty category, save path, and tags values use qBittorrent's
+// defaults. A stopped torrent is opt-in so the zero value retains the normal
+// auto-start behavior.
 type AddTorrentOptions struct {
 	Category string
 	SavePath string
+	Tags     string
 	Stopped  bool
+}
+
+func (options AddTorrentOptions) hasOverrides() bool {
+	return strings.TrimSpace(options.Category) != "" ||
+		strings.TrimSpace(options.SavePath) != "" ||
+		strings.TrimSpace(options.Tags) != "" ||
+		options.Stopped
 }
 
 type torrentFileUpload struct {
@@ -98,16 +106,32 @@ func (a *App) AddTorrentWithOptions(source string, options AddTorrentOptions) er
 
 // AddSearchResult submits a cached search result to qBittorrent.
 func (a *App) AddSearchResult(id int64) error {
+	return a.AddSearchResultWithOptions(id, AddTorrentOptions{})
+}
+
+// AddSearchResultWithOptions submits a cached search result to qBittorrent,
+// applying the same add-time options as a direct torrent add. qBittorrent
+// versions before 5.2 only expose the legacy search download endpoint, which
+// cannot accept those options.
+func (a *App) AddSearchResultWithOptions(id int64, options AddTorrentOptions) error {
 	target, err := a.cachedSearchResult(id)
 	if err != nil {
 		return err
 	}
 	if target.Plugin == "" || !(strings.HasPrefix(target.URL, "http:") || strings.HasPrefix(target.URL, "https:")) {
-		return a.addTorrentURL(target.URL, AddTorrentOptions{}, "")
+		return a.addTorrentURL(target.URL, options, "")
 	}
 	version, err := a.fetchAppVersion()
 	if err != nil {
 		return err
+	}
+	if a.compatibilitySource == compatibilitySourceDisk && compareDottedVersion(version, "5.2.0") < 0 {
+		// A cached legacy version can outlive a server upgrade. Check before
+		// choosing the legacy download path or rejecting add-time options.
+		if err := a.refreshCompatibility(); err != nil {
+			return err
+		}
+		version = a.appVersion
 	}
 	if compareDottedVersion(version, "5.2.0") >= 0 {
 		// The newer Web UI cancels its pending plugin download when the
@@ -115,7 +139,10 @@ func (a *App) AddSearchResult(id int64) error {
 		if err := a.waitForSearchMetadata(target); err != nil {
 			return codedErrWrapf(ExitActionFail, err, "Failed to fetch metadata for search result %d: %v", id, err)
 		}
-		return a.addTorrentURL(target.URL, AddTorrentOptions{}, target.Plugin)
+		return a.addTorrentURL(target.URL, options, target.Plugin)
+	}
+	if options.hasOverrides() {
+		return codedErrf(ExitActionFail, "search-result add options require qBittorrent 5.2.0 or newer")
 	}
 	_, err = a.client.requestContext(a.context(), http.MethodPost, "/api/v2/search/downloadTorrent", url.Values{
 		"torrentUrl": {target.URL},
@@ -233,6 +260,11 @@ func writeTorrentAddOptions(writer *multipart.Writer, options AddTorrentOptions)
 			return err
 		}
 	}
+	if strings.TrimSpace(options.Tags) != "" {
+		if err := writer.WriteField("tags", options.Tags); err != nil {
+			return err
+		}
+	}
 	if options.Stopped {
 		if err := writer.WriteField("stopped", "true"); err != nil {
 			return err
@@ -321,6 +353,8 @@ func (u *torrentFileUpload) write(ctx context.Context, dst io.Writer) error {
 }
 
 func (c *Client) doMultipartStreamRequestContext(ctx context.Context, endpoint string, upload *torrentFileUpload) ([]byte, *http.Response, error) {
+	ctx, timeoutCancel := contextWithHTTPTimeout(ctx, c.httpTimeouts.upload)
+	defer timeoutCancel()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reader, pipeWriter := io.Pipe()

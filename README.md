@@ -37,9 +37,11 @@ qbitctl add ./ubuntu.torrent
 Use `Tab` to switch between Queue, Search, Server, and Config. Press `?` for
 shortcuts or `Ctrl+P` for actions that fit the current tab and selection.
 Mark torrents with `Space` to edit them together. Press Enter in the Queue to
-open live torrent details. The details and the queue refresh every five
-seconds. Set `qbitctl tui-default on` to open the TUI when you run `qbitctl`
-by itself.
+open live torrent details. The details and the queue share the same refresh.
+The queue refreshes every five seconds while transferring and every 15
+seconds when idle. The command palette can pause automatic refresh, and
+`r` still refreshes on demand. Set `qbitctl tui-default on` to open the TUI
+when you run `qbitctl` by itself.
 
 Config groups settings under **Connection**, **View**, and **Search**, with a
 **Files** section for the config and search cache paths. Use
@@ -77,13 +79,17 @@ unambiguous prefix.
 | `update`, `version`, `completion` | Update qbitctl, show its version, or generate shell completions. |
 
 ```bash
-qbitctl list --fields hash,name,progress
+qbitctl list --state downloading --category linux --fields hash,name,progress
 qbitctl search "Ubuntu 24.04" --sort seeders-desc --min-seeders 10 --limit 5
-qbitctl add --search-id 123456789012
-qbitctl set seedtime-limit 3d 9c328901
+qbitctl add --search-id 123456789012 --category linux --stopped
+qbitctl set seedtime-limit 3d 9c328901 fedcba98
 qbitctl pause 9c328901 fedcba98
 qbitctl completion bash
 ```
+
+Use `qbitctl batch commands.txt` to run one command per line with a shared
+login. Pipe the commands into `qbitctl batch` to read them from stdin.
+A batch stops on the first error unless you pass `--continue-on-error`.
 
 Search uses your saved provider and waits up to 30 seconds by default.
 Run `qbitctl search --list-plugins` to see what your server has
@@ -91,8 +97,12 @@ installed. Use `--plugin` with a name or ID, join several with `|` in a quoted
 value, or use `--plugin all` to include disabled plugins. Change the wait with
 `--timeout`.
 
-Copy the ID from a search result into `add --search-id`. IDs last up to 24
-hours for the same server and user.
+Copy the ID from a search result into `add --search-id`. Run
+`qbitctl search --recent` to print the latest cached results without
+connecting. IDs last up to 24 hours for the same server and user.
+Add options include `--category`, `--save-path`, `--tags`, and `--stopped`.
+Applying them to a plugin-downloaded search result requires qBittorrent 5.2
+or later.
 
 Use `--json` for structured output or `--server-json` for the raw API response
 where offered. `list` and `show` also support `--fields` and `--template`.
@@ -100,6 +110,9 @@ Use one output format at a time.
 
 Use `--units bytes` or `--units human` to override the saved display units
 for one command. JSON and template output keep their original values.
+Use `--http-timeout 90s` to override the per-request budget, or set
+`"http_timeout": "90s"` in `config.json`. Search jobs keep their own
+`search --timeout` budget.
 
 ```bash
 qbitctl --units bytes info

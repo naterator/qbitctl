@@ -257,6 +257,23 @@ func TestRefreshTorrentDetailsAppliesQueueWhenDialogCloses(t *testing.T) {
 	}
 }
 
+func TestRefreshTorrentDetailsClosesWhenTorrentDisappears(t *testing.T) {
+	original := liveDetailsTorrent("Original", "original", 0.40)
+	backend := &liveDetailsService{
+		rows:     []detailRow{{label: "Name", value: original.Name}},
+		torrents: []client.TorrentInfo{original},
+	}
+	m := newLiveDetailsModel(t, backend, original)
+	finishLiveDetailsCommand(t, m, m.loadDetails(false))
+	backend.setQueue(nil, nil)
+	backend.setDetails([]detailRow{{label: "Name", value: original.Name}}, nil)
+
+	finishLiveDetailsCommand(t, m, m.refreshTorrentDetails())
+	if m.dialog != nil {
+		t.Fatal("details dialog remained open after its torrent disappeared")
+	}
+}
+
 func TestRefreshTickRefreshesOnlyTorrentDetails(t *testing.T) {
 	original := liveDetailsTorrent("Original", "original", 0.40)
 	other := liveDetailsTorrent("Other", "other", 0.20)

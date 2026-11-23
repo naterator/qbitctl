@@ -54,7 +54,7 @@ func TestAddTorrentVariants(t *testing.T) {
 		server := newQBTestServer(t)
 		app := server.newApp()
 		magnet := "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
-		options := AddTorrentOptions{Category: "linux", SavePath: "/downloads/linux", Stopped: true}
+		options := AddTorrentOptions{Category: "linux", SavePath: "/downloads/linux", Tags: "iso,linux", Stopped: true}
 
 		if err := app.AddTorrentWithOptions(magnet, options); err != nil {
 			t.Fatalf("AddTorrentWithOptions err = %v", err)
@@ -65,6 +65,7 @@ func TestAddTorrentVariants(t *testing.T) {
 			"category": "linux",
 			"savepath": "/downloads/linux",
 			"autoTMM":  "false",
+			"tags":     "iso,linux",
 			"stopped":  "true",
 		} {
 			if got := form.Get(field); got != want {
@@ -80,7 +81,7 @@ func TestAddTorrentVariants(t *testing.T) {
 		if err := os.WriteFile(path, []byte("dummy torrent payload"), 0o600); err != nil {
 			t.Fatalf("write torrent file failed: %v", err)
 		}
-		options := AddTorrentOptions{Category: "linux", SavePath: "/downloads/linux", Stopped: true}
+		options := AddTorrentOptions{Category: "linux", SavePath: "/downloads/linux", Tags: "iso,linux", Stopped: true}
 
 		if err := app.AddTorrentWithOptions(path, options); err != nil {
 			t.Fatalf("AddTorrentWithOptions err = %v", err)
@@ -93,6 +94,7 @@ func TestAddTorrentVariants(t *testing.T) {
 			"category": "linux",
 			"savepath": "/downloads/linux",
 			"autoTMM":  "false",
+			"tags":     "iso,linux",
 			"stopped":  "true",
 		} {
 			if got := form.Get(field); got != want {

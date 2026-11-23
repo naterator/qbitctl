@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/naterator/qbitctl/pkg/client"
@@ -55,5 +56,76 @@ func TestOrderRows(t *testing.T) {
 func TestJoinDiagnostics(t *testing.T) {
 	if got := joinDiagnostics("  first\n", "", " second "); got != "first\nsecond" {
 		t.Fatalf("joinDiagnostics = %q", got)
+	}
+}
+
+func TestApplyMainDataTracksQueueChanges(t *testing.T) {
+	c := &tuiClient{}
+	full := []byte(`{"rid":1,"full_update":true,"torrents":{"hash":{"name":"Alpha","state":"downloading"}}}`)
+	first, err := c.applyMainData(full)
+	if err != nil {
+		t.Fatalf("full maindata update: %v", err)
+	}
+	if !c.takeQueueChanged() {
+		t.Fatal("full maindata update was not marked changed")
+	}
+
+	unchanged := []byte(`{"rid":2,"full_update":false,"torrents":{"hash":{"name":"Alpha"}}}`)
+	second, err := c.applyMainData(unchanged)
+	if err != nil {
+		t.Fatalf("unchanged partial update: %v", err)
+	}
+	if c.takeQueueChanged() {
+		t.Fatal("identical partial update was marked changed")
+	}
+	if len(first) == 0 || len(second) == 0 || &first[0] != &second[0] {
+		t.Fatal("identical partial update rebuilt the sorted queue snapshot")
+	}
+
+	changed := []byte(`{"rid":3,"full_update":false,"torrents":{"hash":{"state":"stalledDL"}}}`)
+	if _, err := c.applyMainData(changed); err != nil {
+		t.Fatalf("changed partial update: %v", err)
+	}
+	if !c.takeQueueChanged() {
+		t.Fatal("changed partial update was not marked changed")
+	}
+
+	removed := []byte(`{"rid":4,"full_update":false,"torrents_removed":["hash"]}`)
+	if _, err := c.applyMainData(removed); err != nil {
+		t.Fatalf("removed partial update: %v", err)
+	}
+	if !c.takeQueueChanged() {
+		t.Fatal("removed torrent was not marked changed")
+	}
+	if len(c.queueState.decoded) != 0 {
+		t.Fatalf("decoded queue after removal = %#v, want empty", c.queueState.decoded)
+	}
+}
+
+func TestApplyMainDataMergesServerState(t *testing.T) {
+	c := &tuiClient{}
+	full := []byte(`{"rid":1,"full_update":true,"torrents":{},"server_state":{"dl_info_speed":1024,"up_info_speed":64,"free_space_on_disk":1048576}}`)
+	if _, err := c.applyMainData(full); err != nil {
+		t.Fatalf("full maindata update: %v", err)
+	}
+	transfer := c.serverTransferState()
+	if transfer.download == nil || *transfer.download != 1024 || transfer.free == nil || *transfer.free != 1048576 {
+		t.Fatalf("server state = %#v", transfer)
+	}
+	partial := []byte(`{"rid":2,"full_update":false,"server_state":{"dl_info_speed":2048}}`)
+	if _, err := c.applyMainData(partial); err != nil {
+		t.Fatalf("partial server state update: %v", err)
+	}
+	transfer = c.serverTransferState()
+	if transfer.download == nil || *transfer.download != 2048 || transfer.free == nil || *transfer.free != 1048576 {
+		t.Fatalf("merged server state = %#v", transfer)
+	}
+	m := newModel(t.Context(), nil)
+	m.dataUnits = client.DataUnitsBytes
+	m.finishWork(workDone{kind: queueWork, queueTransfer: transfer})
+	for _, text := range []string{"2048 B/s", "64 B/s", "1048576 B free"} {
+		if frame := m.View().Content; !strings.Contains(frame, text) {
+			t.Fatalf("queue view omitted %q from sync state", text)
+		}
 	}
 }

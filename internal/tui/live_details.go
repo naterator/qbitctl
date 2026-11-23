@@ -28,9 +28,18 @@ type torrentDetailUpdate struct {
 
 func fetchQueueUpdate(ctx context.Context, backend service) workDone {
 	torrents, err := backend.queue(ctx)
-	update := workDone{queue: torrents, err: err}
+	// Compatibility backends do not expose change metadata, so retain the
+	// historical behavior for them. The incremental-sync adapter can report a
+	// true no-op and let the model skip filtering and sorting entirely.
+	update := workDone{queue: torrents, queueChanged: true, err: err}
 	if source, ok := backend.(interface{ takeQueueNotice() string }); ok && err == nil {
 		update.notice = source.takeQueueNotice()
+	}
+	if source, ok := backend.(interface{ takeQueueChanged() bool }); ok && err == nil {
+		update.queueChanged = source.takeQueueChanged()
+	}
+	if source, ok := backend.(interface{ serverTransferState() queueTransferState }); ok && err == nil {
+		update.queueTransfer = source.serverTransferState()
 	}
 	return update
 }
@@ -53,7 +62,10 @@ func (m *model) finishTorrentDetailsRefresh(done workDone) {
 	if done.err != nil {
 		m.setNotice("Queue refresh: "+done.err.Error(), true)
 	} else {
-		m.replaceQueue(done.queue)
+		m.queueTransfer = done.queueTransfer
+		if done.queueChanged || m.allTorrents == nil {
+			m.replaceQueue(done.queue)
+		}
 		if done.notice != "" {
 			m.setNotice(done.notice, false)
 		}
@@ -70,13 +82,20 @@ func (m *model) finishTorrentDetailsRefresh(done workDone) {
 		d.status = "Details refresh: " + update.err.Error()
 		return
 	}
-	d.rows, d.status = update.rows, ""
-	if done.err == nil {
-		for _, torrent := range done.queue {
-			if torrent.Hash == d.torrentDetails.hash {
-				d.title = d.torrentDetails.title(torrent.Name)
-				break
-			}
+	found := false
+	for _, torrent := range done.queue {
+		if torrent.Hash == d.torrentDetails.hash {
+			found = true
+			d.title = d.torrentDetails.title(torrent.Name)
+			break
 		}
 	}
+	if done.err == nil && !found {
+		// The focused torrent disappeared during the sync. Do not leave an
+		// apparently live dialog showing rows for a torrent that no longer
+		// exists on the server.
+		m.dialog = nil
+		return
+	}
+	d.rows, d.status = update.rows, ""
 }

@@ -51,18 +51,49 @@ type searchScope struct {
 type searchSnapshot struct {
 	searchScope
 	SavedAt int64               `json:"saved_at"`
+	Query   string              `json:"query,omitempty"`
 	Results []searchCacheResult `json:"results"`
 }
 
 type searchCacheResult struct {
-	ID     int64  `json:"id"`
-	URL    string `json:"url"`
-	Plugin string `json:"plugin"`
+	ID       int64  `json:"id"`
+	URL      string `json:"url"`
+	Plugin   string `json:"plugin"`
+	Name     string `json:"name,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+	Seeders  int    `json:"seeders,omitempty"`
+	Leechers int    `json:"leechers,omitempty"`
+	Source   string `json:"source,omitempty"`
+}
+
+// CachedSearch is one unexpired local search snapshot. It contains only the
+// display data needed to reprint results and the IDs used by add --search-id.
+// Download URLs are deliberately kept private to the cache implementation.
+type CachedSearch struct {
+	SavedAt time.Time
+	Query   string
+	Results []CachedSearchResult
+}
+
+// CachedSearchResult is a result retained in a local search snapshot.
+type CachedSearchResult struct {
+	ID       int64
+	Name     string
+	Size     int64
+	Seeders  int
+	Leechers int
+	Source   string
 }
 
 // CacheSearchResults records a bounded history for the current server and user.
 // Only rows with a usable download URL receive an ID.
 func (a *App) CacheSearchResults(results []SearchResult) error {
+	return a.CacheSearchResultsForQuery("", results)
+}
+
+// CacheSearchResultsForQuery records a bounded history for the current server
+// and user, retaining the query and display fields for offline reprinting.
+func (a *App) CacheSearchResultsForQuery(query string, results []SearchResult) error {
 	path, err := SearchResultsCachePath()
 	if err != nil {
 		return fmt.Errorf("%w: %w", errSearchCacheWrite, err)
@@ -87,7 +118,7 @@ func (a *App) CacheSearchResults(results []SearchResult) error {
 				usedIDs[result.ID] = struct{}{}
 			}
 		}
-		latest := searchSnapshot{searchScope: a.searchScope(), SavedAt: now.Unix()}
+		latest := searchSnapshot{searchScope: a.searchScope(), SavedAt: now.Unix(), Query: strings.TrimSpace(query)}
 		for i, result := range results {
 			if !isSearchDownloadURL(result.downloadURL) {
 				continue
@@ -98,7 +129,11 @@ func (a *App) CacheSearchResults(results []SearchResult) error {
 			}
 			usedIDs[id] = struct{}{}
 			ids[i] = id
-			latest.Results = append(latest.Results, searchCacheResult{ID: id, URL: result.downloadURL, Plugin: result.pluginName})
+			latest.Results = append(latest.Results, searchCacheResult{
+				ID: id, URL: result.downloadURL, Plugin: result.pluginName,
+				Name: result.Name, Size: result.Size, Seeders: result.Seeders,
+				Leechers: result.Leechers, Source: result.Source,
+			})
 		}
 		if len(latest.Results) == 0 {
 			return false, nil
@@ -120,6 +155,70 @@ func (a *App) CacheSearchResults(results []SearchResult) error {
 		results[i].ID = id
 	}
 	return nil
+}
+
+// CachedSearchHistory reads unexpired snapshots for the app's server and user
+// without contacting qBittorrent. Results are returned newest first.
+func (a *App) CachedSearchHistory() ([]CachedSearch, error) {
+	path, err := SearchResultsCachePath()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, errSearchCacheUnavailable
+		}
+		return nil, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
+	}
+	searches, err := parseSearches(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
+	}
+	scope := a.searchScope()
+	history := make([]CachedSearch, 0)
+	for _, snapshot := range retainSearches(searches, time.Now()) {
+		if snapshot.searchScope != scope {
+			continue
+		}
+		results := make([]CachedSearchResult, 0, len(snapshot.Results))
+		for _, result := range snapshot.Results {
+			results = append(results, CachedSearchResult{
+				ID: result.ID, Name: result.Name, Size: result.Size,
+				Seeders: result.Seeders, Leechers: result.Leechers, Source: result.Source,
+			})
+		}
+		history = append(history, CachedSearch{SavedAt: time.Unix(snapshot.SavedAt, 0), Query: snapshot.Query, Results: results})
+	}
+	if len(history) == 0 {
+		return nil, errSearchCacheUnavailable
+	}
+	return history, nil
+}
+
+// ReadCachedSearchHistory loads local search history from the selected config
+// and command-line server metadata without authenticating to qBittorrent.
+func ReadCachedSearchHistory(opts Options) ([]CachedSearch, error) {
+	setup, err := ReadSetup(opts)
+	if err != nil {
+		// A cache lookup can still be scoped when the caller supplied both
+		// server identity flags explicitly, even if no config file exists yet.
+		if strings.TrimSpace(opts.URL) == "" || strings.TrimSpace(opts.User) == "" {
+			return nil, err
+		}
+		setup = Setup{URL: opts.URL, User: opts.User}
+	}
+	if strings.TrimSpace(setup.URL) == "" && strings.TrimSpace(opts.URL) != "" {
+		setup.URL = opts.URL
+	}
+	if strings.TrimSpace(setup.User) == "" && strings.TrimSpace(opts.User) != "" {
+		setup.User = opts.User
+	}
+	if strings.TrimSpace(setup.URL) == "" || strings.TrimSpace(setup.User) == "" {
+		return nil, errors.New("server address and username are required to identify search history")
+	}
+	app := &App{creds: Credentials{URL: setup.URL, User: setup.User}}
+	return app.CachedSearchHistory()
 }
 
 func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {

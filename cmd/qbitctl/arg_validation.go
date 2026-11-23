@@ -70,7 +70,7 @@ func validateFieldArg(index int, isKnown func(string) bool, canonical func(strin
 }
 
 func validateSetArgs(cmd *cobra.Command, args []string) error {
-	if err := cobra.ExactArgs(3)(cmd, args); err != nil {
+	if err := cobra.MinimumNArgs(3)(cmd, args); err != nil {
 		return err
 	}
 	field := qbt.CanonicalSetField(args[0])

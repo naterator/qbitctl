@@ -41,11 +41,14 @@ type actionRequest struct {
 }
 
 type queueSync struct {
-	rid      int64
-	torrents map[string]map[string]json.RawMessage
-	decoded  map[string]client.TorrentInfo
-	fallback bool
-	notice   string
+	rid          int64
+	torrents     map[string]map[string]json.RawMessage
+	decoded      map[string]client.TorrentInfo
+	snapshot     []client.TorrentInfo
+	serverState  map[string]json.RawMessage
+	queueChanged bool
+	fallback     bool
+	notice       string
 }
 
 // tuiClient adapts the existing client.App API to the TUI. The App is copied
@@ -101,6 +104,10 @@ func (c *tuiClient) queue(ctx context.Context) ([]client.TorrentInfo, error) {
 	if c == nil || c.app == nil {
 		return nil, fmt.Errorf("qBittorrent client is not configured")
 	}
+	// The marker belongs to the response currently being fetched. Clearing it
+	// before every request prevents a failed or directly-consumed request from
+	// making a later no-op response rebuild the queue.
+	c.queueState.queueChanged = false
 	app := c.withContext(ctx, io.Discard, io.Discard)
 	if c.queueState.fallback {
 		return c.fetchQueueInfo(app)
@@ -122,6 +129,20 @@ func (c *tuiClient) queue(ctx context.Context) ([]client.TorrentInfo, error) {
 
 func (c *tuiClient) fetchQueueInfo(app *client.App) ([]client.TorrentInfo, error) {
 	torrents, _, err := app.FetchAllTorrentsContext(app.Ctx)
+	if err == nil {
+		decoded := make(map[string]client.TorrentInfo, len(torrents))
+		for _, torrent := range torrents {
+			if torrent.Hash != "" {
+				decoded[torrent.Hash] = torrent
+			}
+		}
+		c.queueState.decoded = decoded
+		c.queueState.snapshot = append([]client.TorrentInfo(nil), torrents...)
+		c.queueState.queueChanged = true
+		// A full torrent-list fallback does not contain server_state. Do not
+		// keep presenting a potentially stale transfer snapshot on Server.
+		c.queueState.serverState = nil
+	}
 	return torrents, err
 }
 
@@ -152,6 +173,7 @@ type mainDataResponse struct {
 	FullUpdate      bool                                  `json:"full_update"`
 	Torrents        map[string]map[string]json.RawMessage `json:"torrents"`
 	TorrentsRemoved []string                              `json:"torrents_removed"`
+	ServerState     map[string]json.RawMessage            `json:"server_state"`
 }
 
 func (c *tuiClient) applyMainData(body []byte) ([]client.TorrentInfo, error) {
@@ -188,7 +210,10 @@ func (c *tuiClient) applyMainData(body []byte) ([]client.TorrentInfo, error) {
 		c.queueState.rid = *response.RID
 		c.queueState.torrents = merged
 		c.queueState.decoded = decoded
-		return mainDataTorrentList(decoded), nil
+		c.queueState.serverState = cloneTorrentFields(response.ServerState)
+		c.queueState.queueChanged = true
+		c.queueState.snapshot = mainDataTorrentList(decoded)
+		return c.queueState.snapshot, nil
 	}
 
 	// Decode every changed torrent before touching the live maps. This keeps a
@@ -196,6 +221,7 @@ func (c *tuiClient) applyMainData(body []byte) ([]client.TorrentInfo, error) {
 	// avoids re-decoding unchanged entries on every refresh.
 	updates := make(map[string]map[string]json.RawMessage, len(response.Torrents))
 	decodedUpdates := make(map[string]client.TorrentInfo, len(response.Torrents))
+	queueChanged := false
 	for hash, fields := range response.Torrents {
 		if hash == "" {
 			return nil, fmt.Errorf("maindata response contained an empty torrent hash")
@@ -203,8 +229,12 @@ func (c *tuiClient) applyMainData(body []byte) ([]client.TorrentInfo, error) {
 		current := cloneTorrentFields(c.queueState.torrents[hash])
 		if current == nil {
 			current = make(map[string]json.RawMessage, len(fields)+1)
+			queueChanged = true
 		}
 		for field, value := range fields {
+			if !rawMessagesEqual(current[field], value) {
+				queueChanged = true
+			}
 			current[field] = append(json.RawMessage(nil), value...)
 		}
 		torrent, err := decodeMainDataTorrent(hash, current)
@@ -215,15 +245,33 @@ func (c *tuiClient) applyMainData(body []byte) ([]client.TorrentInfo, error) {
 		decodedUpdates[hash] = torrent
 	}
 	for _, hash := range response.TorrentsRemoved {
-		deleteTorrentHash(c.queueState.torrents, hash)
+		if deleteTorrentHash(c.queueState.torrents, hash) {
+			queueChanged = true
+		}
 		deleteTorrentHashInfo(c.queueState.decoded, hash)
 	}
 	for hash, fields := range updates {
 		c.queueState.torrents[hash] = fields
 		c.queueState.decoded[hash] = decodedUpdates[hash]
 	}
+	if response.ServerState != nil {
+		if c.queueState.serverState == nil {
+			c.queueState.serverState = make(map[string]json.RawMessage, len(response.ServerState))
+		}
+		for field, value := range response.ServerState {
+			c.queueState.serverState[field] = append(json.RawMessage(nil), value...)
+		}
+	}
 	c.queueState.rid = *response.RID
-	return mainDataTorrentList(c.queueState.decoded), nil
+	c.queueState.queueChanged = queueChanged
+	if queueChanged || c.queueState.snapshot == nil {
+		c.queueState.snapshot = mainDataTorrentList(c.queueState.decoded)
+	}
+	return c.queueState.snapshot, nil
+}
+
+func rawMessagesEqual(left, right json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(left), bytes.TrimSpace(right))
 }
 
 func cloneTorrentFields(fields map[string]json.RawMessage) map[string]json.RawMessage {
@@ -237,17 +285,18 @@ func cloneTorrentFields(fields map[string]json.RawMessage) map[string]json.RawMe
 	return clone
 }
 
-func deleteTorrentHash(torrents map[string]map[string]json.RawMessage, hash string) {
+func deleteTorrentHash(torrents map[string]map[string]json.RawMessage, hash string) bool {
 	if _, ok := torrents[hash]; ok {
 		delete(torrents, hash)
-		return
+		return true
 	}
 	for existing := range torrents {
 		if strings.EqualFold(existing, hash) {
 			delete(torrents, existing)
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func deleteTorrentHashInfo(torrents map[string]client.TorrentInfo, hash string) {
@@ -261,6 +310,38 @@ func deleteTorrentHashInfo(torrents map[string]client.TorrentInfo, hash string) 
 			return
 		}
 	}
+}
+
+// takeQueueChanged is consumed by fetchQueueUpdate after a sync response has
+// been decoded. Keeping this as an optional backend method preserves the
+// lightweight service interface used by model tests and other adapters.
+func (c *tuiClient) takeQueueChanged() bool {
+	changed := c.queueState.queueChanged
+	c.queueState.queueChanged = false
+	return changed
+}
+
+type queueTransferState struct {
+	download *int64
+	upload   *int64
+	free     *int64
+}
+
+func (c *tuiClient) serverTransferState() queueTransferState {
+	state := c.queueState.serverState
+	return queueTransferState{
+		download: syncNumber(state["dl_info_speed"]),
+		upload:   syncNumber(state["up_info_speed"]),
+		free:     syncNumber(state["free_space_on_disk"]),
+	}
+}
+
+func syncNumber(raw json.RawMessage) *int64 {
+	var value *int64
+	if len(raw) > 0 && json.Unmarshal(raw, &value) == nil && value != nil && *value >= 0 {
+		return value
+	}
+	return nil
 }
 
 func decodeMainDataTorrent(hash string, fields map[string]json.RawMessage) (client.TorrentInfo, error) {
@@ -347,7 +428,7 @@ func (c *tuiClient) searchResolved(app *client.App, stdout, stderr *bytes.Buffer
 	if err != nil {
 		return nil, warning, err
 	}
-	if err := app.CacheSearchResults(results); err != nil {
+	if err := app.CacheSearchResultsForQuery(query, results); err != nil {
 		warning = joinDiagnostics(warning, fmt.Sprintf("[WARN] %v", err))
 	}
 	return results, warning, nil
@@ -368,6 +449,16 @@ func (c *tuiClient) details(ctx context.Context, hash string, trackers bool) ([]
 		}
 		return expandTrackerEntries(trackers), nil
 	}
+	// maindata already carries the standard torrent fields used by the detail
+	// view. Reuse that row instead of issuing a second /torrents/info request;
+	// tracker details intentionally remain a separate request below.
+	if torrent, ok := lookupTorrent(c.queueState.decoded, hash); ok {
+		fields := app.TorrentDisplayFieldsFromInfo(torrent)
+		return orderRows(detailRowsFromMap(fields), detailRowOrder), nil
+	}
+	if c.queueState.decoded != nil {
+		return nil, fmt.Errorf("torrent %q is no longer present in the synchronized queue", hash)
+	}
 
 	fields, err := app.TorrentDisplayFields(hash)
 	if err != nil {
@@ -384,11 +475,26 @@ func (c *tuiClient) server(ctx context.Context) ([]detailRow, error) {
 		return nil, fmt.Errorf("qBittorrent client is not configured")
 	}
 	app := c.withContext(ctx, io.Discard, io.Discard)
+	// Server values must remain live even when the queue page has not been
+	// visited recently. The client caches the two version probes for the
+	// session, leaving this refresh to make only the current transfer request.
 	fields, err := app.ServerDisplayFields()
 	if err != nil {
 		return nil, err
 	}
 	return orderRows(detailRowsFromMap(fields), serverRowOrder), nil
+}
+
+func lookupTorrent(torrents map[string]client.TorrentInfo, hash string) (client.TorrentInfo, bool) {
+	if torrent, ok := torrents[hash]; ok {
+		return torrent, true
+	}
+	for existing, torrent := range torrents {
+		if strings.EqualFold(existing, hash) || strings.EqualFold(torrent.Hash, hash) {
+			return torrent, true
+		}
+	}
+	return client.TorrentInfo{}, false
 }
 
 // action executes one TUI mutation against the shared authenticated client.
@@ -411,7 +517,7 @@ func (c *tuiClient) action(ctx context.Context, req actionRequest) error {
 		}
 		return app.AddTorrentWithOptions(source, req.addOptions)
 	case "add-result":
-		return app.AddSearchResult(req.id)
+		return app.AddSearchResultWithOptions(req.id, req.addOptions)
 	case "start":
 		return app.StartTorrent(req.hashes)
 	case "pause":

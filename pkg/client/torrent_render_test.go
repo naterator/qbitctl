@@ -138,6 +138,19 @@ func TestTorrentHumanPresentationUsesConfiguredUnits(t *testing.T) {
 	}
 }
 
+func TestTorrentDisplayFieldsFromInfoMatchesConfiguredUnits(t *testing.T) {
+	app := &App{DataUnits: DataUnitsBytes}
+	fields := app.TorrentDisplayFieldsFromInfo(TorrentInfo{
+		Name:     "Ubuntu ISO",
+		Size:     1536,
+		DLSpeed:  2048,
+		Progress: 0.5,
+	})
+	if fields["Name"] != "Ubuntu ISO" || fields["Size"] != "1536 B" || fields["Speed: Download"] != "2048 B/s" {
+		t.Fatalf("display fields from sync row = %#v", fields)
+	}
+}
+
 func TestTorrentJSONAndTemplateKeepRawValues(t *testing.T) {
 	fullHash := "0123456789abcdef0123456789abcdef01234567"
 	server := newQBTestServer(t)

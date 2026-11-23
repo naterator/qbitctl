@@ -184,6 +184,19 @@ func setupSearchAddTest(t *testing.T, appVersion string, metadataStatuses []int)
 	return app, server, transport, results[0].ID, source, plugin
 }
 
+func TestAddSearchResultRechecksCachedLegacyVersion(t *testing.T) {
+	app, _, transport, id, _, _ := setupSearchAddTest(t, "5.3.0", []int{http.StatusOK})
+	app.appVersion, app.apiVersion = "5.0.0", "2.11.0"
+	app.compatibilitySource = compatibilitySourceDisk
+	if err := app.AddSearchResultWithOptions(id, AddTorrentOptions{Category: "linux"}); err != nil {
+		t.Fatal(err)
+	}
+	if app.appVersion != "5.3.0" || len(transport.metadataForms) != 1 ||
+		len(transport.addForms) != 1 || transport.addForms[0].Get("category") != "linux" {
+		t.Fatalf("upgrade was not detected: version=%q requests=%v", app.appVersion, transport.paths)
+	}
+}
+
 func TestAddSearchResultUsesMetadataBeforeAdd(t *testing.T) {
 	app, server, transport, id, source, plugin := setupSearchAddTest(t, "5.3.0", []int{http.StatusAccepted, http.StatusOK})
 
@@ -244,6 +257,37 @@ func TestAddSearchResultUsesMetadataBeforeAdd(t *testing.T) {
 	}
 }
 
+func TestAddSearchResultWithOptionsSendsOptions(t *testing.T) {
+	app, _, transport, id, _, _ := setupSearchAddTest(t, "5.3.0", []int{http.StatusOK})
+	options := AddTorrentOptions{
+		Category: "linux",
+		SavePath: "/downloads/linux",
+		Tags:     "iso,linux",
+		Stopped:  true,
+	}
+	if err := app.AddSearchResultWithOptions(id, options); err != nil {
+		t.Fatalf("AddSearchResultWithOptions: %v", err)
+	}
+	if transport.err != nil {
+		t.Fatalf("mock transport: %v", transport.err)
+	}
+	if len(transport.addForms) != 1 {
+		t.Fatalf("add requests = %d, want one", len(transport.addForms))
+	}
+	form := transport.addForms[0]
+	for field, want := range map[string]string{
+		"category": "linux",
+		"savepath": "/downloads/linux",
+		"autoTMM":  "false",
+		"tags":     "iso,linux",
+		"stopped":  "true",
+	} {
+		if got := form.Get(field); got != want {
+			t.Errorf("add form %s = %q, want %q", field, got, want)
+		}
+	}
+}
+
 func TestAddSearchResultUsesLegacyEndpointBeforeModernVersion(t *testing.T) {
 	app, server, transport, id, source, plugin := setupSearchAddTest(t, "5.1.9", nil)
 
@@ -273,6 +317,17 @@ func TestAddSearchResultUsesLegacyEndpointBeforeModernVersion(t *testing.T) {
 	}
 	if server.LoginCalls != 1 {
 		t.Fatalf("login calls = %d, want one shared session", server.LoginCalls)
+	}
+}
+
+func TestAddSearchResultWithOptionsRejectsLegacyEndpoint(t *testing.T) {
+	app, _, transport, id, _, _ := setupSearchAddTest(t, "5.1.9", nil)
+	err := app.AddSearchResultWithOptions(id, AddTorrentOptions{Category: "linux"})
+	if err == nil || !strings.Contains(err.Error(), "require qBittorrent 5.2.0") {
+		t.Fatalf("AddSearchResultWithOptions error = %v, want legacy-version explanation", err)
+	}
+	if len(transport.legacyForms) != 0 || len(transport.addForms) != 0 {
+		t.Fatalf("legacy/add requests = %d/%d, want zero after unsupported options", len(transport.legacyForms), len(transport.addForms))
 	}
 }
 

@@ -86,7 +86,24 @@ func result(cmd *cobra.Command, err error) error {
 
 func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
+		if app, ok := batchAppFromContext(cmd.Context()); ok {
+			// A batch owns one authenticated App. Commands still get their own
+			// Cobra output streams, while the underlying session and version pair
+			// remain in memory for the whole batch.
+			previousStdout, previousStderr := app.Stdout, app.Stderr
+			previousUnits := app.DataUnits
+			app.Stdout, app.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			if opts.DataUnits != "" {
+				app.DataUnits = opts.DataUnits
+			}
+			defer func() {
+				app.Stdout, app.Stderr = previousStdout, previousStderr
+				app.DataUnits = previousUnits
+			}()
+			return result(cmd, run(app, args))
+		}
 		authOpts := *opts
+		authOpts.UseCompatibilityCache = true
 		if interactiveWorkspace(cmd) {
 			if setup, err := qbt.ReadSetup(authOpts); err == nil && !setup.Ready() {
 				finished, err := firstRunSetup(cmd, &authOpts, setup.Path)
@@ -137,12 +154,18 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		Args:          cobra.NoArgs,
 		Annotations:   map[string]string{stdinModeAnnotation: stdinInteractive},
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			units, err := parseDataUnits(unitsValue)
 			if err != nil {
 				return result(cmd, err)
 			}
 			opts.DataUnits = units
+			if _, ok := batchAppFromContext(cmd.Context()); ok {
+				return result(cmd, validateBatchCommand(cmd))
+			}
+			if cmd.Name() == "batch" && cmd.Flags().Changed("pass-stdin") && (len(args) == 0 || args[0] == "-") {
+				return result(cmd, codedErr(exitBadArgs, "--pass-stdin requires a batch file because both inputs use standard input"))
+			}
 			return result(cmd, resolvePassword(cmd, &opts, passStdin))
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -168,6 +191,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().StringVarP(&opts.Pass, "pass", "p", "", "qBittorrent password (visible in process arguments; prefer --pass-stdin or QBITCTL_PASSWORD)")
 	rootCmd.PersistentFlags().BoolVar(&passStdin, "pass-stdin", false, "Read the qBittorrent password from standard input")
 	rootCmd.PersistentFlags().StringVar(&unitsValue, "units", "", "Data-size output units: human or bytes; empty uses config (human fallback)")
+	rootCmd.PersistentFlags().DurationVar(&opts.HTTPTimeout, "http-timeout", 0, "Maximum time for each qBittorrent request (default: 15s; full lists: 60s; uploads: 2m)")
 	rootCmd.MarkFlagsMutuallyExclusive("pass", "pass-stdin")
 
 	rootCmd.AddCommand(
@@ -176,6 +200,7 @@ func newRootCmd() *cobra.Command {
 		newCompletionCmd(rootCmd),
 		newVersionCmd(),
 		newUpdateCmd(),
+		newBatchCmd(&opts),
 		newInfoCmd(&opts),
 		newTUICmd(&opts),
 		newSearchCmd(&opts),

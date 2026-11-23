@@ -74,6 +74,15 @@ func (m *model) paletteCommands() []dialogItem {
 		)
 	}
 
+	if connected {
+		label := "Pause automatic refresh"
+		if m.refreshPaused {
+			label = "Resume automatic refresh"
+		}
+		items = paletteGroup(items, "Session",
+			dialogItem{label: label, action: "toggle-refresh", description: "Control periodic queue, details, and server updates"},
+		)
+	}
 	items = paletteGroup(items, "Session",
 		dialogItem{label: "Keyboard shortcuts", action: "help", description: "Show help and key bindings", keys: "?"},
 		dialogItem{label: "Quit", action: "quit", description: "Close qbitctl", keys: "q"},

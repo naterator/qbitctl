@@ -24,6 +24,8 @@ func TestInvalidOutputAndFieldValuesFailBeforeAuth(t *testing.T) {
 		{name: "conflicting info formats leave stdin unread", args: []string{"info", "--json", "--server-json", "--pass-stdin"}, pass: true},
 		{name: "conflicting get formats", args: []string{"get", "name", fullHash, "-j", "-J"}},
 		{name: "no header without fields", args: []string{"list", "--no-header"}},
+		{name: "invalid list state", args: []string{"list", "--state", "not-a-state"}},
+		{name: "raw json cannot use local list state", args: []string{"list", "--server-json", "--state", "queued"}},
 		{name: "unknown get field", args: []string{"get", "nmae", fullHash}},
 		{name: "unknown set field", args: []string{"set", "nmae", "x", fullHash}},
 		{name: "invalid transfer limit", args: []string{"set", "up-limit", "12q", fullHash}},

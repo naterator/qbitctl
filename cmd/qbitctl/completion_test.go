@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,6 +98,23 @@ func TestCompletionWithoutSetupDoesNotLogin(t *testing.T) {
 	}
 }
 
+func TestCompletionAcceptsEnvironmentPasswordWithoutSavedSetup(t *testing.T) {
+	server := newQBTestServer(t)
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	server.Torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: hash}}
+	withQBServerClientFactory(t, server)
+	creds := server.creds()
+	t.Setenv("QBITCTL_PASSWORD", creds.Pass)
+
+	got, directive := completeTorrentHashes(&CLIOptions{URL: creds.URL, User: creds.User}, nil, "ubu")
+	if want := []string{hash + "\tUbuntu ISO"}; !equalStrings(got, want) || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("completion = %v, directive %d; want %v", got, directive, want)
+	}
+	if server.LoginCalls != 1 {
+		t.Fatalf("login calls = %d, want 1", server.LoginCalls)
+	}
+}
+
 func TestCompletionOverArityDoesNotLogin(t *testing.T) {
 	tests := []struct {
 		name string
@@ -154,6 +174,159 @@ func TestCompletionTimeoutReturnsErrorDirective(t *testing.T) {
 	}
 	if len(got) != 0 || directive&cobra.ShellCompDirectiveError == 0 {
 		t.Fatalf("timeout completion = %v, directive %d; want error", got, directive)
+	}
+}
+
+func TestCompletionFreshCacheAvoidsNetworkAndPasswordDecryption(t *testing.T) {
+	server := newQBTestServer(t)
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	server.Torrents = []TorrentInfo{{Name: "Ubuntu ISO", Hash: hash}}
+	withQBServerClientFactory(t, server)
+	writeCompletionConfig(t, server)
+
+	got, directive := runCompletion(t, []string{"__complete", "show", ""})
+	if !equalStrings(got, []string{hash + "\tUbuntu ISO"}) || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("initial completion = %v, directive %d", got, directive)
+	}
+	if server.LoginCalls != 1 || server.InfoCalls != 1 {
+		t.Fatalf("initial request counts = login %d/info %d, want 1/1", server.LoginCalls, server.InfoCalls)
+	}
+	cachePath, err := completionCachePath()
+	if err != nil {
+		t.Fatalf("completion cache path: %v", err)
+	}
+	cacheData, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read completion cache: %v", err)
+	}
+	if strings.Contains(string(cacheData), "password") || strings.Contains(string(cacheData), "SID") {
+		t.Fatalf("completion cache contains authentication data: %s", cacheData)
+	}
+
+	// A fresh cache only needs the non-secret setup scope. Clearing the key
+	// means a network path would fail, so a successful completion proves that
+	// it neither decrypts the saved password nor constructs an HTTP client.
+	t.Setenv("QBITCTL_MASTER_KEY", "")
+	factoryCalls := 0
+	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+		factoryCalls++
+		return &http.Client{Jar: jar, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("network should not be used for a fresh completion cache")
+		})}
+	})
+	t.Cleanup(restore)
+
+	got, directive = runCompletion(t, []string{"__complete", "show", "ubu"})
+	if !equalStrings(got, []string{hash + "\tUbuntu ISO"}) || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("fresh completion = %v, directive %d", got, directive)
+	}
+	if factoryCalls != 0 || server.LoginCalls != 1 || server.InfoCalls != 1 {
+		t.Fatalf("fresh request counts = factory %d/login %d/info %d, want 0/1/1", factoryCalls, server.LoginCalls, server.InfoCalls)
+	}
+}
+
+func TestCompletionCacheIsScopedByServerAndUser(t *testing.T) {
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Current server", Hash: "0123456789abcdef0123456789abcdef01234567"}}
+	withQBServerClientFactory(t, server)
+	writeCompletionConfig(t, server)
+
+	setup, err := qbt.ReadSetup(qbt.Options{})
+	if err != nil {
+		t.Fatalf("read setup: %v", err)
+	}
+	otherTorrents := []qbt.TorrentInfo{{Name: "Wrong scope", Hash: "89abcdef0123456789abcdef0123456789abcdef"}}
+	for _, other := range []qbt.Setup{
+		{URL: setup.URL, User: "different-user"},
+		{URL: "http://other-qbt.test", User: setup.User},
+	} {
+		if err := writeCompletionCache(other, otherTorrents, time.Now()); err != nil {
+			t.Fatalf("write scoped cache: %v", err)
+		}
+	}
+
+	got, directive := runCompletion(t, []string{"__complete", "show", ""})
+	want := []string{"0123456789abcdef0123456789abcdef01234567\tCurrent server"}
+	if !equalStrings(got, want) || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("scoped completion = %v, directive %d; want %v", got, directive, want)
+	}
+	if server.LoginCalls != 1 || server.InfoCalls != 1 {
+		t.Fatalf("scoped request counts = login %d/info %d, want 1/1", server.LoginCalls, server.InfoCalls)
+	}
+}
+
+func TestCompletionStaleCacheFallsBackWhenRefreshFails(t *testing.T) {
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	writeCompletionConfig(t, server)
+	setup, err := qbt.ReadSetup(qbt.Options{})
+	if err != nil {
+		t.Fatalf("read setup: %v", err)
+	}
+	hash := "0123456789abcdef0123456789abcdef01234567"
+	if err := writeCompletionCache(setup, []qbt.TorrentInfo{{Name: "Cached torrent", Hash: hash}}, time.Now().Add(-31*time.Second)); err != nil {
+		t.Fatalf("write stale cache: %v", err)
+	}
+	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+		return &http.Client{Jar: jar, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("offline")
+		})}
+	})
+	t.Cleanup(restore)
+
+	got, directive := runCompletion(t, []string{"__complete", "show", ""})
+	if !equalStrings(got, []string{hash + "\tCached torrent"}) || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("stale fallback = %v, directive %d", got, directive)
+	}
+}
+
+func TestCompletionExpiredCacheDoesNotHideRefreshFailure(t *testing.T) {
+	server := newQBTestServer(t)
+	withQBServerClientFactory(t, server)
+	writeCompletionConfig(t, server)
+	setup, err := qbt.ReadSetup(qbt.Options{})
+	if err != nil {
+		t.Fatalf("read setup: %v", err)
+	}
+	if err := writeCompletionCache(setup, []qbt.TorrentInfo{{Name: "Too old", Hash: "0123456789abcdef0123456789abcdef01234567"}}, time.Now().Add(-6*time.Minute)); err != nil {
+		t.Fatalf("write expired cache: %v", err)
+	}
+	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+		return &http.Client{Jar: jar, Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("offline")
+		})}
+	})
+	t.Cleanup(restore)
+
+	got, directive := runCompletion(t, []string{"__complete", "show", ""})
+	if len(got) != 0 || directive&cobra.ShellCompDirectiveError == 0 {
+		t.Fatalf("expired cache completion = %v, directive %d; want refresh error", got, directive)
+	}
+}
+
+func TestCompletionCacheReadFailureRefreshesNormally(t *testing.T) {
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Recovered server", Hash: "0123456789abcdef0123456789abcdef01234567"}}
+	withQBServerClientFactory(t, server)
+	writeCompletionConfig(t, server)
+	cachePath, err := completionCachePath()
+	if err != nil {
+		t.Fatalf("completion cache path: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o700); err != nil {
+		t.Fatalf("create cache directory: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("write malformed cache: %v", err)
+	}
+
+	got, directive := runCompletion(t, []string{"__complete", "show", ""})
+	want := []string{"0123456789abcdef0123456789abcdef01234567\tRecovered server"}
+	if !equalStrings(got, want) || directive != cobra.ShellCompDirectiveNoFileComp {
+		t.Fatalf("malformed-cache completion = %v, directive %d; want %v", got, directive, want)
+	}
+	if server.LoginCalls != 1 || server.InfoCalls != 1 {
+		t.Fatalf("malformed-cache request counts = login %d/info %d, want 1/1", server.LoginCalls, server.InfoCalls)
 	}
 }
 

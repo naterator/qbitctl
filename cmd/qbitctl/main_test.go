@@ -40,6 +40,7 @@ func withQBServerClientFactory(t *testing.T, s *qbTestServer) {
 	t.Helper()
 	configDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", configDir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
 	t.Chdir(configDir)
 	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
 		return &http.Client{
@@ -533,6 +534,99 @@ func TestTargetedCommandsAcceptPositionalHash(t *testing.T) {
 	})
 }
 
+func TestListFiltersUseTorrentInfoQuery(t *testing.T) {
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Linux ISO", Hash: "0123456789abcdef0123456789abcdef01234567"}}
+	withQBServerClientFactory(t, server)
+
+	var filter, category, tag string
+	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+		return &http.Client{
+			Jar: jar,
+			Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/api/v2/torrents/info" {
+					query := req.URL.Query()
+					filter, category, tag = query.Get("filter"), query.Get("category"), query.Get("tag")
+				}
+				return server.roundTrip(req), nil
+			}),
+		}
+	})
+	t.Cleanup(restore)
+
+	cmd := newRootCmd()
+	cmd.SetArgs([]string{
+		"--url", server.creds().URL,
+		"--user", "admin",
+		"--pass", "secret",
+		"list", "--server-json", "--state", "stopped", "--category", "linux", "--tag", "release",
+	})
+	if _, stderr := captureOutput(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("Execute returned error: %v", err)
+		}
+	}); strings.TrimSpace(stderr) != "" {
+		t.Fatalf("unexpected stderr: %q", stderr)
+	}
+	if filter != "stopped" || category != "linux" || tag != "release" {
+		t.Fatalf("torrent info filter = %q, category = %q, tag = %q", filter, category, tag)
+	}
+}
+
+func TestSetAndMoveResolveMultipleHashesWithOneLookupEach(t *testing.T) {
+	hash1 := "0123456789abcdef0123456789abcdef01234567"
+	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Alpha", Hash: hash1}, {Name: "Beta", Hash: hash2}}
+	withQBServerClientFactory(t, server)
+
+	setCmd := newRootCmd()
+	setCmd.SetArgs([]string{
+		"--url", server.creds().URL,
+		"--user", "admin",
+		"--pass", "secret",
+		"set", "tags", "release", hash1[:8], hash2[:8],
+	})
+	if _, stderr := captureOutput(t, func() {
+		if err := setCmd.Execute(); err != nil {
+			t.Fatalf("set Execute returned error: %v", err)
+		}
+	}); strings.TrimSpace(stderr) != "" {
+		t.Fatalf("unexpected set stderr: %q", stderr)
+	}
+	if server.InfoCalls != 1 {
+		t.Fatalf("set torrent lookups = %d, want 1", server.InfoCalls)
+	}
+	if got := server.Forms["/api/v2/torrents/setTags"][0].Get("hashes"); got != hash1+"|"+hash2 {
+		t.Fatalf("set hashes = %q, want %q", got, hash1+"|"+hash2)
+	}
+
+	moveCmd := newRootCmd()
+	moveCmd.SetArgs([]string{
+		"--url", server.creds().URL,
+		"--user", "admin",
+		"--pass", "secret",
+		"move", "/downloads/linux", hash1[:8], hash2[:8],
+	})
+	if _, stderr := captureOutput(t, func() {
+		if err := moveCmd.Execute(); err != nil {
+			t.Fatalf("move Execute returned error: %v", err)
+		}
+	}); strings.TrimSpace(stderr) != "" {
+		t.Fatalf("unexpected move stderr: %q", stderr)
+	}
+	if server.InfoCalls != 2 {
+		t.Fatalf("move torrent lookups = %d total, want 2", server.InfoCalls)
+	}
+	moveForms := server.Forms["/api/v2/torrents/setLocation"]
+	if len(moveForms) != 1 || moveForms[0].Get("hashes") != hash1+"|"+hash2 {
+		t.Fatalf("move hashes = %#v, want one joined request", moveForms)
+	}
+	if got := moveForms[0].Get("location"); got != "/downloads/linux" {
+		t.Fatalf("move location = %q, want /downloads/linux", got)
+	}
+}
+
 func TestBatchStartMultipleHashes(t *testing.T) {
 	hash1 := "0123456789abcdef0123456789abcdef01234567"
 	hash2 := "fedcba9876543210fedcba9876543210fedcba98"
@@ -674,7 +768,7 @@ func TestAuthenticatedOutputUsesCobraStreams(t *testing.T) {
 	}
 }
 
-func TestAddOptionsAreSentOnlyForDirectAdds(t *testing.T) {
+func TestAddSearchIDWithoutCacheFailsBeforeLogin(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	cmd := newRootCmd()

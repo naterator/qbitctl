@@ -50,6 +50,47 @@ func TestCacheSearchResultsRoundTripAndPermissions(t *testing.T) {
 	}
 }
 
+func TestCachedSearchHistoryPreservesQueryDisplayDataAndScope(t *testing.T) {
+	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
+	first := []SearchResult{{
+		Name: "Ubuntu Desktop", Size: 4 << 30, Seeders: 15, Leechers: 3,
+		Source: "example.org", downloadURL: "https://download.example/desktop.torrent", pluginName: "enabled",
+	}}
+	if err := app.CacheSearchResultsForQuery("ubuntu desktop", first); err != nil {
+		t.Fatal(err)
+	}
+	second := []SearchResult{{
+		Name: "Ubuntu Server", Size: 2 << 30, Seeders: 8, Leechers: 1,
+		Source: "example.net", downloadURL: "https://download.example/server.torrent", pluginName: "enabled",
+	}}
+	if err := app.CacheSearchResultsForQuery("ubuntu server", second); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := app.CachedSearchHistory()
+	if err != nil {
+		t.Fatalf("CachedSearchHistory: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("history length = %d, want two snapshots", len(history))
+	}
+	if history[0].Query != "ubuntu server" || len(history[0].Results) != 1 {
+		t.Fatalf("latest history = %#v, want latest query and one result", history[0])
+	}
+	result := history[0].Results[0]
+	if result.ID != second[0].ID || result.Name != second[0].Name || result.Size != second[0].Size || result.Seeders != second[0].Seeders || result.Leechers != second[0].Leechers || result.Source != second[0].Source {
+		t.Fatalf("latest cached result = %#v, want %#v", result, second[0])
+	}
+	if history[1].Query != "ubuntu desktop" || history[1].Results[0].ID != first[0].ID {
+		t.Fatalf("old history = %#v, want first snapshot retained", history[1])
+	}
+
+	other := &App{creds: Credentials{URL: app.creds.URL, User: "different-user"}}
+	if _, err := other.CachedSearchHistory(); !errors.Is(err, errSearchCacheUnavailable) {
+		t.Fatalf("other-user history error = %v, want unavailable", err)
+	}
+}
+
 func TestSearchCacheUsesSymlinkedCacheHome(t *testing.T) {
 	realBase := t.TempDir()
 	linkBase := filepath.Join(t.TempDir(), "cache-link")

@@ -89,6 +89,9 @@ func (m *model) tableHeight() int {
 	}
 	// The panel title and table headings each take one row.
 	rows := height - viewHeaderLines - viewFooterLines - 2
+	if m.page == queuePage && rows > 1 && m.queueTransfer != (queueTransferState{}) {
+		rows--
+	}
 	if m.page == searchPage {
 		// Search results always have a filter and sort summary. While the
 		// result filter editor is open that summary grows by one line for the
@@ -201,7 +204,21 @@ func (m *model) viewQueue(width, height int) []string {
 
 func (m *model) viewQueueList(width, height int) []string {
 	width = max(1, width)
-	rows := []string{m.viewQueueHeader(width)}
+	var stats []string
+	if value := m.queueTransfer.download; value != nil {
+		stats = append(stats, "↓ "+m.viewRate(*value))
+	}
+	if value := m.queueTransfer.upload; value != nil {
+		stats = append(stats, "↑ "+m.viewRate(*value))
+	}
+	if value := m.queueTransfer.free; value != nil {
+		stats = append(stats, m.viewSize(*value)+" free")
+	}
+	var rows []string
+	if len(stats) > 0 && height > 2 {
+		rows = append(rows, viewMutedStyle.Render(viewFit(strings.Join(stats, "  ·  "), width)))
+	}
+	rows = append(rows, m.viewQueueHeader(width))
 	if len(m.queue) == 0 {
 		if m.busy != "" {
 			message := "Waiting for queue data…"
@@ -215,7 +232,7 @@ func (m *model) viewQueueList(width, height int) []string {
 		return viewFitLines(rows, width, max(1, height))
 	}
 
-	rowHeight := max(1, height-1)
+	rowHeight := max(1, height-len(rows))
 	start := viewWindowStart(m.queueIndex, len(m.queue), rowHeight)
 	end := min(len(m.queue), start+rowHeight)
 	for i := start; i < end; i++ {
@@ -575,6 +592,8 @@ func (m *model) viewFooter(width int) []string {
 		status = viewErrorStyle.Render("● Error")
 	case m.notice != "":
 		status = viewAccentStyle.Render("● " + viewSafe(m.notice))
+	case m.refreshPaused:
+		status = viewMutedStyle.Render("● Refresh paused")
 	}
 	if m.notice != "" && (m.busy != "" || m.failed) {
 		status += viewMutedStyle.Render("  ·  " + viewSafe(m.notice))

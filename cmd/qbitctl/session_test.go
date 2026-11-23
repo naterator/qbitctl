@@ -20,7 +20,6 @@ import (
 )
 
 func TestCLISessionCleanup(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	const (
 		serverURL = "http://qbt.test"
 		version   = "/api/v2/app/version"
@@ -45,6 +44,8 @@ func TestCLISessionCleanup(t *testing.T) {
 		{name: "login rejected", rejectLogin: true, wantCode: exitLoginFail, wantErrMessage: "Login failed: login failed, http status: 401"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var paths []string

@@ -143,14 +143,11 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 			if searchID <= 0 || len(args) != 0 {
 				return codedErr(exitBadArgs, "Provide a positive --search-id without a torrent file or link")
 			}
-			if flags := cmd.Flags(); flags.Changed("category") || flags.Changed("save-path") || flags.Changed("stopped") {
-				return codedErr(exitBadArgs, "Add options require a torrent file, magnet link, or URL")
-			}
 			return nil
 		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			if searchID > 0 {
-				return app.AddSearchResult(searchID)
+				return app.AddSearchResultWithOptions(searchID, addOptions)
 			}
 			return app.AddTorrentWithOptions(args[0], addOptions)
 		}),
@@ -159,6 +156,7 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().Int64Var(&searchID, "search-id", 0, "Add this ID from the local search history")
 	cmd.Flags().StringVar(&addOptions.Category, "category", "", "Assign the torrent to this category")
 	cmd.Flags().StringVar(&addOptions.SavePath, "save-path", "", "Destination directory on the qBittorrent host")
+	cmd.Flags().StringVar(&addOptions.Tags, "tags", "", "Assign comma-separated tags to the torrent")
 	cmd.Flags().BoolVar(&addOptions.Stopped, "stopped", false, "Add the torrent in the stopped state")
 	return cmd
 }
@@ -169,6 +167,7 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	tmpl := ""
 	fieldsValue := ""
 	noHeader := false
+	state, category, tag := "", "", ""
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"l", "li", "ls"},
@@ -178,24 +177,38 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 			if err := cobra.NoArgs(cmd, args); err != nil {
 				return err
 			}
-			return validateOutputArgs(cmd, tmpl, fieldsValue, noHeader)
+			if err := validateOutputArgs(cmd, tmpl, fieldsValue, noHeader); err != nil {
+				return err
+			}
+			filter, err := listTorrentFilter(state, category, tag)
+			if err != nil {
+				return codedErr(exitBadArgs, err.Error())
+			}
+			if serverJSON && (filter.State == "queued" || filter.State == "checking") {
+				return codedErr(exitBadArgs, "--server-json cannot be combined with --state queued or --state checking")
+			}
+			return nil
 		},
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
+			filter, err := listTorrentFilter(state, category, tag)
+			if err != nil {
+				return codedErr(exitBadArgs, err.Error())
+			}
 			switch {
 			case serverJSON:
-				return app.ShowAllTorrentsInfoJSON()
+				return app.ShowAllTorrentsInfoJSONWithFilter(filter)
 			case asJSON:
-				return app.ShowAllTorrentsInfoAsJSON()
+				return app.ShowAllTorrentsInfoAsJSONWithFilter(filter)
 			case tmpl != "":
-				return app.ShowAllTorrentsTemplate(tmpl)
+				return app.ShowAllTorrentsTemplateWithFilter(tmpl, filter)
 			case fieldsValue != "":
 				fields, err := qbt.ParseSelectableTorrentFields(fieldsValue)
 				if err != nil {
 					return codedErr(exitBadArgs, err.Error())
 				}
-				return app.ShowAllTorrentsFields(fields, !noHeader)
+				return app.ShowAllTorrentsFieldsWithFilter(fields, !noHeader, filter)
 			}
-			return app.ShowAllTorrentsInfo()
+			return app.ShowAllTorrentsInfoWithFilter(filter)
 		}),
 	}
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
@@ -203,6 +216,9 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
 	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
 	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
+	cmd.Flags().StringVar(&state, "state", "", "Filter by torrent state")
+	cmd.Flags().StringVar(&category, "category", "", "Filter by category")
+	cmd.Flags().StringVar(&tag, "tag", "", "Filter by tag")
 	cmd.MarkFlagsMutuallyExclusive("server-json", "json", "template", "fields")
 	return cmd
 }
@@ -212,6 +228,7 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 	searchTimeout := 30 * time.Second
 	jsonOutput := false
 	listPlugins := false
+	recent := false
 	sortValue := "original"
 	minSeeders := int64(0)
 	minSize, maxSize, filterValue := "", "", ""
@@ -223,6 +240,30 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 		Short:   "Search torrents or list qBittorrent search plugins",
 		GroupID: "view",
 		Args: func(cmd *cobra.Command, args []string) error {
+			if recent {
+				if len(args) != 0 {
+					return codedErr(exitBadArgs, "--recent cannot be combined with a search pattern")
+				}
+				if listPlugins {
+					return codedErr(exitBadArgs, "--recent cannot be combined with --list-plugins")
+				}
+				if cmd.Flags().Changed("plugin") || cmd.Flags().Changed("timeout") {
+					return codedErr(exitBadArgs, "--recent cannot be combined with --plugin or --timeout")
+				}
+				var err error
+				searchOptions, err = parseSearchCommandOptions(
+					sortValue,
+					minSeeders,
+					cmd.Flags().Changed("min-seeders"),
+					minSize,
+					cmd.Flags().Changed("min-size"),
+					maxSize,
+					cmd.Flags().Changed("max-size"),
+					filterValue,
+					limit,
+				)
+				return err
+			}
 			if listPlugins {
 				if len(args) != 0 {
 					return codedErr(exitBadArgs, "--list-plugins cannot be combined with a search pattern")
@@ -263,37 +304,43 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 			}
 			return nil
 		},
-		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			if listPlugins {
-				plugins, err := app.SearchPlugins()
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if recent {
+				return result(cmd, renderRecentSearch(cmd, opts, jsonOutput, searchOptions))
+			}
+			return authenticatedRun(opts, func(app *App, args []string) error {
+				if listPlugins {
+					plugins, err := app.SearchPlugins()
+					if err != nil {
+						return err
+					}
+					return renderSearchPlugins(app.Stdout, plugins, jsonOutput)
+				}
+				resolvedPlugins, err := resolveSearchPluginsForCommand(cmd, app, plugin)
 				if err != nil {
 					return err
 				}
-				return renderSearchPlugins(app.Stdout, plugins, jsonOutput)
-			}
-			resolvedPlugins, err := resolveSearchPluginsForCommand(cmd, app, plugin)
-			if err != nil {
-				return err
-			}
-			results, err := app.Search(strings.Join(args, " "), resolvedPlugins, searchTimeout)
-			if err != nil {
-				return err
-			}
-			if err := app.CacheSearchResults(results); err != nil {
-				fmt.Fprintf(app.Stderr, "[WARN] %v\n", err)
-			}
-			results = searchresults.Apply(results, searchOptions.filter, searchOptions.sort, searchOptions.limit)
-			if jsonOutput {
-				if err := json.NewEncoder(app.Stdout).Encode(results); err != nil {
-					return codedErr(exitFetchFail, fmt.Sprintf("failed to render search results: %v", err))
+				results, err := app.Search(strings.Join(args, " "), resolvedPlugins, searchTimeout)
+				if err != nil {
+					return err
 				}
-				return nil
-			}
-			return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout), app.DataUnits)
-		}),
+				if err := app.CacheSearchResultsForQuery(strings.Join(args, " "), results); err != nil {
+					fmt.Fprintf(app.Stderr, "[WARN] %v\n", err)
+				}
+				results = searchresults.Apply(results, searchOptions.filter, searchOptions.sort, searchOptions.limit)
+				if jsonOutput {
+					if err := json.NewEncoder(app.Stdout).Encode(results); err != nil {
+						return codedErr(exitFetchFail, fmt.Sprintf("failed to render search results: %v", err))
+					}
+					return nil
+				}
+				return renderSearchTable(app.Stdout, results, tuiTerminal(app.Stdout), searchTerminalWidth(app.Stdout), app.DataUnits)
+			})(cmd, args)
+		},
 	}
 	cmd.Flags().StringVar(&plugin, "plugin", plugin, "Search plugin ID or full name; omit to use the saved default; use | to combine, or enabled/all")
 	cmd.Flags().BoolVar(&listPlugins, "list-plugins", false, "List available search plugins (use --json for JSON)")
+	cmd.Flags().BoolVar(&recent, "recent", false, "Show the most recent cached search without contacting qBittorrent")
 	cmd.Flags().DurationVar(&searchTimeout, "timeout", searchTimeout, "Time to wait before returning available results, for example 30s or 2m")
 	cmd.Flags().BoolVarP(&jsonOutput, "json", "j", false, "Output search results or plugin listing as JSON")
 	cmd.Flags().StringVar(&sortValue, "sort", sortValue, "Sort results: original, seeders-desc, seeders-asc, size-desc, or size-asc")
@@ -303,6 +350,41 @@ func newSearchCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().StringVar(&filterValue, "filter", filterValue, "Require whitespace-separated terms in the name, source, or ID")
 	cmd.Flags().IntVar(&limit, "limit", limit, "Limit displayed results; 0 means no limit")
 	return cmd
+}
+
+func renderRecentSearch(cmd *cobra.Command, opts *CLIOptions, jsonOutput bool, searchOptions searchCommandOptions) error {
+	history, err := qbt.ReadCachedSearchHistory(*opts)
+	if err != nil {
+		return err
+	}
+	if len(history) == 0 {
+		return fmt.Errorf("no cached search results available")
+	}
+	latest := history[0]
+	results := make([]qbt.SearchResult, 0, len(latest.Results))
+	for _, item := range latest.Results {
+		results = append(results, qbt.SearchResult{
+			ID:       item.ID,
+			Name:     item.Name,
+			Size:     item.Size,
+			Seeders:  item.Seeders,
+			Leechers: item.Leechers,
+			Source:   item.Source,
+		})
+	}
+	results = searchresults.Apply(results, searchOptions.filter, searchOptions.sort, searchOptions.limit)
+	if jsonOutput {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(results)
+	}
+	units := opts.DataUnits
+	if units == "" {
+		if setup, setupErr := qbt.ReadSetup(*opts); setupErr == nil {
+			if configured, unitsErr := qbt.ReadDataUnits(setup.Path); unitsErr == nil {
+				units = configured
+			}
+		}
+	}
+	return renderSearchTable(cmd.OutOrStdout(), results, tuiTerminal(cmd.OutOrStdout()), searchTerminalWidth(cmd.OutOrStdout()), units)
 }
 
 func sanitizeSearchText(value string) string {
@@ -393,7 +475,7 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 
 func newSetCmd(opts *CLIOptions) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "set <field> <value> <hash>",
+		Use:     "set <field> <value> <hash...>",
 		Aliases: []string{"se"},
 		Short:   "Update one torrent property",
 		Long: "Update one torrent property.\n\nAvailable fields:\n" +
@@ -407,11 +489,11 @@ func newSetCmd(opts *CLIOptions) *cobra.Command {
 		Args:              validateSetArgs,
 		ValidArgsFunction: completeSetArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			hash, err := app.ResolveHash(args[2])
+			hashes, err := app.ResolveHashes(args[2:])
 			if err != nil {
 				return err
 			}
-			return app.SetField(hash, qbt.CanonicalSetField(args[0]), args[1])
+			return app.SetField(strings.Join(hashes, "|"), qbt.CanonicalSetField(args[0]), args[1])
 		}),
 	}
 	return cmd
@@ -437,18 +519,18 @@ func newHashCmd(opts *CLIOptions, use, short string, aliases []string, fn func(*
 
 func newMoveCmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:               "move <path> <hash>",
+		Use:               "move <path> <hash...>",
 		Aliases:           []string{"m", "mo"},
 		Short:             "Move torrent data on the server",
 		GroupID:           "change",
-		Args:              cobra.ExactArgs(2),
+		Args:              cobra.MinimumNArgs(2),
 		ValidArgsFunction: completeMoveArgs(opts),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			hash, err := app.ResolveHash(args[1])
+			hashes, err := app.ResolveHashes(args[1:])
 			if err != nil {
 				return err
 			}
-			return app.MoveTorrent(hash, args[0])
+			return app.MoveTorrent(strings.Join(hashes, "|"), args[0])
 		}),
 	}
 }

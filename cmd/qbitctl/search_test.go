@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/naterator/qbitctl/internal/qbtest"
 	qbt "github.com/naterator/qbitctl/pkg/client"
@@ -55,6 +56,62 @@ func TestSearchCommandDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestSearchRecentReadsCacheWithoutAuthentication(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	path, err := qbt.SearchResultsCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache := map[string]any{
+		"version": 2,
+		"searches": []any{map[string]any{
+			"url":      "http://qbt.test/",
+			"user":     "admin",
+			"saved_at": time.Now().Unix(),
+			"query":    "ubuntu",
+			"results": []any{map[string]any{
+				"id": 123456789012, "url": "https://download.example/ubuntu.torrent", "plugin": "enabled",
+				"name": "Ubuntu Desktop", "size": 4294967296, "seeders": 15, "leechers": 3, "source": "example.org",
+			}},
+		}},
+	}
+	data, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests int
+	restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
+		return &http.Client{Jar: jar, Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return nil, errors.New("search --recent unexpectedly contacted qBittorrent")
+		})}
+	})
+	t.Cleanup(restore)
+	root := newRootCmd()
+	root.SetArgs([]string{"--url", "http://qbt.test", "--user", "admin", "search", "--recent", "--json"})
+	stdout, stderr := captureOutput(t, func() { err = root.ExecuteContext(t.Context()) })
+	if err != nil || stderr != "" {
+		t.Fatalf("search --recent returned %v, stdout %q, stderr %q", err, stdout, stderr)
+	}
+	var rows []qbt.SearchResult
+	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
+		t.Fatalf("search --recent JSON = %q: %v", stdout, err)
+	}
+	if len(rows) != 1 || rows[0].ID != 123456789012 || rows[0].Name != "Ubuntu Desktop" || rows[0].Size != 4294967296 {
+		t.Fatalf("search --recent rows = %#v", rows)
+	}
+	if requests != 0 {
+		t.Fatalf("search --recent made %d qBittorrent requests", requests)
+	}
+}
+
 func TestSearchListPlugins(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -74,6 +131,8 @@ func TestSearchListPlugins(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
 			var requests []string
 			restore := qbt.SetHTTPClientFactoryForTesting(func(jar http.CookieJar) *http.Client {
 				return &http.Client{Jar: jar, Transport: qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -265,8 +324,6 @@ func TestSearchListPluginsRejectsPatternAndSearchFlagsBeforeAuth(t *testing.T) {
 }
 
 func TestSearchCommandLifecycle(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	const (
 		startPath   = "/api/v2/search/start"
 		statusPath  = "/api/v2/search/status"
@@ -349,6 +406,8 @@ func TestSearchCommandLifecycle(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("XDG_CACHE_HOME", t.TempDir())
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var requests []string
@@ -587,13 +646,21 @@ func TestSearchResultCanBeAddedByID(t *testing.T) {
 	}
 
 	addRoot := newRootCmd()
-	addRoot.SetArgs([]string{"--url", "http://qbt.test", "--user", "admin", "--pass", "secret", "add", "--search-id", searchID})
+	addRoot.SetArgs([]string{"--url", "http://qbt.test", "--user", "admin", "--pass", "secret", "add", "--search-id", searchID, "--category", "linux", "--save-path", "/downloads/linux", "--tags", "iso,linux", "--stopped"})
 	var addErr error
 	addStdout, addStderr := captureOutput(t, func() { addErr = addRoot.ExecuteContext(t.Context()) })
 	if addErr != nil || addStdout != "" || addStderr != "" {
 		t.Fatalf("add by search ID returned %v, stdout %q, stderr %q", addErr, addStdout, addStderr)
 	}
-	if !reflect.DeepEqual(downloadForm, url.Values{"urls": {"https://jackett.example/api?apikey=mock-key"}, "downloader": {"jackett"}}) {
+	if !reflect.DeepEqual(downloadForm, url.Values{
+		"urls":       {"https://jackett.example/api?apikey=mock-key"},
+		"downloader": {"jackett"},
+		"category":   {"linux"},
+		"savepath":   {"/downloads/linux"},
+		"autoTMM":    {"false"},
+		"tags":       {"iso,linux"},
+		"stopped":    {"true"},
+	}) {
 		t.Fatalf("download form = %v, want cached result URL and plugin", downloadForm)
 	}
 	metadataIndex := slices.Index(requests, metadataPath)

@@ -21,7 +21,10 @@ const (
 
 var httpClientFactory = func(jar http.CookieJar) *http.Client {
 	return &http.Client{
-		Timeout: 15 * time.Second,
+		// Per-request contexts below provide operation-specific budgets. A
+		// whole-client timeout would cap large queue reads and uploads before
+		// those contexts have a chance to take effect.
+		Timeout: 0,
 		Jar:     jar,
 	}
 }
@@ -35,11 +38,29 @@ func SetHTTPClientFactoryForTesting(factory func(http.CookieJar) *http.Client) f
 }
 
 func newClient(creds Credentials, stderr io.Writer) *Client {
+	client, err := newClientWithTimeout(creds, stderr, 0)
+	if err != nil {
+		// The zero-value default is constant and validated here, so this can
+		// only indicate an internal programming error. Keep the historic helper
+		// signature for package tests and callers.
+		panic(err)
+	}
+	return client
+}
+
+func newClientWithTimeout(creds Credentials, stderr io.Writer, override time.Duration) (*Client, error) {
+	timeouts, err := httpTimeoutsFor(override)
+	if err != nil {
+		return nil, err
+	}
 	jar, _ := cookiejar.New(nil)
 	httpClient := httpClientFactory(jar)
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
+	// A testing factory may return a client with the old whole-request cap.
+	// Remove only that cap while preserving its transport and redirect policy.
+	httpClient.Timeout = 0
 	// Test transports and callers may return a client without carrying over
 	// the jar supplied to the factory.  A client without a jar cannot retain
 	// the server-issued session cookie between requests.
@@ -47,10 +68,11 @@ func newClient(creds Credentials, stderr io.Writer) *Client {
 		httpClient.Jar = jar
 	}
 	return &Client{
-		creds:      creds,
-		httpClient: httpClient,
-		stderr:     stderr,
-	}
+		creds:        creds,
+		httpClient:   httpClient,
+		stderr:       stderr,
+		httpTimeouts: timeouts,
+	}, nil
 }
 
 func (c *Client) endpointURL(endpoint string) string {
@@ -58,6 +80,8 @@ func (c *Client) endpointURL(endpoint string) string {
 }
 
 func (c *Client) doRawRequestContext(ctx context.Context, method, requestURL string, params url.Values) ([]byte, *http.Response, error) {
+	ctx, cancel := contextWithHTTPTimeout(ctx, c.httpTimeouts.requestTimeout(requestURL, params))
+	defer cancel()
 	return c.doRawRequestContextWithClient(ctx, method, requestURL, params, c.httpClient)
 }
 
@@ -67,6 +91,8 @@ func (c *Client) doRawRequestContextWithoutCookies(ctx context.Context, method, 
 	}
 	client := *c.httpClient
 	client.Jar = nil
+	ctx, cancel := contextWithHTTPTimeout(ctx, c.httpTimeouts.requestTimeout(requestURL, params))
+	defer cancel()
 	return c.doRawRequestContextWithClient(ctx, method, requestURL, params, &client)
 }
 
@@ -102,6 +128,8 @@ func (c *Client) doRawRequestContextWithClient(ctx context.Context, method, requ
 }
 
 func (c *Client) doBodyRequestContext(ctx context.Context, method, endpoint string, body []byte, contentType string) ([]byte, *http.Response, error) {
+	ctx, cancel := contextWithHTTPTimeout(ctx, c.httpTimeouts.upload)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, c.endpointURL(endpoint), bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, err
@@ -143,6 +171,8 @@ func setOriginHeaders(req *http.Request) {
 }
 
 func (c *Client) loginContext(ctx context.Context) error {
+	ctx, cancel := contextWithHTTPTimeout(ctx, c.httpTimeouts.login)
+	defer cancel()
 	params := url.Values{
 		"username": {c.creds.User},
 		"password": {c.creds.Pass},
@@ -349,7 +379,7 @@ func (c *Client) requestWithStatusContext(ctx context.Context, method, endpoint 
 	}
 
 	if status := resp.StatusCode; status < 200 || status >= 300 {
-		return nil, status, newHTTPError(resp, body)
+		return nil, status, c.requestError(resp, body)
 	}
 
 	return body, resp.StatusCode, nil
@@ -379,8 +409,18 @@ func (c *Client) requestWithBodyContext(ctx context.Context, send func() ([]byte
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, newHTTPError(resp, payload)
+		return nil, c.requestError(resp, payload)
 	}
 
 	return payload, nil
+}
+
+func (c *Client) requestError(resp *http.Response, body []byte) error {
+	if c.invalidateCachedCompatibility != nil {
+		switch resp.StatusCode {
+		case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+			c.invalidateCachedCompatibility()
+		}
+	}
+	return newHTTPError(resp, body)
 }

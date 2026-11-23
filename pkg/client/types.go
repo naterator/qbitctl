@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"sync/atomic"
+	"time"
 )
 
 var Version = "dev"
@@ -78,9 +79,15 @@ type TransferInfo struct {
 }
 
 type Client struct {
-	creds      Credentials
-	httpClient *http.Client
-	stderr     io.Writer
+	creds                         Credentials
+	httpClient                    *http.Client
+	stderr                        io.Writer
+	invalidateCachedCompatibility func()
+
+	// httpTimeouts contains per-operation request budgets. They are layered on
+	// the caller's context, so an existing cancellation or earlier deadline
+	// always wins.
+	httpTimeouts
 
 	// session is replaced atomically after login. The snapshot is immutable so
 	// cleanup can still use the last known session while a re-login is in
@@ -111,6 +118,14 @@ type App struct {
 	// DataUnits controls byte and transfer-rate formatting. The zero value is
 	// intentionally equivalent to DataUnitsHuman.
 	DataUnits DataUnits
+
+	// appVersion and apiVersion are populated by CheckCompatibility. Keeping
+	// the validated pair on the authenticated app lets the TUI and commands
+	// reuse the same values without repeating version probes.
+	appVersion                string
+	apiVersion                string
+	compatibilitySource       compatibilitySource
+	compatibilityCacheEnabled bool
 }
 
 // ConfigPath returns the config file selected for this authenticated app.
@@ -132,6 +147,14 @@ type Options struct {
 	// DataUnits is an explicit command-line override. Empty means use the
 	// optional config preference, or DataUnitsHuman when it is absent/invalid.
 	DataUnits DataUnits
+	// HTTPTimeout bounds an individual qBittorrent API request. Zero uses the
+	// operation-specific defaults. The login and logout operations retain their
+	// shorter safety deadlines.
+	HTTPTimeout time.Duration
+	// UseCompatibilityCache enables the bounded metadata-only version cache.
+	// Library callers leave this false when every compatibility check must be a
+	// fresh server probe; the CLI enables it for normal authenticated commands.
+	UseCompatibilityCache bool
 }
 
 func (a *App) errf(format string, args ...any) {
@@ -155,4 +178,13 @@ func (a *App) context() context.Context {
 		return a.Ctx
 	}
 	return context.Background()
+}
+
+// ConnectionOptions returns non-secret connection metadata suitable for local
+// cache lookups. It deliberately omits the password.
+func (a *App) ConnectionOptions() Options {
+	if a == nil {
+		return Options{}
+	}
+	return Options{ConfigPath: a.configPath, URL: a.creds.URL, User: a.creds.User, DataUnits: a.DataUnits}
 }

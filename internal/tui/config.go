@@ -145,6 +145,7 @@ func (m *model) resetRemoteState() {
 	}
 	m.searchPluginGeneration++
 	m.allTorrents = nil
+	m.queueTransfer = queueTransferState{}
 	m.queue = nil
 	m.allResults = nil
 	m.results = nil

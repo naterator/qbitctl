@@ -44,7 +44,11 @@ var detailedTorrentFields = []fieldSpec{
 }
 
 func (a *App) ShowAllTorrentsInfoJSON() error {
-	_, body, err := a.FetchAllTorrents()
+	return a.ShowAllTorrentsInfoJSONWithFilter(TorrentListFilter{})
+}
+
+func (a *App) ShowAllTorrentsInfoJSONWithFilter(filter TorrentListFilter) error {
+	_, body, err := a.FetchTorrentsContext(a.context(), filter)
 	if err != nil {
 		return err
 	}
@@ -62,7 +66,11 @@ func (a *App) ShowSingleTorrentInfoJSON(hash string) error {
 }
 
 func (a *App) ShowAllTorrentsFields(fields []string, header bool) error {
-	torrents, _, err := a.FetchAllTorrents()
+	return a.ShowAllTorrentsFieldsWithFilter(fields, header, TorrentListFilter{})
+}
+
+func (a *App) ShowAllTorrentsFieldsWithFilter(fields []string, header bool, filter TorrentListFilter) error {
+	torrents, _, err := a.FetchTorrentsContext(a.context(), filter)
 	if err != nil {
 		return err
 	}
@@ -84,7 +92,11 @@ func (a *App) ShowSingleTorrentFields(hash string, fields []string, header bool)
 }
 
 func (a *App) ShowAllTorrentsTemplate(tmpl string) error {
-	torrents, _, err := a.FetchAllTorrents()
+	return a.ShowAllTorrentsTemplateWithFilter(tmpl, TorrentListFilter{})
+}
+
+func (a *App) ShowAllTorrentsTemplateWithFilter(tmpl string, filter TorrentListFilter) error {
+	torrents, _, err := a.FetchTorrentsContext(a.context(), filter)
 	if err != nil {
 		return err
 	}
@@ -194,7 +206,14 @@ func (a *App) TorrentDisplayFields(hash string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return rowsToMap(torrentDisplayBlurbRows(torrent, detailedTorrentFields, a.DataUnits)), nil
+	return a.TorrentDisplayFieldsFromInfo(torrent), nil
+}
+
+// TorrentDisplayFieldsFromInfo renders the same human-facing detail fields as
+// TorrentDisplayFields without making an HTTP request. TUI callers can use a
+// torrent already returned by sync/maindata to avoid refetching the row.
+func (a *App) TorrentDisplayFieldsFromInfo(torrent TorrentInfo) map[string]string {
+	return rowsToMap(torrentDisplayBlurbRows(torrent, detailedTorrentFields, a.DataUnits))
 }
 
 func (a *App) ShowSingleTorrentInfoAsJSON(hash string) error {
@@ -209,7 +228,11 @@ func (a *App) ShowSingleTorrentInfoAsJSON(hash string) error {
 }
 
 func (a *App) ShowAllTorrentsInfo() error {
-	torrents, _, err := a.FetchAllTorrents()
+	return a.ShowAllTorrentsInfoWithFilter(TorrentListFilter{})
+}
+
+func (a *App) ShowAllTorrentsInfoWithFilter(filter TorrentListFilter) error {
+	torrents, _, err := a.FetchTorrentsContext(a.context(), filter)
 	if err != nil {
 		return err
 	}
@@ -229,7 +252,11 @@ func (a *App) ShowAllTorrentsInfo() error {
 }
 
 func (a *App) ShowAllTorrentsInfoAsJSON() error {
-	torrents, _, err := a.FetchAllTorrents()
+	return a.ShowAllTorrentsInfoAsJSONWithFilter(TorrentListFilter{})
+}
+
+func (a *App) ShowAllTorrentsInfoAsJSONWithFilter(filter TorrentListFilter) error {
+	torrents, _, err := a.FetchTorrentsContext(a.context(), filter)
 	if err != nil {
 		return err
 	}

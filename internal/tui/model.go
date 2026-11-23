@@ -67,6 +67,8 @@ type searchCatalogService interface {
 type workDone struct {
 	kind                      workKind
 	queue                     []client.TorrentInfo
+	queueChanged              bool
+	queueTransfer             queueTransferState
 	results                   []client.SearchResult
 	rows                      []detailRow
 	title                     string
@@ -114,6 +116,9 @@ type model struct {
 	page                            page
 	width, height                   int
 	allTorrents                     []client.TorrentInfo
+	queueActive                     bool
+	queueTransfer                   queueTransferState
+	refreshPaused                   bool
 	queue                           []client.TorrentInfo
 	allResults                      []client.SearchResult
 	results                         []client.SearchResult
@@ -168,7 +173,7 @@ func newModel(ctx context.Context, backend service) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	commands := []tea.Cmd{nextTick(), m.noticeTimer()}
+	commands := []tea.Cmd{m.nextTick(), m.noticeTimer()}
 	if m.connect != nil {
 		opts := *m.connect
 		setup := m.setup
@@ -183,8 +188,26 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(commands...)
 }
 
-func nextTick() tea.Cmd {
-	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return refreshTick{} })
+const (
+	activeRefreshInterval = 5 * time.Second
+	idleRefreshInterval   = 15 * time.Second
+)
+
+func (m *model) refreshInterval() time.Duration {
+	// Keep the first refresh short so page entry gets a responsive initial
+	// snapshot. Once a queue is established, quiet queues can use a less
+	// chatty cadence while active transfers retain the five-second updates.
+	if m.page == serverPage || m.allTorrents == nil {
+		return activeRefreshInterval
+	}
+	if m.queueActive {
+		return activeRefreshInterval
+	}
+	return idleRefreshInterval
+}
+
+func (m *model) nextTick() tea.Cmd {
+	return tea.Tick(m.refreshInterval(), func(time.Time) tea.Msg { return refreshTick{} })
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -230,15 +253,15 @@ func (m *model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case refreshTick:
-		if m.busy == "" && !m.quitting {
+		if !m.refreshPaused && m.busy == "" && !m.quitting {
 			if m.dialog != nil {
-				return tea.Batch(m.refreshTorrentDetails(), nextTick())
+				return tea.Batch(m.refreshTorrentDetails(), m.nextTick())
 			}
 			if m.page != searchPage && m.page != configPage {
-				return tea.Batch(m.refresh(), nextTick())
+				return tea.Batch(m.refresh(), m.nextTick())
 			}
 		}
-		return nextTick()
+		return m.nextTick()
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			if !m.quitting && m.busy != "" && m.work == searchWork {
@@ -508,7 +531,10 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	}
 	switch done.kind {
 	case queueWork:
-		m.replaceQueue(done.queue)
+		m.queueTransfer = done.queueTransfer
+		if done.queueChanged || m.allTorrents == nil {
+			m.replaceQueue(done.queue)
+		}
 	case searchWork:
 		m.applySearchPluginResult(done)
 		m.replaceSearchResults(done.results)
@@ -978,7 +1004,20 @@ func (m *model) targetHashes() []string {
 }
 
 func (m *model) replaceQueue(torrents []client.TorrentInfo) {
+	if torrents == nil {
+		// A successful empty snapshot is still an established, idle queue. Keep
+		// it distinct from the nil initial state so adaptive refresh can slow
+		// down after the first response.
+		torrents = []client.TorrentInfo{}
+	}
 	m.allTorrents = torrents
+	m.queueActive = false
+	for _, torrent := range torrents {
+		if torrent.DLSpeed > 0 || torrent.UpSpeed > 0 {
+			m.queueActive = true
+			break
+		}
+	}
 	m.rebuildQueue()
 	visible := make(map[string]bool, len(m.queue))
 	for _, torrent := range m.queue {

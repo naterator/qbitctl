@@ -351,6 +351,13 @@ func (m *model) openAction(action string) tea.Cmd {
 	case "refresh":
 		m.dialog = nil
 		return m.refresh()
+	case "toggle-refresh":
+		m.dialog = nil
+		m.refreshPaused = !m.refreshPaused
+		if !m.refreshPaused && (m.page == queuePage || m.page == serverPage) {
+			return m.refresh()
+		}
+		return nil
 	case "toggle-mark":
 		if m.page == queuePage {
 			m.toggleMark()
@@ -624,12 +631,9 @@ func (m *model) openAddDialog() {
 	d := &dialog{
 		kind:  dialogAdd,
 		title: "Add torrent",
-		fields: []dialogField{
+		fields: torrentAddFields(
 			newDialogField("Source", "", "magnet, URL, or .torrent path", "Local torrent files are uploaded to qBittorrent"),
-			newDialogField("Category", "", "optional category", "Category assigned by qBittorrent"),
-			newDialogField("Destination", "", "optional qBittorrent path", "Save path on the qBittorrent host"),
-			newDialogField("Stopped", "no", "yes or no", "Add the torrent stopped instead of starting it"),
-		},
+		),
 	}
 	m.dialog = d
 	d.focusField(0)
@@ -643,12 +647,22 @@ func (m *model) openAddResultDialog() {
 	d := &dialog{
 		kind:  dialogAddResult,
 		title: "Add search result",
-		fields: []dialogField{
+		fields: torrentAddFields(
 			newDialogField("Result ID", value, "numeric ID from the search page", "Use a recent result ID from this server and user"),
-		},
+		),
 	}
 	m.dialog = d
 	d.focusField(0)
+}
+
+func torrentAddFields(source dialogField) []dialogField {
+	return []dialogField{
+		source,
+		newDialogField("Category", "", "optional category", "Category assigned by qBittorrent"),
+		newDialogField("Destination", "", "optional qBittorrent path", "Save path on the qBittorrent host"),
+		newDialogField("Stopped", "no", "yes or no", "Add the torrent stopped instead of starting it"),
+		newDialogField("Tags", "", "optional comma-separated tags", "Tags assigned by qBittorrent"),
+	}
 }
 
 func (m *model) openEditDialog() {
@@ -1115,13 +1129,23 @@ func (m *model) submitDialog() tea.Cmd {
 		m.dialog = nil
 		return nil
 
-	case dialogAdd:
+	case dialogAdd, dialogAddResult:
 		if m.busy != "" {
 			d.status = "Finish the current request first"
 			return nil
 		}
 		source := strings.TrimSpace(d.value(0))
-		if source == "" {
+		request := actionRequest{kind: "add", value: source}
+		label := "add"
+		if d.kind == dialogAddResult {
+			id, err := strconv.ParseInt(source, 10, 64)
+			if err != nil || id <= 0 {
+				d.status = "Enter a positive numeric result ID"
+				return nil
+			}
+			request = actionRequest{kind: "add-result", id: id}
+			label = "add result"
+		} else if source == "" {
 			d.status = "A magnet, URL, or torrent file path is required"
 			return nil
 		}
@@ -1130,29 +1154,14 @@ func (m *model) submitDialog() tea.Cmd {
 			d.status = "Stopped must be yes or no"
 			return nil
 		}
-		m.dialog = nil
-		return m.launchAction("add", actionRequest{
-			kind:  "add",
-			value: source,
-			addOptions: client.AddTorrentOptions{
-				Category: strings.TrimSpace(d.value(1)),
-				SavePath: strings.TrimSpace(d.value(2)),
-				Stopped:  stopped,
-			},
-		})
-
-	case dialogAddResult:
-		if m.busy != "" {
-			d.status = "Finish the current request first"
-			return nil
-		}
-		id, err := strconv.ParseInt(strings.TrimSpace(d.value(0)), 10, 64)
-		if err != nil || id <= 0 {
-			d.status = "Enter a positive numeric result ID"
-			return nil
+		request.addOptions = client.AddTorrentOptions{
+			Category: strings.TrimSpace(d.value(1)),
+			SavePath: strings.TrimSpace(d.value(2)),
+			Stopped:  stopped,
+			Tags:     strings.TrimSpace(d.value(4)),
 		}
 		m.dialog = nil
-		return m.launchAction("add result", actionRequest{kind: "add-result", id: id})
+		return m.launchAction(label, request)
 
 	case dialogEditValue:
 		if m.busy != "" {

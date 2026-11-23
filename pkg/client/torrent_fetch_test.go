@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,76 @@ func TestFetchAllTorrentsSupportsLargeResponses(t *testing.T) {
 	}
 	if len(torrents) != len(server.Torrents) {
 		t.Fatalf("torrent count = %d, want %d", len(torrents), len(server.Torrents))
+	}
+}
+
+func TestFetchTorrentsContextPushesNativeFilters(t *testing.T) {
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{{Name: "Linux ISO", Hash: "0123456789abcdef0123456789abcdef01234567"}}
+	app := server.newApp()
+
+	var got url.Values
+	app.client.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/api/v2/torrents/info" {
+			got = req.URL.Query()
+		}
+		return server.roundTrip(req), nil
+	})
+
+	filter := TorrentListFilter{State: "stopped", Category: "linux", Tag: "release"}
+	if _, _, err := app.FetchTorrentsContext(context.Background(), filter); err != nil {
+		t.Fatalf("FetchTorrentsContext err = %v", err)
+	}
+	if got.Get("filter") != "stopped" || got.Get("category") != "linux" || got.Get("tag") != "release" {
+		t.Fatalf("torrent info query = %v, want filter=stopped category=linux tag=release", got)
+	}
+	if server.InfoCalls != 1 {
+		t.Fatalf("torrent info calls = %d, want 1", server.InfoCalls)
+	}
+}
+
+func TestFetchTorrentsContextLocallyFiltersPortableStates(t *testing.T) {
+	server := newQBTestServer(t)
+	server.Torrents = []TorrentInfo{
+		{Name: "Queued", Hash: "0123456789abcdef0123456789abcdef01234567", State: "queuedDL"},
+		{Name: "Checking", Hash: "1123456789abcdef0123456789abcdef01234567", State: "checkingUP"},
+		{Name: "Downloading", Hash: "2123456789abcdef0123456789abcdef01234567", State: "downloading"},
+	}
+	app := server.newApp()
+	var queries []url.Values
+	app.client.httpClient.Transport = qbtest.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/api/v2/torrents/info" {
+			queries = append(queries, req.URL.Query())
+		}
+		return server.roundTrip(req), nil
+	})
+
+	queued, _, err := app.FetchTorrentsContext(context.Background(), TorrentListFilter{State: "queued"})
+	if err != nil {
+		t.Fatalf("queued FetchTorrentsContext err = %v", err)
+	}
+	if len(queued) != 1 || queued[0].Name != "Queued" {
+		t.Fatalf("queued torrents = %#v, want only queued torrent", queued)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queued torrent queries = %d, want 1", len(queries))
+	}
+	if _, ok := queries[0]["filter"]; ok {
+		t.Fatalf("queued query unexpectedly sent unsupported filter: %v", queries[0])
+	}
+
+	checking, _, err := app.FetchTorrentsContext(context.Background(), TorrentListFilter{State: "checking"})
+	if err != nil {
+		t.Fatalf("checking FetchTorrentsContext err = %v", err)
+	}
+	if len(checking) != 1 || checking[0].Name != "Checking" {
+		t.Fatalf("checking torrents = %#v, want only checking torrent", checking)
+	}
+	if len(queries) != 2 {
+		t.Fatalf("checking torrent queries = %d, want 2 total", len(queries))
+	}
+	if _, ok := queries[1]["filter"]; ok {
+		t.Fatalf("checking query unexpectedly sent unsupported filter: %v", queries[1])
 	}
 }
 

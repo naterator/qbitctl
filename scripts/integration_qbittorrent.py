@@ -823,7 +823,8 @@ def run(args: argparse.Namespace) -> None:
             (downloads / "compat").mkdir()
             run_cli(
                 binary, url, password, root, config_home, "add", str(fixture),
-                "--category", category, "--save-path", destination, "--stopped",
+                "--category", category, "--save-path", destination,
+                "--tags", "qbitctl-add-option", "--stopped",
             )
             torrent = wait_for_torrent(
                 binary,
@@ -837,8 +838,12 @@ def run(args: argparse.Namespace) -> None:
             if torrent is None or not torrent.get("hash"):
                 raise RuntimeError("qBittorrent added the fixture without a hash")
             torrent_hash = str(torrent["hash"])
-            if torrent.get("category") != category or str(torrent.get("save_path")).rstrip("/") != destination:
-                raise RuntimeError("qBittorrent did not apply the add category and save path")
+            if (
+                torrent.get("category") != category
+                or str(torrent.get("save_path")).rstrip("/") != destination
+                or torrent.get("tags") != "qbitctl-add-option"
+            ):
+                raise RuntimeError("qBittorrent did not apply the add category, save path, and tags")
             verify_main_data(url, password)
 
             plugins = list_search_plugins(binary, url, password, root, config_home)
@@ -951,6 +956,12 @@ def run(args: argparse.Namespace) -> None:
             alt_result = search_result_named(multi_results, "qbitctl alt search torrent")
             if not torrent_result.get("id") or not alt_result.get("id"):
                 raise RuntimeError("qbitctl did not cache both providers' search results")
+            recent = json.loads(run_cli(
+                binary, url, password, root, config_home, "search", "--recent", "--json",
+            ).stdout)
+            recent_ids = {row["id"] for row in recent}
+            if not {torrent_result["id"], alt_result["id"]} <= recent_ids:
+                raise RuntimeError("qbitctl search --recent did not preserve the original result IDs")
 
             magnet_result = search_result_named(multi_results, "qbitctl search magnet")
             if magnet_result.get("size") != 1048576:
@@ -967,7 +978,14 @@ def run(args: argparse.Namespace) -> None:
                     raise RuntimeError(f"qbitctl search did not display {expected_size}")
 
             search_id = str(torrent_result["id"])
-            run_cli(binary, url, password, root, config_home, "add", "--search-id", search_id)
+            version = tuple(int(part) for part in re.findall(r"\d+", args.version)[:3])
+            search_add_options = ()
+            if version >= (5, 2, 0):
+                search_add_options = ("--category", category, "--save-path", destination, "--stopped")
+            run_cli(
+                binary, url, password, root, config_home,
+                "add", "--search-id", search_id, *search_add_options,
+            )
             search_torrent = wait_for_torrent(
                 binary,
                 url,
@@ -975,9 +993,15 @@ def run(args: argparse.Namespace) -> None:
                 root,
                 config_home,
                 "qbitctl-search-fixture.bin",
+                state="stoppedDL" if search_add_options else None,
             )
             if search_torrent is None or not search_torrent.get("hash"):
                 raise RuntimeError("qbitctl did not add the .torrent search result")
+            if search_add_options and (
+                search_torrent.get("category") != category
+                or str(search_torrent.get("save_path")).rstrip("/") != destination
+            ):
+                raise RuntimeError("qbitctl did not apply the search result's category and save path at add time")
             search_hash = str(search_torrent["hash"])
 
             # Both cached results came from one search. The alternate plugin
@@ -1109,6 +1133,53 @@ def run(args: argparse.Namespace) -> None:
                 2,
                 1.5,
             )
+
+            filtered = run_cli(
+                binary, url, password, root, config_home,
+                "list", "--state", "stopped", "--category", category,
+                "--tag", "qbitctl-compat-c", "--fields", "name", "--no-header",
+            ).stdout.splitlines()
+            if filtered != ["qbitctl-compat-fixture.bin"]:
+                raise RuntimeError(f"qbitctl list filters returned {filtered!r}")
+
+            commands = root / "commands.txt"
+            commands.write_text(
+                'list --tag "qbitctl-compat-c" --fields name --no-header\n'
+                f"get name {torrent_hash}\n",
+                encoding="utf-8",
+            )
+            batch_output = run_cli(
+                binary, url, password, root, config_home, "batch", str(commands),
+            ).stdout.splitlines()
+            if batch_output != ["qbitctl-compat-fixture.bin"] * 2:
+                raise RuntimeError(f"qbitctl batch returned {batch_output!r}")
+
+            group_hashes = (search_hash, alt_search_hash)
+            run_cli(
+                binary, url, password, root, config_home,
+                "set", "tags", "qbitctl-compat-bulk", *group_hashes,
+            )
+            bulk_destination = "/downloads/bulk"
+            (downloads / "bulk").mkdir()
+            run_cli(
+                binary, url, password, root, config_home,
+                "move", bulk_destination, *group_hashes,
+            )
+            deadline = time.monotonic() + 10
+            while True:
+                batch = [
+                    row for row in list_torrents(binary, url, password, root, config_home)
+                    if row.get("hash") in group_hashes
+                ]
+                if len(batch) == len(group_hashes) and all(
+                    str(row.get("save_path")).rstrip("/") == bulk_destination
+                    and row.get("tags") == "qbitctl-compat-bulk"
+                    for row in batch
+                ):
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("qbitctl did not move and tag both selected torrents")
+                time.sleep(0.25)
 
             https_url = f"https://127.0.0.1:{https_port}/qbt"
             https_env = {"SSL_CERT_FILE": str(certificate)}

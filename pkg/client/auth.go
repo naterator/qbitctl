@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/naterator/qbitctl/internal/configfile"
 	"github.com/zalando/go-keyring"
@@ -534,6 +535,7 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 
 	app.creds = creds
 	app.configPath = configPath
+	app.compatibilityCacheEnabled = opts.UseCompatibilityCache
 	// A malformed optional display preference must not prevent authentication.
 	app.DataUnits = DataUnitsHuman
 	if configured, readErr := ReadDataUnits(configPath); readErr == nil {
@@ -546,7 +548,21 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 		}
 		app.DataUnits = configured
 	}
-	app.client = newClient(creds, app.Stderr)
+	httpTimeout := opts.HTTPTimeout
+	if httpTimeout < 0 {
+		return nil, codedErrf(ExitBadArgs, "http timeout must not be negative")
+	}
+	if httpTimeout == 0 {
+		configured, readErr := ReadHTTPTimeout(configPath)
+		if readErr != nil {
+			return nil, codedErrf(ExitFile, "Failed to read HTTP timeout from config file '%s': %v", configPath, readErr)
+		}
+		httpTimeout = configured
+	}
+	app.client, err = newClientWithTimeout(creds, app.Stderr, httpTimeout)
+	if err != nil {
+		return nil, codedErrf(ExitBadArgs, "%v", err)
+	}
 
 	if err := app.client.loginContext(app.context()); err != nil {
 		app.Logout()
@@ -555,6 +571,9 @@ func NewClientWithOutput(ctx context.Context, opts *Options, stdout, stderr io.W
 	if err := app.CheckCompatibility(); err != nil {
 		app.Logout()
 		return nil, err
+	}
+	if app.compatibilitySource == compatibilitySourceDisk {
+		app.client.invalidateCachedCompatibility = sync.OnceFunc(app.invalidateCompatibilityCache)
 	}
 
 	return app, nil
@@ -568,6 +587,9 @@ func (a *App) Logout() {
 func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) error {
 	if opts.Pass == "" {
 		return codedErrf(ExitBadArgs, "Password required for non-interactive config write. Use --pass-stdin, QBITCTL_PASSWORD, or --pass")
+	}
+	if opts.HTTPTimeout < 0 {
+		return codedErrf(ExitBadArgs, "http timeout must not be negative")
 	}
 
 	urlValue := opts.URL
@@ -598,6 +620,11 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 		Pass: opts.Pass,
 	}); err != nil {
 		return codedErrf(ExitFile, "Failed to save config file: %v", err)
+	}
+	if opts.HTTPTimeout > 0 {
+		if err := SetHTTPTimeout(outputPath, opts.HTTPTimeout); err != nil {
+			return codedErrf(ExitFile, "Failed to save HTTP timeout: %v", err)
+		}
 	}
 
 	if infoOut != nil {

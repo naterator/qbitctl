@@ -14,6 +14,17 @@ const (
 )
 
 func (a *App) fetchAppVersion() (string, error) {
+	if strings.TrimSpace(a.appVersion) != "" {
+		return a.appVersion, nil
+	}
+	version, err := a.fetchAppVersionFresh()
+	if err == nil {
+		a.appVersion = version
+	}
+	return version, err
+}
+
+func (a *App) fetchAppVersionFresh() (string, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/app/version", nil)
 	if err != nil {
 		return "", codedErrWrapf(ExitFetchFail, err, "Failed to fetch app version: %v", err)
@@ -22,6 +33,17 @@ func (a *App) fetchAppVersion() (string, error) {
 }
 
 func (a *App) fetchAPIVersion() (string, error) {
+	if strings.TrimSpace(a.apiVersion) != "" {
+		return a.apiVersion, nil
+	}
+	version, err := a.fetchAPIVersionFresh()
+	if err == nil {
+		a.apiVersion = version
+	}
+	return version, err
+}
+
+func (a *App) fetchAPIVersionFresh() (string, error) {
 	body, err := a.client.requestContext(a.context(), http.MethodGet, "/api/v2/app/webapiVersion", nil)
 	if err != nil {
 		return "", codedErrWrapf(ExitFetchFail, err, "Failed to fetch API version: %v", err)
@@ -30,21 +52,18 @@ func (a *App) fetchAPIVersion() (string, error) {
 }
 
 func (a *App) CheckCompatibility() error {
-	appVersion, err := a.fetchAppVersion()
-	if err != nil {
-		return err
+	if appVersion, apiVersion, ok := a.loadCompatibilityCache(); ok {
+		if err := validateCompatibilityVersions(appVersion, apiVersion); err == nil {
+			a.appVersion = appVersion
+			a.apiVersion = apiVersion
+			a.compatibilitySource = compatibilitySourceDisk
+			return nil
+		}
+		// A cached pair that no longer satisfies the baseline must not block a
+		// server that was upgraded during the cache window.
+		a.invalidateCompatibilityCache()
 	}
-	apiVersion, err := a.fetchAPIVersion()
-	if err != nil {
-		return err
-	}
-	if compareDottedVersion(appVersion, minQbittorrentVersion) < 0 {
-		return codedErrf(ExitLoginFail, "Unsupported qBittorrent version %s; qbitctl requires qBittorrent %s or later", appVersion, minQbittorrentVersion)
-	}
-	if compareDottedVersion(apiVersion, minWebAPIVersion) < 0 {
-		return codedErrf(ExitLoginFail, "Unsupported qBittorrent WebAPI version %s; qbitctl requires WebAPI %s or later", apiVersion, minWebAPIVersion)
-	}
-	return nil
+	return a.refreshCompatibility()
 }
 
 func compareDottedVersion(a, b string) int {

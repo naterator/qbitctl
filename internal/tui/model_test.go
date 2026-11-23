@@ -37,10 +37,64 @@ func TestQueueRefreshKeepsFocusedTorrentAndSelection(t *testing.T) {
 	}
 }
 
+func TestRefreshIntervalAdaptsToQueueActivity(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	if got := m.refreshInterval(); got != activeRefreshInterval {
+		t.Fatalf("initial refresh interval = %s, want %s", got, activeRefreshInterval)
+	}
+	m.replaceQueue([]client.TorrentInfo{{Hash: "idle", State: "stoppedDL"}})
+	if got := m.refreshInterval(); got != idleRefreshInterval {
+		t.Fatalf("idle refresh interval = %s, want %s", got, idleRefreshInterval)
+	}
+	m.replaceQueue([]client.TorrentInfo{{Hash: "active", State: "downloading", DLSpeed: 1}})
+	if got := m.refreshInterval(); got != activeRefreshInterval {
+		t.Fatalf("active refresh interval = %s, want %s", got, activeRefreshInterval)
+	}
+	m.replaceQueue(nil)
+	if got := m.refreshInterval(); got != idleRefreshInterval {
+		t.Fatalf("empty queue refresh interval = %s, want %s", got, idleRefreshInterval)
+	}
+}
+
+func TestNoOpQueueWorkSkipsQueueRebuild(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.page = queuePage
+	initial := []client.TorrentInfo{{Hash: "a", Name: "Alpha", State: "downloading"}}
+	m.replaceQueue(initial)
+	queueBacking := &m.queue[0]
+	allBacking := &m.allTorrents[0]
+	m.finishWork(workDone{
+		kind:         queueWork,
+		queue:        []client.TorrentInfo{{Hash: "a", Name: "Alpha", State: "downloading"}},
+		queueChanged: false,
+	})
+	if &m.queue[0] != queueBacking || &m.allTorrents[0] != allBacking {
+		t.Fatal("no-op queue work rebuilt queue slices")
+	}
+}
+
 type searchOnlyService struct {
 	service
 	started chan struct{}
 	cleaned chan struct{}
+}
+
+func TestPauseStopsAutomaticRefreshAndPreservesManualRefresh(t *testing.T) {
+	backend := &recordingService{}
+	m := newModel(t.Context(), backend)
+	m.openAction("toggle-refresh")
+	m.update(refreshTick{})
+	if !m.refreshPaused || m.busy != "" || backend.queueCallCount() != 0 {
+		t.Fatal("an automatic refresh started while refresh was paused")
+	}
+	runTUIWork(t, m, m.handleKey("r"))
+	if backend.queueCallCount() != 1 {
+		t.Fatal("manual refresh did not run while automatic refresh was paused")
+	}
+	runTUIWork(t, m, m.openAction("toggle-refresh"))
+	if m.refreshPaused || backend.queueCallCount() != 2 {
+		t.Fatal("resuming automatic refresh did not immediately refresh the queue")
+	}
 }
 
 func (s searchOnlyService) search(ctx context.Context, _ string, _ string, _ time.Duration) ([]client.SearchResult, string, error) {

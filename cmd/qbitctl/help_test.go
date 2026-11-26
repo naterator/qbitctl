@@ -58,18 +58,18 @@ func TestQbitctlHelpUsesTheSharedTheme(t *testing.T) {
 	}
 
 	def := run("help", "list")
-	if !strings.Contains(def, "\x1b[38;2;154;200;255;1mUsage:") ||
-		!strings.Contains(def, "\x1b[38;2;133;215;200m") {
-		t.Fatalf("help is missing Default's key and accent colors: %q", def)
+	if !strings.Contains(def, "\x1b[38;2;236;239;244;1mUsage:") ||
+		!strings.Contains(def, "\x1b[38;2;143;188;187m") {
+		t.Fatalf("help is missing Default's text and accent colors: %q", def)
 	}
 
 	fallback := "config.json"
-	if err := terminaltheme.Save(fallback, "nord"); err != nil {
+	if err := terminaltheme.Save(fallback, "tookie"); err != nil {
 		t.Fatal(err)
 	}
-	nord := run("help", "list")
-	if !strings.Contains(nord, "\x1b[38;2;136;192;208;1mUsage:") {
-		t.Fatalf("help did not use the fallback config's Nord theme: %q", nord)
+	tookie := run("help", "list")
+	if !strings.Contains(tookie, "\x1b[38;2;233;238;245;1mUsage:") {
+		t.Fatalf("help did not use the fallback config's Tookie theme: %q", tookie)
 	}
 
 	explicit := filepath.Join(t.TempDir(), "theme.json")
@@ -77,15 +77,28 @@ func TestQbitctlHelpUsesTheSharedTheme(t *testing.T) {
 		t.Fatal(err)
 	}
 	ocean := run("--config", explicit, "--profile", "another", "help", "list")
-	if !strings.Contains(ocean, "\x1b[38;2;125;211;252;1mUsage:") ||
+	if !strings.Contains(ocean, "\x1b[38;2;229;242;255;1mUsage:") ||
 		!strings.Contains(ocean, "\x1b[38;2;103;232;249m") {
-		t.Fatalf("help is missing Ocean's key and accent colors: %q", ocean)
+		t.Fatalf("help is missing Ocean's text and accent colors: %q", ocean)
+	}
+
+	nested := run("--config", explicit, "config", "--help")
+	for _, want := range []string{
+		"\x1b[38;2;103;232;249m  default-search-plugin\x1b[m\x1b[38;2;142;166;194m Choose the default search provider for a server profile",
+		"\x1b[38;2;103;232;249m  color-scheme\x1b[m\x1b[38;2;142;166;194m",
+	} {
+		if !strings.Contains(nested, want) {
+			t.Errorf("nested help did not style labels and descriptions separately: missing %q in %q", want, nested)
+		}
 	}
 
 	t.Setenv("NO_COLOR", "1")
 	plain := run("--config", explicit, "help", "list")
-	if plain != ansi.Strip(ocean) || plain != ansi.Strip(def) || plain != ansi.Strip(nord) {
+	if plain != ansi.Strip(ocean) || plain != ansi.Strip(def) || plain != ansi.Strip(tookie) {
 		t.Fatal("themed help changed the underlying text")
+	}
+	if plain := run("--config", explicit, "config", "--help"); plain != ansi.Strip(nested) {
+		t.Fatal("themed nested help changed the underlying text")
 	}
 }
 

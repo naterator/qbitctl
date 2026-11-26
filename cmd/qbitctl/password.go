@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	stdinModeAnnotation = "qbitctl/stdin"
-	stdinInteractive    = "interactive"
-	maxPasswordBytes    = 4096
+	stdinModeAnnotation  = "qbitctl/stdin"
+	stdinInteractive     = "interactive"
+	stdinProfilePassword = "profile-password"
+	maxPasswordBytes     = 4096
 )
 
 func resolvePassword(cmd *cobra.Command, opts *CLIOptions, passStdin bool) error {

@@ -29,17 +29,17 @@ func TestThemeCatalogHasStableDefaultAndSixteenAlternates(t *testing.T) {
 	if themes[0].ID != terminaltheme.Default || themes[0].Label != "Default" {
 		t.Fatalf("first theme = %#v, want Default", themes[0])
 	}
-	for _, id := range []terminaltheme.ID{"ocean", "forest", "amber", "rose", "violet", "mono", "nord", "dracula", "solarized", "gruvbox", "catppuccin", "high-contrast", "paper", "midnight", "terminal", "sunset"} {
+	for _, id := range []terminaltheme.ID{"ocean", "forest", "amber", "rose", "violet", "mono", "tookie", "dracula", "solarized", "gruvbox", "catppuccin", "high-contrast", "paper", "midnight", "terminal", "sunset"} {
 		if !terminaltheme.Known(id) {
 			t.Errorf("theme %q is missing", id)
 		}
 	}
 }
 
-func TestApplyThemeKeepsDefaultOutputUnchanged(t *testing.T) {
+func TestApplyThemeKeepsRenderPaletteOutputUnchanged(t *testing.T) {
 	content := viewSurface(viewTitleStyle.Render("Theme preview"), 28, 2, viewCanvasColor, viewTextStyle.GetForeground())
-	if got := applyTheme(content, 28, 2, terminaltheme.Default); got != content {
-		t.Fatalf("default theme changed rendered content")
+	if got := applyTheme(content, 28, 2, renderThemeID); got != content {
+		t.Fatalf("render palette changed rendered content")
 	}
 	if got := applyTheme(content, 28, 2, "ocean"); got == content || !strings.Contains(got, "Theme preview") {
 		t.Fatalf("alternate theme did not remap a rendered cell: %q", got)

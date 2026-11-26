@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/naterator/qbitctl/internal/searchresults"
+
+	"github.com/naterator/qbitctl/internal/configfile"
 )
 
 const searchPreferencesFileName = "tui-search.json"
@@ -22,7 +24,7 @@ type searchPreferences struct {
 }
 
 func loadSearchPreferences(path string) (resultSort, resultFilter, error) {
-	data, err := readPreferences(path, "search")
+	data, err := configfile.ReadUIPreference(path, "search")
 	if err != nil {
 		return resultOriginal, resultFilter{}, err
 	}
@@ -76,5 +78,5 @@ func saveSearchPreferences(path string, order resultSort, filter *resultFilter) 
 		fields["min_size"] = validated.minSize.text
 		fields["max_size"] = validated.maxSize.text
 	}
-	return writePreferences(path, "search", fields)
+	return configfile.WriteUISection(path, "search", fields)
 }

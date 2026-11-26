@@ -20,9 +20,9 @@ type cliStyle struct {
 	profile colorprofile.Profile
 }
 
-// The command's own stream controls color. FORCE_COLOR applies to help as it
-// did before, while command results require a terminal.
-func newCLIStyle(out io.Writer, explicitPath string, forceHelp bool) cliStyle {
+// The command's own stream controls color. FORCE_COLOR applies to help and
+// palette previews, while ordinary results require a terminal.
+func newCLIStyle(out io.Writer, explicitPath string, allowForce bool) cliStyle {
 	if _, disabled := os.LookupEnv("NO_COLOR"); disabled ||
 		strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
 		return cliStyle{}
@@ -32,17 +32,21 @@ func newCLIStyle(out io.Writer, explicitPath string, forceHelp bool) cliStyle {
 	if file, ok := out.(term.File); ok && term.IsTerminal(file.Fd()) {
 		profile = colorprofile.Detect(out, env)
 	}
-	if force := strings.TrimSpace(os.Getenv("FORCE_COLOR")); forceHelp && force != "" && force != "0" {
+	if force := strings.TrimSpace(os.Getenv("FORCE_COLOR")); allowForce && force != "" && force != "0" {
 		profile = max(profile, colorprofile.Env(env), colorprofile.ANSI256)
 	}
 	if profile < colorprofile.ANSI {
 		return cliStyle{}
 	}
+	return cliStyle{palette: loadCLIPalette(explicitPath), profile: profile}
+}
+
+func loadCLIPalette(explicitPath string) terminaltheme.Palette {
 	id := terminaltheme.Default
 	if path, err := configfile.ResolvePath(explicitPath); err == nil {
 		id, _ = terminaltheme.Load(path)
 	}
-	return cliStyle{palette: terminaltheme.Lookup(id), profile: profile}
+	return terminaltheme.Lookup(id)
 }
 
 func (s cliStyle) paint(text string, foreground color.Color, bold bool) string {
@@ -56,11 +60,11 @@ func (s cliStyle) paint(text string, foreground color.Color, bold bool) string {
 	return style.Styled(text)
 }
 
-func (s cliStyle) heading(text string) string     { return s.paint(text, s.palette.Key, true) }
-func (s cliStyle) command(text string) string     { return s.paint(text, s.palette.Accent, false) }
-func (s cliStyle) description(text string) string { return s.paint(text, s.palette.Muted, false) }
-func (s cliStyle) warning(text string) string     { return s.paint(text, s.palette.Warning, false) }
-func (s cliStyle) diagnostic(text string) string  { return s.paint(text, s.palette.Error, true) }
+func (s cliStyle) heading(text string) string     { return s.paintUse(headingUse, text) }
+func (s cliStyle) command(text string) string     { return s.paintUse(commandUse, text) }
+func (s cliStyle) description(text string) string { return s.paintUse(descriptionUse, text) }
+func (s cliStyle) warning(text string) string     { return s.paintUse(warningUse, text) }
+func (s cliStyle) diagnostic(text string) string  { return s.paintUse(errorUse, text) }
 
 func commandConfigPath(cmd *cobra.Command) string {
 	path, _ := cmd.Root().PersistentFlags().GetString("config")
@@ -84,7 +88,7 @@ func cliOutput(out io.Writer, path string) io.Writer {
 
 func (w *styledCLIOutput) StyleLabel(label string) string { return w.style.command(label) }
 func (w *styledCLIOutput) StyleRule(rule string) string {
-	return w.style.paint(rule, w.style.palette.Rule, false)
+	return w.style.paintUse(separatorUse, rule)
 }
 
 func tableHeading(w io.Writer, heading string) string {

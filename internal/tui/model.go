@@ -562,7 +562,7 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 			m.refreshSearchDialogPlugin()
 			return nil
 		}
-		m.searchPlugins = normalizeSearchPlugins(done.plugins)
+		m.searchPlugins = client.NormalizeSearchPlugins(done.plugins)
 		m.searchPluginsAttempted = true
 		m.searchPluginsStale = false
 		m.searchPluginsError = ""
@@ -592,7 +592,7 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 			return nil
 		}
 		if done.plugins != nil {
-			m.searchPlugins = normalizeSearchPlugins(done.plugins)
+			m.searchPlugins = client.NormalizeSearchPlugins(done.plugins)
 			m.searchPluginsAttempted = true
 			m.searchPluginsStale = false
 			m.searchPluginsError = ""
@@ -759,7 +759,7 @@ func (m *model) applySearchPluginResult(done workDone) {
 		return
 	}
 	if done.plugins != nil {
-		m.searchPlugins = normalizeSearchPlugins(done.plugins)
+		m.searchPlugins = client.NormalizeSearchPlugins(done.plugins)
 		m.searchPluginsAttempted = true
 		m.searchPluginsStale = false
 		m.searchPluginsError = ""
@@ -965,7 +965,7 @@ func (m *model) launchSearch(query, plugin string, timeout time.Duration) tea.Cm
 					return workDone{notice: "Search canceled"}
 				}
 				if discoveryErr == nil {
-					freshCatalog = normalizeSearchPlugins(plugins)
+					freshCatalog = client.NormalizeSearchPlugins(plugins)
 					effectivePlugin = client.ValidateDefaultSearchPlugin(savedSelection, freshCatalog)
 				} else {
 					effectivePlugin = defaultSearchPluginSelection
@@ -1052,25 +1052,6 @@ func (m *model) cancelSearchPlugins() {
 	if m.searchPluginCancel != nil {
 		m.searchPluginCancel()
 	}
-}
-
-func normalizeSearchPlugins(input []searchPluginInfo) []searchPluginInfo {
-	plugins := make([]searchPluginInfo, 0, len(input))
-	seen := make(map[string]struct{}, len(input))
-	for _, plugin := range input {
-		plugin.Name = strings.TrimSpace(plugin.Name)
-		plugin.FullName = strings.TrimSpace(plugin.FullName)
-		if plugin.Name == "" {
-			continue
-		}
-		key := plugin.Name
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		plugins = append(plugins, plugin)
-	}
-	return plugins
 }
 
 func (m *model) requestQuit() tea.Cmd {

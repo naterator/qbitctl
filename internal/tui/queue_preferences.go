@@ -5,6 +5,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/naterator/qbitctl/internal/configfile"
 )
 
 const queuePreferencesFileName = "tui-queue.json"
@@ -15,7 +17,7 @@ type queuePreferences struct {
 }
 
 func loadQueuePreferences(path string) (queueSort, error) {
-	data, err := readPreferences(path, "queue")
+	data, err := configfile.ReadUIPreference(path, "queue")
 	if err != nil {
 		return queueActiveFirst, err
 	}
@@ -39,11 +41,11 @@ func saveQueuePreferences(path string, order queueSort) error {
 	if order.label() == "" {
 		return fmt.Errorf("invalid queue sort %q", order)
 	}
-	return writePreferences(path, "queue", map[string]string{"sort": string(order)})
+	return configfile.WriteUISection(path, "queue", map[string]string{"sort": string(order)})
 }
 
 func loadQueueColumns(path string) (queueColumnPreset, error) {
-	data, err := readPreferences(path, "queue")
+	data, err := configfile.ReadUIPreference(path, "queue")
 	if err != nil {
 		return queueColumnsCompact, err
 	}
@@ -66,5 +68,5 @@ func loadQueueColumns(path string) (queueColumnPreset, error) {
 
 func saveQueueColumns(path string, preset queueColumnPreset) error {
 	preset = normalizeQueueColumnPreset(string(preset))
-	return writePreferences(path, "queue", map[string]string{"columns": string(preset)})
+	return configfile.WriteUISection(path, "queue", map[string]string{"columns": string(preset)})
 }

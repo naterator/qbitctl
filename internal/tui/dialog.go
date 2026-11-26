@@ -4,7 +4,6 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/configfile"
 	"github.com/naterator/qbitctl/internal/terminaltheme"
 	"github.com/naterator/qbitctl/pkg/client"
 )
@@ -568,38 +568,24 @@ func (m *model) openSearchPluginPicker() tea.Cmd {
 }
 
 func (m *model) searchPluginPickerItems() []dialogItem {
-	items := []dialogItem{
-		{label: "Enabled search plugins", action: defaultSearchPluginSelection, description: "server-enabled providers"},
-		{label: "All search plugins", action: "all", description: "every installed provider"},
-	}
-	plugins := append([]searchPluginInfo(nil), m.searchPlugins...)
-	sort.SliceStable(plugins, func(i, j int) bool {
-		if plugins[i].Enabled != plugins[j].Enabled {
-			return plugins[i].Enabled
+	options := client.SearchProviderOptions(m.searchPlugins)
+	items := make([]dialogItem, 0, len(options))
+	for _, option := range options {
+		description := viewSafe(option.ID) + " · disabled"
+		if option.Enabled {
+			description = viewSafe(option.ID) + " · enabled"
 		}
-		left := strings.ToLower(searchPluginFullName(plugins[i]))
-		right := strings.ToLower(searchPluginFullName(plugins[j]))
-		if left == right {
-			return strings.ToLower(plugins[i].Name) < strings.ToLower(plugins[j].Name)
-		}
-		return left < right
-	})
-	for _, plugin := range plugins {
-		name := strings.TrimSpace(plugin.Name)
-		if name == "" {
-			continue
-		}
-		description := viewSafe(name)
-		if plugin.Enabled {
-			description += " · enabled"
-		} else {
-			description += " · disabled"
+		if option.Group {
+			description = "server-enabled providers"
+			if option.ID == "all" {
+				description = "every installed provider"
+			}
 		}
 		items = append(items, dialogItem{
-			label:       searchPluginFullName(plugin),
-			action:      name,
+			label:       viewSafe(option.Label),
+			action:      option.ID,
 			description: description,
-			disabled:    !plugin.Enabled,
+			disabled:    !option.Enabled,
 		})
 	}
 	return items
@@ -1531,7 +1517,7 @@ func (m *model) submitDialog() tea.Cmd {
 		}, d.value(caIndex), tuiDefault)
 
 	case dialogRefreshInterval:
-		interval, err := parseRefreshInterval(d.value(0))
+		interval, err := configfile.ParseRefreshInterval(d.value(0))
 		if err != nil {
 			d.status = err.Error()
 			return nil

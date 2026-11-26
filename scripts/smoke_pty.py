@@ -281,13 +281,13 @@ def save_ocean_theme(session):
 
 
 def check_cli_theme(binary, config, server_url, base):
-    def run(*command):
+    def run(*command, exit_code=0):
         session = Session(binary, config, server_url, base, command)
         try:
             session.wait_exit()
             # Drain output queued by the PTY even if the child already exited.
             session.read(0)
-            if session.proc.returncode != 0:
+            if session.proc.returncode != exit_code:
                 raise RuntimeError(f"CLI {command} exited with {session.proc.returncode}")
             return bytes(session.output)
         finally:
@@ -295,12 +295,24 @@ def check_cli_theme(binary, config, server_url, base):
 
     if json.loads(config.read_text())["ui"]["theme"] != "ocean":
         raise RuntimeError("the TUI did not persist Ocean to ui.theme")
-    if b"\x1b[38;2;125;211;252;1mUsage:" not in run("--help"):
-        raise RuntimeError("interactive CLI help is missing Ocean's key color")
+    if b"\x1b[38;2;229;242;255;1mUsage:" not in run("--help"):
+        raise RuntimeError("interactive CLI help is missing Ocean's text color")
+    config_help = run("config", "--help")
+    if not re.search(rb"\x1b\[38;2;142;166;194m *Choose the default search provider", config_help):
+        raise RuntimeError("nested CLI help is missing Ocean's description color")
     if b"\x1b[38;2;103;232;249mName" not in run("list"):
         raise RuntimeError("interactive CLI list is missing Ocean's accent")
-    if b"\x1b[38;2;125;211;252;1mINDEX" not in run("files", ALPHA):
+    if b"\x1b[38;2;229;242;255;1mINDEX" not in run("files", ALPHA):
         raise RuntimeError("interactive CLI table is missing Ocean's heading color")
+    schemes = run("config", "color-scheme", "list")
+    if b"SWATCHES" not in schemes or b"\x1b[48;2;46;52;64m \x1b[m" not in schemes:
+        raise RuntimeError("the color scheme table is missing its swatches")
+    providers = run("config", "default-search-plugin", "list")
+    if b"\x1b[38;2;229;242;255;1mSTATUS" not in providers or b"disabled" not in providers:
+        raise RuntimeError("the provider table is missing its heading color or disabled status")
+    missing_provider = run("config", "default-search-plugin", "set", exit_code=4)
+    if b"missing required parameter PROVIDER" not in missing_provider:
+        raise RuntimeError("setting a missing provider did not fail immediately")
     rows = json.loads(run("list", "--json"))
     if {row["Name"] for row in rows} != {"Ubuntu 24.04 LTS", "Debian 12 Bookworm"}:
         raise RuntimeError("JSON output changed with the theme")
@@ -336,6 +348,30 @@ def check_cli_delete(binary, config, server_url, base, fixture):
                 raise RuntimeError(f"unexpected CLI delete requests for {answer!r}")
         finally:
             session.close()
+
+
+def check_interactive_profile_add(binary, base, server_url, fixture):
+    config = base / "interactive-profile.json"
+    previous = fixture.password
+    fixture.password = "interactive-setup-secret"
+    session = Session(binary, config, server_url, base, ("profile", "add", "nate"))
+    try:
+        session.wait("URL [")
+        session.send(server_url.encode() + b"\r")
+        session.wait("Username [")
+        session.send(b"demo\r")
+        session.wait("Password:")
+        session.send(fixture.password.encode() + b"\r")
+        session.wait("Saved profile nate")
+        session.wait_exit()
+        saved = json.loads(config.read_text())
+        if saved["default_profile"] != "nate" or not saved["profiles"]["nate"]["password"].startswith("enc:v2:"):
+            raise RuntimeError("interactive profile creation did not save encrypted credentials")
+        if fixture.password.encode() in session.clean_output():
+            raise RuntimeError("interactive profile password was echoed")
+    finally:
+        session.close()
+        fixture.password = previous
 
 
 def main():
@@ -379,7 +415,8 @@ def main():
             session = None
             check_cli_delete(binary, config, server_url, base, fixture)
             check_cli_theme(binary, config, server_url, base)
-            print("PTY smoke passed (setup, recovery, details, search cancellation, deletion, shared color scheme)")
+            check_interactive_profile_add(binary, base, server_url, fixture)
+            print("PTY smoke passed (profile setup, recovery, details, search cancellation, deletion, shared color scheme)")
         finally:
             if session is not None:
                 session.close()

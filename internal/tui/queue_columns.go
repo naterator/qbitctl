@@ -2,15 +2,19 @@
 
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/naterator/qbitctl/internal/configfile"
+)
 
 // queueColumnPreset keeps the default queue legible on small terminals while
 // making the richer torrent fields available as an explicit saved choice.
 type queueColumnPreset string
 
 const (
-	queueColumnsCompact queueColumnPreset = "compact"
-	queueColumnsWide    queueColumnPreset = "wide"
+	queueColumnsCompact queueColumnPreset = configfile.QueueColumnsCompact
+	queueColumnsWide    queueColumnPreset = configfile.QueueColumnsWide
 )
 
 var queueColumnChoices = []struct {

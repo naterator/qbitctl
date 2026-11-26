@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,7 @@ func TestRunDefaultStartupPolicy(t *testing.T) {
 		wantTUI     bool
 	}{
 		{name: "noninteractive ignores startup config", config: `{"ui":{"tui_default":true}}`, wantHelp: true},
+		{name: "interactive before setup", interactive: true, config: `{}`, wantHelp: true},
 		{name: "interactive tui default", interactive: true, config: `{"ui":{"tui_default":true}}`, wantTUI: true},
 		{name: "interactive configured cli default", interactive: true, config: `{"url":"http://qbt.test","user":"admin","password":"saved"}`, wantHelp: true},
 	}
@@ -57,100 +57,6 @@ func TestRunDefaultStartupPolicy(t *testing.T) {
 				t.Fatalf("help = %v, want %v, output %q", got, tt.wantHelp, out.String())
 			}
 		})
-	}
-}
-
-func TestFirstRunSetupChoices(t *testing.T) {
-	oldRunner := runTUIFunc
-	t.Cleanup(func() { runTUIFunc = oldRunner })
-
-	t.Run("enter and one select tui", func(t *testing.T) {
-		for _, input := range []string{"\n", "1\n"} {
-			called := 0
-			runTUIFunc = func(*cobra.Command, CLIOptions) error { called++; return nil }
-			cmd := newRootCmd()
-			cmd.SetIn(strings.NewReader(input))
-			var out bytes.Buffer
-			cmd.SetErr(&out)
-			finished, err := firstRunSetup(cmd, &CLIOptions{}, filepath.Join(t.TempDir(), "config.json"))
-			if err != nil || !finished || called != 1 {
-				t.Fatalf("input %q: finished=%v calls=%d err=%v", input, finished, called, err)
-			}
-		}
-	})
-
-	t.Run("quit and eof", func(t *testing.T) {
-		for _, input := range []string{"q\n", ""} {
-			called := 0
-			runTUIFunc = func(*cobra.Command, CLIOptions) error { called++; return nil }
-			cmd := newRootCmd()
-			cmd.SetIn(strings.NewReader(input))
-			var out bytes.Buffer
-			cmd.SetErr(&out)
-			finished, err := firstRunSetup(cmd, &CLIOptions{}, filepath.Join(t.TempDir(), "config.json"))
-			if err != nil || !finished || called != 0 {
-				t.Fatalf("input %q: finished=%v calls=%d err=%v", input, finished, called, err)
-			}
-		}
-	})
-
-	t.Run("invalid choice then eof retries once", func(t *testing.T) {
-		cmd := newRootCmd()
-		cmd.SetIn(strings.NewReader("x\n"))
-		var out bytes.Buffer
-		cmd.SetErr(&out)
-		finished, err := firstRunSetup(cmd, &CLIOptions{}, filepath.Join(t.TempDir(), "config.json"))
-		if err != nil || !finished {
-			t.Fatalf("finished=%v err=%v", finished, err)
-		}
-		if got := strings.Count(out.String(), "Choose setup"); got != 2 {
-			t.Fatalf("setup prompts = %d, want one retry: %q", got, out.String())
-		}
-	})
-}
-
-func TestFirstRunSetupTextModeSavesAndResumes(t *testing.T) {
-	t.Setenv("QBITCTL_MASTER_KEY", "startup-test-master-key")
-	server := newQBTestServer(t)
-	withQBServerClientFactory(t, server)
-	path := filepath.Join(t.TempDir(), "config.json")
-	opts := CLIOptions{ConfigPath: path}
-	cmd := newRootCmd()
-	cmd.SetIn(strings.NewReader("2\nhttp://qbt.test\nadmin\nsecret\n"))
-	var out bytes.Buffer
-	cmd.SetErr(&out)
-	finished, err := firstRunSetup(cmd, &opts, path)
-	if err != nil || finished {
-		t.Fatalf("text setup finished=%v err=%v output=%q", finished, err, out.String())
-	}
-	if opts.ConfigPath != path || opts.URL != "" || opts.User != "" || opts.Pass != "" {
-		t.Fatalf("text setup options = %#v", opts)
-	}
-	setup, err := qbt.ReadSetup(qbt.Options{ConfigPath: path})
-	if err != nil || !setup.Ready() {
-		t.Fatalf("saved setup = %#v, err=%v", setup, err)
-	}
-}
-
-func TestFirstRunSetupTextModeDoesNotSaveOnLoginFailure(t *testing.T) {
-	server := newQBTestServer(t)
-	server.StatusQueue["/api/v2/auth/login"] = []int{http.StatusForbidden}
-	withQBServerClientFactory(t, server)
-	path := filepath.Join(t.TempDir(), "config.json")
-	cmd := newRootCmd()
-	cmd.SetIn(strings.NewReader("2\nhttp://qbt.test\nadmin\nwrong\n"))
-	var out bytes.Buffer
-	cmd.SetErr(&out)
-	finished, err := firstRunSetup(cmd, &CLIOptions{ConfigPath: path}, path)
-	if !finished {
-		t.Fatal("failed text setup should finish the invocation")
-	}
-	var exit exitError
-	if !errors.As(err, &exit) || exit.code != qbt.ExitLoginFail {
-		t.Fatalf("error = %v, want login failure exit", err)
-	}
-	if _, readErr := os.Stat(path); !errors.Is(readErr, os.ErrNotExist) {
-		t.Fatalf("failed setup left config behind, stat error = %v", readErr)
 	}
 }
 

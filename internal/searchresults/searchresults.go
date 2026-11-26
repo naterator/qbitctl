@@ -29,6 +29,9 @@ var sortChoices = []Sort{Original, SeedersDesc, SeedersAsc, SizeDesc, SizeAsc}
 
 var sortChoiceNames = []string{string(Original), string(SeedersDesc), string(SeedersAsc), string(SizeDesc), string(SizeAsc)}
 
+// SortValues returns the supported order options.
+func SortValues() []string { return slices.Clone(sortChoiceNames) }
+
 // ParseSort validates a search-result sort name.
 func ParseSort(raw string) (Sort, error) {
 	sort := Sort(strings.ToLower(strings.TrimSpace(raw)))

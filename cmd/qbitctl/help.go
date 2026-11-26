@@ -101,7 +101,7 @@ func colorizeUsageLine(line string, section *string, style cliStyle) string {
 
 	switch *section {
 	case "commands", "flags", "global-flags", "help-topics":
-		if option, description, ok := splitAlignedLine(line); ok {
+		if option, description, ok := splitAlignedLine(line, *section == "commands"); ok {
 			return style.command(option) + style.description(description)
 		}
 		return style.command(line)
@@ -137,10 +137,15 @@ func usageSection(title string) string {
 	}
 }
 
-func splitAlignedLine(line string) (left, right string, ok bool) {
+func splitAlignedLine(line string, commandRow bool) (left, right string, ok bool) {
 	trimmed := strings.TrimLeft(line, " \t")
 	leading := line[:len(line)-len(trimmed)]
 	separator := strings.Index(trimmed, "  ")
+	if commandRow {
+		// Cobra pads command names and adds one space before their short
+		// descriptions. The longest name has no padding.
+		separator = strings.IndexAny(trimmed, " \t")
+	}
 	if separator < 0 {
 		return "", "", false
 	}

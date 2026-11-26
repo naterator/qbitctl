@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/configfile"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -20,7 +21,7 @@ func TestQueueColumnsAndRefreshPreferencesRoundTrip(t *testing.T) {
 	if err := saveQueueColumns(path, queueColumnsWide); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveRefreshInterval(path, 23*time.Second); err != nil {
+	if err := configfile.SaveRefreshInterval(path, 23*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	m := newModel(t.Context(), nil)
@@ -79,7 +80,7 @@ func TestRefreshIntervalDialogValidatesAndSavesInput(t *testing.T) {
 	if m.dialog != nil || m.refreshIntervalSetting != 23*time.Second {
 		t.Fatalf("valid interval submit left dialog=%#v interval=%s", m.dialog, m.refreshIntervalSetting)
 	}
-	if got, err := loadRefreshInterval(path); err != nil || got != 23*time.Second {
+	if got, err := configfile.ReadRefreshInterval(path); err != nil || got != 23*time.Second {
 		t.Fatalf("saved refresh interval = %s, err=%v; want 23s", got, err)
 	}
 	m.openRefreshIntervalDialog()

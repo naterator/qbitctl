@@ -3,52 +3,10 @@
 package tui
 
 import (
-	"encoding/json"
-	"fmt"
-	"strings"
 	"time"
+
+	"github.com/naterator/qbitctl/internal/configfile"
 )
-
-const adaptiveRefreshPreference = "adaptive"
-
-func loadRefreshInterval(path string) (time.Duration, error) {
-	if strings.TrimSpace(path) == "" {
-		return 0, nil
-	}
-	data, err := readPreferences(path, "refresh")
-	if err != nil {
-		return 0, err
-	}
-	if len(data) == 0 {
-		return 0, nil
-	}
-	var disk struct {
-		Interval string `json:"interval"`
-	}
-	if err := json.Unmarshal(data, &disk); err != nil {
-		return 0, err
-	}
-	value := strings.TrimSpace(strings.ToLower(disk.Interval))
-	if value == "" || value == adaptiveRefreshPreference || value == "default" {
-		return 0, nil
-	}
-	interval, err := time.ParseDuration(value)
-	if err != nil || interval <= 0 {
-		if err == nil {
-			err = fmt.Errorf("refresh interval must be positive")
-		}
-		return 0, err
-	}
-	return interval, nil
-}
-
-func saveRefreshInterval(path string, interval time.Duration) error {
-	value := adaptiveRefreshPreference
-	if interval > 0 {
-		value = interval.String()
-	}
-	return writePreferences(path, "refresh", map[string]string{"interval": value})
-}
 
 func (m *model) refreshIntervalLabel() string {
 	if m.refreshIntervalSetting <= 0 {
@@ -66,7 +24,7 @@ func (m *model) setRefreshInterval(interval time.Duration) {
 		m.setNotice("Refresh interval selected for this session", false)
 		return
 	}
-	if err := saveRefreshInterval(m.preferencesPath, interval); err != nil {
+	if err := configfile.SaveRefreshInterval(m.preferencesPath, interval); err != nil {
 		m.setNotice("Could not save refresh interval. "+err.Error(), true)
 		return
 	}
@@ -84,22 +42,7 @@ func (m *model) openRefreshIntervalDialog() {
 
 func (m *model) refreshIntervalInput() string {
 	if m.refreshIntervalSetting <= 0 {
-		return adaptiveRefreshPreference
+		return configfile.AdaptiveRefresh
 	}
 	return m.refreshIntervalSetting.String()
-}
-
-func parseRefreshInterval(value string) (time.Duration, error) {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" || value == adaptiveRefreshPreference || value == "default" || value == "0" {
-		return 0, nil
-	}
-	interval, err := time.ParseDuration(value)
-	if err != nil || interval <= 0 {
-		return 0, fmt.Errorf("refresh interval must be adaptive or a positive duration such as 5s")
-	}
-	if interval < time.Second {
-		return 0, fmt.Errorf("refresh interval must be at least 1s")
-	}
-	return interval, nil
 }

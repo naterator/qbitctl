@@ -2,14 +2,14 @@
 
     Color scheme
 
-    › Default · qbitctl's original palette
+    › Default · Arctic blue-gray
       Ocean · Deep blue with bright cyan accents
       Forest · Calm green terminal garden
       Amber · Warm gold on dark brown
       Rose · Soft rose and plum
       Violet · Purple surfaces with cool highlights
       Monochrome · Quiet grayscale with clear hierarchy
-      Nord · Arctic blue-gray
+      Tookie · qbitctl's original palette
       Dracula · High-contrast purple night
       Solarized · Classic teal and gold
       Gruvbox · Earthy retro terminal colors

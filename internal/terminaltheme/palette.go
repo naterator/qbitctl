@@ -43,8 +43,8 @@ type Palette struct {
 // themeCatalog is initialized once. The order is the order shown in the
 // picker and should remain stable so the list feels familiar between releases.
 var themeCatalog = []Palette{
-	makeTheme(Default, "Default", "qbitctl's original palette",
-		"#1D2531", "#334155", "#242F3F", "#E9EEF5", "#AFBCCD", "#85D7C8", "#9AC8FF", "#536478", "#102A2D", "#92DACD", "#FFAEA9", "#FFD18E", "#151C26", "#718195"),
+	makeTheme(Default, "Default", "Arctic blue-gray",
+		"#2E3440", "#3B4252", "#343C4C", "#ECEFF4", "#AAB4C3", "#8FBCBB", "#88C0D0", "#4C566A", "#1F2D37", "#8FBCBB", "#FF8F9C", "#EBCB8B", "#242933", "#6E798D"),
 	makeTheme("ocean", "Ocean", "Deep blue with bright cyan accents",
 		"#0B1220", "#17233A", "#111D32", "#E5F2FF", "#8EA6C2", "#67E8F9", "#7DD3FC", "#355175", "#07121D", "#67E8F9", "#FB7185", "#FBCB7A", "#070B14", "#637D9D"),
 	makeTheme("forest", "Forest", "Calm green terminal garden",
@@ -57,8 +57,8 @@ var themeCatalog = []Palette{
 		"#171424", "#2A2140", "#211B35", "#F3EEFF", "#B1A6CB", "#C4A7FF", "#B8D5FF", "#5F4C89", "#21143B", "#C4A7FF", "#FF9FAA", "#FFDA8A", "#100C1A", "#80729F"),
 	makeTheme("mono", "Monochrome", "Quiet grayscale with clear hierarchy",
 		"#181A1F", "#2C3038", "#22262D", "#F2F4F7", "#AEB5C0", "#D3DBE6", "#FFFFFF", "#5C6472", "#1A1D23", "#D3DBE6", "#FFB4B4", "#E9C98E", "#101216", "#727A88"),
-	makeTheme("nord", "Nord", "Arctic blue-gray",
-		"#2E3440", "#3B4252", "#343C4C", "#ECEFF4", "#AAB4C3", "#8FBCBB", "#88C0D0", "#4C566A", "#1F2D37", "#8FBCBB", "#FF8F9C", "#EBCB8B", "#242933", "#6E798D"),
+	makeTheme("tookie", "Tookie", "qbitctl's original palette",
+		"#1D2531", "#334155", "#242F3F", "#E9EEF5", "#AFBCCD", "#85D7C8", "#9AC8FF", "#536478", "#102A2D", "#92DACD", "#FFAEA9", "#FFD18E", "#151C26", "#718195"),
 	makeTheme("dracula", "Dracula", "High-contrast purple night",
 		"#1E1F29", "#282A36", "#232532", "#F8F8F2", "#A9A9B7", "#8BE9FD", "#BD93F9", "#6272A4", "#21142E", "#BD93F9", "#FF6E6E", "#FFB86C", "#15161E", "#687091"),
 	makeTheme("solarized", "Solarized", "Classic teal and gold",
@@ -155,6 +155,10 @@ func decode(raw json.RawMessage) (ID, error) {
 	var id string
 	if err := json.Unmarshal(raw, &id); err != nil {
 		return Default, err
+	}
+	// The previous Nord setting now names the Tookie slot.
+	if id == "nord" {
+		id = "tookie"
 	}
 	return Lookup(ID(id)).ID, nil
 }

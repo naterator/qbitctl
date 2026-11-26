@@ -104,19 +104,9 @@ func readSetup(opts Options) (Setup, error) {
 		}
 		setup.HasPassword = password != ""
 	}
-	if value, ok := configValue(object, "ui"); ok {
-		var ui configfile.Object
-		if err := json.Unmarshal(value, &ui); err != nil || ui == nil {
-			if err == nil {
-				err = errors.New("section is not an object")
-			}
-			return Setup{}, fmt.Errorf("decode config field %q: %w", "ui", err)
-		}
-		if value, ok := configValue(ui, "tui_default"); ok {
-			if err := json.Unmarshal(value, &setup.TUIDefault); err != nil {
-				return Setup{}, fmt.Errorf("decode config field %q: %w", "ui.tui_default", err)
-			}
-		}
+	setup.TUIDefault, err = readTUIDefault(object)
+	if err != nil {
+		return Setup{}, err
 	}
 
 	// Command-line values are intentional overrides, but empty flags must not
@@ -156,6 +146,34 @@ func redactSetupURL(value string) string {
 		parsed.User = nil
 	}
 	return parsed.String()
+}
+
+// ReadTUIDefault reads the saved startup preference across profiles.
+func ReadTUIDefault(path string) (bool, error) {
+	object, err := configfile.Read(path)
+	if err != nil {
+		return false, err
+	}
+	return readTUIDefault(object)
+}
+
+func readTUIDefault(object configfile.Object) (bool, error) {
+	var enabled bool
+	if value, ok := configValue(object, "ui"); ok {
+		var ui configfile.Object
+		if err := json.Unmarshal(value, &ui); err != nil || ui == nil {
+			if err == nil {
+				err = errors.New("section is not an object")
+			}
+			return false, fmt.Errorf("decode config field %q: %w", "ui", err)
+		}
+		if value, ok := configValue(ui, "tui_default"); ok {
+			if err := json.Unmarshal(value, &enabled); err != nil {
+				return false, fmt.Errorf("decode config field %q: %w", "ui.tui_default", err)
+			}
+		}
+	}
+	return enabled, nil
 }
 
 // SetTUIDefault changes only ui.tui_default. It intentionally does not
@@ -525,13 +543,9 @@ func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, 
 }
 
 // InteractiveConfigProfileContext is the profile-aware setup flow used by
-// `qbitctl config --profile NAME`. The empty profile preserves the legacy
+// `qbitctl profile setup NAME`. The empty profile preserves the legacy
 // single-server behavior.
 func InteractiveConfigProfileContext(ctx context.Context, in io.Reader, out io.Writer, hiddenInput HiddenInputFunc, path, profile string) (string, error) {
-	if hiddenInput == nil {
-		hiddenInput = func(fn func() (string, error)) (string, error) { return fn() }
-	}
-
 	profilePath := path
 	if profilePath == "" {
 		profilePath = defaultAuthPath()
@@ -540,37 +554,10 @@ func InteractiveConfigProfileContext(ctx context.Context, in io.Reader, out io.W
 	if err != nil {
 		return "", err
 	}
-	urlDefault := defaultConfigURL
-	if strings.TrimSpace(setup.URL) != "" {
-		normalizedURL, validationErr := ValidateConfigURL(setup.URL)
-		if validationErr != nil {
-			fmt.Fprintf(out, "[WARN] Saved URL is invalid (%v). Enter a new URL.\n", validationErr)
-		} else {
-			urlDefault = normalizedURL
-		}
-	}
-	userDefault := setup.User
-	if userDefault == "" {
-		userDefault = "admin"
-	}
-
 	reader := bufio.NewReader(in)
-	urlValue, err := promptValidatedLine(out, reader, fmt.Sprintf("URL [%s]: ", urlDefault), urlDefault, ValidateConfigURL)
+	creds, err := PromptProfileCredentials(reader, out, hiddenInput, Credentials{}, setup)
 	if err != nil {
 		return "", err
-	}
-	userValue, err := promptLineTo(out, reader, fmt.Sprintf("Username [%s]: ", userDefault), userDefault)
-	if err != nil {
-		return "", err
-	}
-	passwordValue, err := hiddenInput(func() (string, error) {
-		return promptLineTo(out, reader, "Password: ", "")
-	})
-	if err != nil {
-		return "", err
-	}
-	if passwordValue == "" {
-		return "", ErrSetupPasswordRequired
 	}
 
 	selectedPath := path
@@ -584,14 +571,54 @@ func InteractiveConfigProfileContext(ctx context.Context, in io.Reader, out io.W
 		return "", errors.New("config path is empty")
 	}
 
-	app, err := connectAndSaveSetupWithCAProfile(ctx, selectedPath, profile, Credentials{
-		URL:  urlValue,
-		User: userValue,
-		Pass: passwordValue,
-	}, "", nil, false)
+	app, err := connectAndSaveSetupWithCAProfile(ctx, selectedPath, profile, creds, "", nil, false)
 	if err != nil {
 		return "", err
 	}
 	app.Logout()
 	return selectedPath, nil
+}
+
+// PromptProfileCredentials collects missing fields and leaves supplied fields
+// intact. The default setup provides optional URL and username suggestions.
+func PromptProfileCredentials(reader *bufio.Reader, out io.Writer, hiddenInput HiddenInputFunc, creds Credentials, defaults Setup) (Credentials, error) {
+	if hiddenInput == nil {
+		hiddenInput = func(fn func() (string, error)) (string, error) { return fn() }
+	}
+	var err error
+	if creds.URL == "" {
+		urlDefault := defaultConfigURL
+		if strings.TrimSpace(defaults.URL) != "" {
+			normalized, validationErr := ValidateConfigURL(defaults.URL)
+			if validationErr != nil {
+				fmt.Fprintf(out, "[WARN] Saved URL is invalid (%v). Enter a new URL.\n", validationErr)
+			} else {
+				urlDefault = normalized
+			}
+		}
+		creds.URL, err = promptValidatedLine(out, reader, fmt.Sprintf("URL [%s]: ", urlDefault), urlDefault, ValidateConfigURL)
+		if err != nil {
+			return Credentials{}, err
+		}
+	}
+	if creds.User == "" {
+		userDefault := defaults.User
+		if userDefault == "" {
+			userDefault = "admin"
+		}
+		creds.User, err = promptLineTo(out, reader, fmt.Sprintf("Username [%s]: ", userDefault), userDefault)
+		if err != nil {
+			return Credentials{}, err
+		}
+	}
+	if creds.Pass == "" {
+		creds.Pass, err = hiddenInput(func() (string, error) { return promptLineTo(out, reader, "Password: ", "") })
+		if err != nil {
+			return Credentials{}, err
+		}
+	}
+	if creds.Pass == "" {
+		return Credentials{}, ErrSetupPasswordRequired
+	}
+	return creds, nil
 }

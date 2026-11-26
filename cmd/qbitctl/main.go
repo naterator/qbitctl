@@ -113,14 +113,7 @@ func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*co
 		}
 		authOpts := *opts
 		authOpts.UseCompatibilityCache = true
-		if interactiveWorkspace(cmd) {
-			if setup, err := qbt.ReadSetup(authOpts); err == nil && !setup.Ready() {
-				finished, err := firstRunSetup(cmd, &authOpts, setup.Path)
-				if finished || err != nil {
-					return err
-				}
-			}
-		}
+
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
@@ -175,6 +168,9 @@ func newRootCmd() *cobra.Command {
 			if cmd.Name() == "batch" && cmd.Flags().Changed("pass-stdin") && (len(args) == 0 || args[0] == "-") {
 				return result(cmd, codedErr(exitBadArgs, "--pass-stdin requires a batch file because both inputs use standard input"))
 			}
+			if cmd.Annotations[stdinModeAnnotation] == stdinProfilePassword {
+				return nil
+			}
 			return result(cmd, resolvePassword(cmd, &opts, passStdin))
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -211,6 +207,7 @@ func newRootCmd() *cobra.Command {
 		newProfileCmd(&opts),
 		newTUIDefaultCmd(&opts),
 		newCompletionCmd(rootCmd),
+		newDebugCmd(),
 		newVersionCmd(),
 		newUpdateCmd(),
 		newBatchCmd(&opts),
@@ -230,7 +227,7 @@ func newRootCmd() *cobra.Command {
 		newSetCmd(&opts),
 		newHashCmd(&opts, "start <hash...>", "Start one or more torrents", []string{"st"}, (*App).StartTorrent),
 		newHashCmd(&opts, "pause <hash...>", "Pause one or more torrents", []string{"p", "pa"}, (*App).PauseTorrent),
-		newHashCmd(&opts, "force-start <hash...>", "Force start one or more torrents", []string{"f", "fo", "fs"}, (*App).ForceStartTorrent),
+		newHashCmd(&opts, "force <hash...>", "Force start one or more torrents", []string{"force-start", "f", "fo", "fs"}, (*App).ForceStartTorrent),
 		newRecheckCmd(&opts),
 		newReannounceCmd(&opts),
 		newQueueCmd(&opts),
@@ -245,6 +242,14 @@ func newRootCmd() *cobra.Command {
 	for _, cmd := range rootCmd.Commands() {
 		if cmd.Name() == "help" {
 			cmd.Aliases = []string{"h", "he"}
+			original := cmd.Run
+			cmd.RunE = func(cmd *cobra.Command, args []string) error {
+				if len(args) > 0 && args[0] == "debug" {
+					return errUnknownDebug
+				}
+				original(cmd, args)
+				return nil
+			}
 			break
 		}
 	}

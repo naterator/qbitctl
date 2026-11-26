@@ -12,6 +12,10 @@ import (
 	"github.com/naterator/qbitctl/internal/terminaltheme"
 )
 
+// Render in the palette with distinct role colors so the final frame can
+// remap each role even when the selected palette shares colors across roles.
+const renderThemeID terminaltheme.ID = "tookie"
+
 func (m *model) activeThemeID() terminaltheme.ID {
 	if terminaltheme.Known(m.themePreview) {
 		return m.themePreview
@@ -100,7 +104,7 @@ func colorKey(value color.Color) (themeColorKey, bool) {
 }
 
 func themeColorMap(theme terminaltheme.Palette) map[themeColorKey]color.Color {
-	base := terminaltheme.Lookup(terminaltheme.Default)
+	base := renderPalette
 	roles := []struct {
 		from color.Color
 		to   color.Color
@@ -120,17 +124,12 @@ func themeColorMap(theme terminaltheme.Palette) map[themeColorKey]color.Color {
 	return result
 }
 
-// applyTheme remaps fully painted cells after compositing. Default returns
-// the original string exactly, preserving the current palette as the
-// compatibility baseline and avoiding needless ANSI parsing on every frame.
+// applyTheme remaps fully painted cells after compositing.
 func applyTheme(content string, width, height int, id terminaltheme.ID) string {
-	if id == "" || id == terminaltheme.Default || width < 1 || height < 1 {
+	if id == renderThemeID || width < 1 || height < 1 {
 		return content
 	}
 	theme := terminaltheme.Lookup(id)
-	if theme.ID == terminaltheme.Default {
-		return content
-	}
 	canvas := lipgloss.NewCanvas(width, height).Compose(lipgloss.NewLayer(content))
 	colors := themeColorMap(theme)
 	for y := 0; y < height; y++ {

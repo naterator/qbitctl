@@ -9,14 +9,14 @@
       Active profile
       Startup profil  Color scheme
       CA bundle
-                      › Default · qbitctl's original palette
+                      › Default · Arctic blue-gray
    View                 Ocean · Deep blue with bright cyan accents
       TUI by default    Forest · Calm green terminal garden
       Color scheme      Amber · Warm gold on dark brown
       Data units        Rose · Soft rose and plum
       Refresh interv    Violet · Purple surfaces with cool highlights
                         Monochrome · Quiet grayscale with clear hierarchy
-   Search               Nord · Arctic blue-gray
+   Search               Tookie · qbitctl's original palette
       Default provid    Dracula · High-contrast purple night
                         Solarized · Classic teal and gold
    Files                Gruvbox · Earthy retro terminal colors

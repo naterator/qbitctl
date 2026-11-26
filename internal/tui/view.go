@@ -19,20 +19,20 @@ import (
 )
 
 var (
-	defaultPalette  = terminaltheme.Lookup(terminaltheme.Default)
-	viewCanvasColor = defaultPalette.Canvas
-	viewPanelColor  = defaultPalette.Panel
-	viewFieldColor  = defaultPalette.Field
-	viewTextStyle   = lipgloss.NewStyle().Foreground(defaultPalette.Text)
+	renderPalette   = terminaltheme.Lookup(renderThemeID)
+	viewCanvasColor = renderPalette.Canvas
+	viewPanelColor  = renderPalette.Panel
+	viewFieldColor  = renderPalette.Field
+	viewTextStyle   = lipgloss.NewStyle().Foreground(renderPalette.Text)
 	viewTitleStyle  = viewTextStyle.Bold(true)
-	viewAccentStyle = lipgloss.NewStyle().Foreground(defaultPalette.Accent)
-	viewKeyStyle    = lipgloss.NewStyle().Foreground(defaultPalette.Key).Bold(true)
-	viewMutedStyle  = lipgloss.NewStyle().Foreground(defaultPalette.Muted)
-	viewRuleStyle   = lipgloss.NewStyle().Foreground(defaultPalette.Rule)
-	viewSelectedSty = lipgloss.NewStyle().Foreground(defaultPalette.SelectedForeground).
-			Background(defaultPalette.SelectedBackground).Bold(true)
-	viewErrorStyle = lipgloss.NewStyle().Foreground(defaultPalette.Error).Bold(true)
-	viewWarnStyle  = lipgloss.NewStyle().Foreground(defaultPalette.Warning)
+	viewAccentStyle = lipgloss.NewStyle().Foreground(renderPalette.Accent)
+	viewKeyStyle    = lipgloss.NewStyle().Foreground(renderPalette.Key).Bold(true)
+	viewMutedStyle  = lipgloss.NewStyle().Foreground(renderPalette.Muted)
+	viewRuleStyle   = lipgloss.NewStyle().Foreground(renderPalette.Rule)
+	viewSelectedSty = lipgloss.NewStyle().Foreground(renderPalette.SelectedForeground).
+			Background(renderPalette.SelectedBackground).Bold(true)
+	viewErrorStyle = lipgloss.NewStyle().Foreground(renderPalette.Error).Bold(true)
+	viewWarnStyle  = lipgloss.NewStyle().Foreground(renderPalette.Warning)
 )
 
 func viewInputStyle(background color.Color) textinput.Styles {
@@ -67,7 +67,7 @@ func (m *model) View() tea.View {
 	if m.dialog != nil && m.dialog.kind != dialogHelp {
 		panel := m.dialogView(width, height)
 		backdrop := lipgloss.NewLayer(viewSurface(ansi.Strip(content), width, height,
-			defaultPalette.ScrimBackground, defaultPalette.ScrimForeground))
+			renderPalette.ScrimBackground, renderPalette.ScrimForeground))
 		overlay := lipgloss.NewLayer(panel).
 			X(max(0, (width-lipgloss.Width(panel))/2)).
 			Y(max(0, (height-lipgloss.Height(panel))/2)).Z(1)

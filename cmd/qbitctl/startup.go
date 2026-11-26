@@ -1,11 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
-	"io"
-	"strings"
 
 	qbt "github.com/naterator/qbitctl/pkg/client"
 	"github.com/spf13/cobra"
@@ -29,52 +25,7 @@ func runDefault(cmd *cobra.Command, opts CLIOptions) error {
 	if setup.TUIDefault {
 		return runTUIFunc(cmd, opts)
 	}
-	if !setup.Ready() {
-		finished, err := firstRunSetup(cmd, &opts, setup.Path)
-		if finished || err != nil {
-			return err
-		}
-	}
 	return cmd.Help()
-}
-
-// firstRunSetup returns whether the chosen interface already fulfilled the
-// invocation. The text wizard leaves the original command to run afterwards.
-func firstRunSetup(cmd *cobra.Command, opts *CLIOptions, path string) (bool, error) {
-	in := cmd.InOrStdin()
-	out := cmd.ErrOrStderr()
-	reader := bufio.NewReader(in)
-	for {
-		fmt.Fprint(out, "Choose setup  [1] Terminal UI  [2] Text  [Enter: 1] ")
-		choice, err := reader.ReadString('\n')
-		if err != nil {
-			if errors.Is(err, io.EOF) && strings.TrimSpace(choice) == "" {
-				return true, nil
-			}
-			if !errors.Is(err, io.EOF) {
-				return true, result(cmd, err)
-			}
-		}
-		switch strings.ToLower(strings.TrimSpace(choice)) {
-		case "", "1", "tui":
-			return true, runTUIFunc(cmd, *opts)
-		case "2", "text":
-			savedPath, err := qbt.InteractiveConfigContext(cmd.Context(), reader, out, makeHiddenInput(in, out), path)
-			if err != nil {
-				return true, result(cmd, err)
-			}
-			opts.ConfigPath = savedPath
-			opts.URL, opts.User, opts.Pass = "", "", ""
-			return false, nil
-		case "q", "quit", "cancel":
-			return true, nil
-		default:
-			fmt.Fprintln(out, "Enter 1 for the TUI, 2 for text setup, or q to cancel.")
-			if errors.Is(err, io.EOF) {
-				return true, nil
-			}
-		}
-	}
 }
 
 func newTUIDefaultCmd(opts *CLIOptions) *cobra.Command {
@@ -82,6 +33,7 @@ func newTUIDefaultCmd(opts *CLIOptions) *cobra.Command {
 		Use:       "tui-default [on|off|status]",
 		Short:     "Choose whether bare qbitctl opens the terminal UI",
 		GroupID:   "setup",
+		Hidden:    true,
 		Args:      cobra.MaximumNArgs(1),
 		ValidArgs: []string{"on", "off", "status"},
 		RunE: func(cmd *cobra.Command, args []string) error {

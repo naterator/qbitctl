@@ -57,7 +57,7 @@ func TestPasswordStdinRejectsInvalidInput(t *testing.T) {
 		{"blank first line", "\r\nfixture-secret\n", "no password supplied", []string{"list"}, false},
 		{"too long", longLine, "exceeds 4096 bytes", []string{"list"}, false},
 		{"conflicting flags", "fixture-secret\n", "mutually exclusive", []string{"config", "write", "-p", "fixture-flag"}, true},
-		{"text setup", "fixture-secret\n", "cannot be used with qbitctl config", []string{"config"}, true},
+		{"text setup", "fixture-secret\n", "cannot be used with qbitctl profile setup", []string{"profile", "setup"}, true},
 		{"TUI", "fixture-secret\n", "cannot be used with qbitctl tui", []string{"tui"}, true},
 		{"bare command", "fixture-secret\n", "cannot be used with qbitctl", nil, true},
 	}

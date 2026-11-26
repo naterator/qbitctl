@@ -7,24 +7,25 @@ import (
 	"math"
 	"strings"
 
+	"github.com/naterator/qbitctl/internal/configfile"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
 type queueSort string
 
 const (
-	queueActiveFirst  queueSort = "active-first"
-	queueNameAsc      queueSort = "name-asc"
-	queueNameDesc     queueSort = "name-desc"
-	queueProgressAsc  queueSort = "progress-asc"
-	queueProgressDesc queueSort = "progress-desc"
-	queueStateAsc     queueSort = "state-asc"
-	queueStateDesc    queueSort = "state-desc"
-	queueSizeDesc     queueSort = "size-desc"
-	queueRatioDesc    queueSort = "ratio-desc"
-	queueETAAsc       queueSort = "eta-asc"
-	queueDownloadDesc queueSort = "download-speed-desc"
-	queueUploadDesc   queueSort = "upload-speed-desc"
+	queueActiveFirst  queueSort = configfile.QueueActiveFirst
+	queueNameAsc      queueSort = configfile.QueueNameAsc
+	queueNameDesc     queueSort = configfile.QueueNameDesc
+	queueProgressAsc  queueSort = configfile.QueueProgressAsc
+	queueProgressDesc queueSort = configfile.QueueProgressDesc
+	queueStateAsc     queueSort = configfile.QueueStateAsc
+	queueStateDesc    queueSort = configfile.QueueStateDesc
+	queueSizeDesc     queueSort = configfile.QueueSizeDesc
+	queueRatioDesc    queueSort = configfile.QueueRatioDesc
+	queueETAAsc       queueSort = configfile.QueueETAAsc
+	queueDownloadDesc queueSort = configfile.QueueDownloadDesc
+	queueUploadDesc   queueSort = configfile.QueueUploadDesc
 )
 
 var queueSortChoices = []struct {

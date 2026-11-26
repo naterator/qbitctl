@@ -130,7 +130,7 @@ func validateBatchCommand(cmd *cobra.Command) error {
 		group = group.Parent()
 	}
 	switch group.Name() {
-	case "add", "categories", "delete", "files", "force-start", "get", "info", "list", "move", "pause",
+	case "add", "categories", "delete", "files", "force", "get", "info", "list", "move", "pause",
 		"peers", "queue", "reannounce", "recheck", "remove", "rename", "search", "set",
 		"show", "start", "tags", "trackers", "transfer", "version":
 	default:

@@ -31,3 +31,23 @@ func TestLoadDefaultsForMissingOrUnknownTheme(t *testing.T) {
 		})
 	}
 }
+
+func TestReassignedPalettesAndLegacyNordID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"ui":{"theme":"nord"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := Load(path); err != nil || id != "tookie" {
+		t.Fatalf("legacy Nord = %q, %v, want tookie", id, err)
+	}
+	if Known("nord") || !Known("tookie") {
+		t.Fatal("theme catalog should offer Tookie")
+	}
+	const opaque = 0xffff
+	if r, g, b, a := Lookup(Default).Canvas.RGBA(); r != 0x2e2e || g != 0x3434 || b != 0x4040 || a != opaque {
+		t.Fatal("Default did not inherit the former Nord canvas")
+	}
+	if r, g, b, a := Lookup("tookie").Canvas.RGBA(); r != 0x1d1d || g != 0x2525 || b != 0x3131 || a != opaque {
+		t.Fatal("Tookie did not inherit the former Default canvas")
+	}
+}

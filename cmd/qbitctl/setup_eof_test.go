@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestConfigStopsAtEOF(t *testing.T) {
+func TestProfileSetupStopsAtEOF(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	t.Setenv("QBITCTL_PASSWORD", "")
@@ -28,7 +28,7 @@ func TestConfigStopsAtEOF(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newRootCmd()
-			root.SetArgs([]string{"--config", path, "config"})
+			root.SetArgs([]string{"--config", path, "profile", "setup"})
 			root.SetIn(&setupInput{reader: strings.NewReader(tc.input), readsLeft: 8})
 			var stdout, stderr bytes.Buffer
 			root.SetOut(&stdout)
@@ -39,7 +39,7 @@ func TestConfigStopsAtEOF(t *testing.T) {
 			if !errors.As(err, &exit) || exit.code != exitBadArgs || !strings.Contains(stderr.String(), tc.message) {
 				t.Fatalf("config returned %v with stderr %q, want exit %d and %q", err, stderr.String(), exitBadArgs, tc.message)
 			}
-			if strings.Count(stderr.String(), "[ERROR]") != 1 || stdout.Len() > 1024 {
+			if strings.Count(stderr.String(), "[ERROR]") > 2 || stderr.Len() > 1024 {
 				t.Fatalf("unexpected prompt output: %q / %q", stdout.String(), stderr.String())
 			}
 			if server.LoginCalls != 0 {

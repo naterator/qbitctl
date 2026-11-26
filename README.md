@@ -23,7 +23,7 @@ to your user PATH. [Download install.ps1](https://raw.githubusercontent.com/nate
 ## Quick start
 
 Open the TUI and enter your qBittorrent Web UI URL, username, and password when
-prompted. For text setup, use `qbitctl config`.
+prompted. To set up a named connection from the CLI, run `qbitctl profile add NAME`.
 
 ```bash
 qbitctl tui
@@ -54,7 +54,7 @@ seconds when idle. The command palette can pause automatic refresh, and
 `r` still refreshes on demand. Use the queue filters to select a state,
 category, or tag. Copy a selected torrent's hash or magnet link from the
 command palette when your terminal supports OSC 52. Set
-`qbitctl tui-default on` to open the TUI when you run `qbitctl` by itself.
+`qbitctl config tui-default set true` to open the TUI when you run `qbitctl` by itself.
 
 The Server tab shows global limits and the active speed mode. Switch modes
 to edit the other preset. The Peers view can ban a selected peer after you
@@ -98,10 +98,11 @@ unambiguous prefix.
 | `transfer` | Inspect speed limits, edit the active limits, or switch between normal and alternate mode. |
 | `categories`, `tags` | Manage server categories and tags or change torrent tag assignments. |
 | `set`, `move` | Change torrent settings or move data on the server. |
-| `start`, `pause`, `force-start` | Control one or more torrents. |
+| `start`, `pause`, `force` | Control one or more torrents. |
 | `recheck`, `reannounce`, `rename`, `queue` | Verify data, refresh tracker announcements, rename a torrent, or change its place in the queue. |
 | `remove`, `delete` | Remove a torrent. `delete` also removes its files. |
-| `config`, `profile`, `tui-default` | Manage saved connections and startup behavior. |
+| `config` | Inspect and change saved preferences. |
+| `profile` | Set up and manage server connections. |
 | `update`, `version`, `completion` | Update qbitctl, show its version, or generate shell completions. |
 
 ```bash
@@ -183,7 +184,7 @@ qbitctl --units human search "Ubuntu 24.04"
 
 ## Authentication
 
-`qbitctl config` tests the connection before saving it. The usual config is
+`qbitctl profile add NAME` tests the connection before saving it. The usual config is
 `~/.config/qbitctl/config.json`. Set `XDG_CONFIG_HOME` to change its base path
 or use `--config` to pick a file. qbitctl falls back to `./config.json` when
 it can't find the default file.
@@ -202,15 +203,42 @@ profiles.
 To use a different server or account, pass `--url` and `--user` with an
 explicit password. URLs can include a reverse-proxy path prefix. For scripts,
 pass the password on stdin or set `QBITCTL_PASSWORD` for that invocation.
-Use `config write` to save settings from a script.
+Use `profile write` to save connection settings without a login check.
 
 ```bash
 printf '%s\n' "$QBT_PASS" | qbitctl -u https://nas.example/qbt/ -U admin --pass-stdin list
 ```
 
 For a private certificate authority, add `--ca-file /path/to/ca.pem` to the
-command. Save it with `config write` or in the connection settings in the
+command. Save it with `profile add --ca-file`, `profile write`, or in the connection settings in the
 TUI. qbitctl adds the bundle to system trust and checks the server hostname.
+
+## Saved preferences
+
+`qbitctl config` lists the available settings. A setting name by itself shows
+its commands. Use `get` to print the current value, `set` to save a value, and
+`list` to see the choices for settings that offer them.
+
+```bash
+qbitctl config tui-default set true
+qbitctl config color-scheme list
+qbitctl config color-scheme set tookie
+qbitctl config data-units get
+qbitctl config refresh-interval set adaptive
+qbitctl config default-search-plugin list
+```
+
+The default search provider is saved per profile. Its list shows enabled and
+disabled server plugins in the TUI's order. Set an enabled plugin by ID or
+use `enabled` or `all`. The color-scheme list shows the colors for each
+named palette.
+
+```bash
+printf '%s\n' "$QBT_PASS" | qbitctl profile add example --url https://nas.example/qbt/ --user admin --password -
+```
+
+Run `qbitctl profile add` to see its options. Run
+`qbitctl profile setup NAME` to re-enter an existing connection's credentials.
 
 ## Updates and install options
 

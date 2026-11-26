@@ -12,38 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newConfigCmd(opts *CLIOptions) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:         "config",
-		Aliases:     []string{"c", "co"},
-		Short:       "Manage qBittorrent credentials",
-		GroupID:     "setup",
-		Args:        cobra.NoArgs,
-		Annotations: map[string]string{stdinModeAnnotation: stdinInteractive},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			in, out := cmd.InOrStdin(), cmd.OutOrStdout()
-			path, err := qbt.InteractiveConfigProfileContext(cmd.Context(), in, out, makeHiddenInput(in, out), opts.ConfigPath, opts.Profile)
-			if err != nil {
-				return result(cmd, err)
-			}
-			_, err = fmt.Fprintf(out, "Saved config to %s\n", path)
-			return err
-		},
-	}
-	writeOutput := ""
-	writeCmd := &cobra.Command{
-		Use:   "write",
-		Short: "Write a config file non-interactively",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return result(cmd, qbt.ExecuteConfigWrite(*opts, writeOutput, cmd.ErrOrStderr()))
-		},
-	}
-	writeCmd.Flags().StringVarP(&writeOutput, "output", "o", "", "Path to write config.json")
-	cmd.AddCommand(writeCmd)
-	return cmd
-}
-
 func newCompletionCmd(rootCmd *cobra.Command) *cobra.Command {
 	return &cobra.Command{
 		Use:       "completion [bash|zsh|fish|powershell]",

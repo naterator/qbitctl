@@ -55,53 +55,6 @@ func newProfileCmd(opts *CLIOptions) *cobra.Command {
 		},
 	}
 
-	add := &cobra.Command{
-		Use:   "add NAME",
-		Short: "Authenticate and save a named server profile",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			name := strings.TrimSpace(args[0])
-			if err := qbt.ValidateProfileName(name); err != nil {
-				return result(cmd, codedErr(exitBadArgs, err.Error()))
-			}
-			setupOpts := *opts
-			setupOpts.Profile = ""
-			setup, err := qbt.ReadSetup(setupOpts)
-			if err != nil {
-				return result(cmd, err)
-			}
-			profiles, _, err := qbt.ReadProfiles(setup.Path)
-			if err != nil {
-				return result(cmd, err)
-			}
-			for _, profile := range profiles {
-				if profile.Name == name {
-					return result(cmd, codedErr(exitBadArgs, fmt.Sprintf("profile %q already exists", name)))
-				}
-			}
-			urlValue, userValue := strings.TrimSpace(opts.URL), strings.TrimSpace(opts.User)
-			if urlValue == "" {
-				urlValue = setup.URL
-			}
-			if userValue == "" {
-				userValue = setup.User
-			}
-			if _, err := qbt.ValidateConfigURL(urlValue); err != nil {
-				return result(cmd, codedErr(exitBadArgs, err.Error()))
-			}
-			if userValue == "" || opts.Pass == "" {
-				return result(cmd, codedErr(exitBadArgs, "profile add requires --user and --pass (or QBITCTL_PASSWORD) unless they are saved in the active profile"))
-			}
-			app, err := qbt.ConnectAndAddProfileSetup(cmd.Context(), setup.Path, name, qbt.Credentials{URL: urlValue, User: userValue, Pass: opts.Pass}, opts.CAFile)
-			if err != nil {
-				return result(cmd, err)
-			}
-			app.Logout()
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Saved profile %s to %s\n", name, setup.Path)
-			return err
-		},
-	}
-
 	use := &cobra.Command{
 		Use:               "use NAME",
 		Short:             "Set the startup default profile",
@@ -144,7 +97,7 @@ func newProfileCmd(opts *CLIOptions) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(list, add, use, remove)
+	cmd.AddCommand(list, newProfileAddCmd(opts), newProfileSetupCmd(opts), newProfileWriteCmd(opts), use, remove)
 	return cmd
 }
 

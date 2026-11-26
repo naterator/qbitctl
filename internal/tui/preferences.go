@@ -47,7 +47,7 @@ func (m *model) loadPreferences(path string) {
 	if err != nil {
 		m.preferenceNotice(fmt.Errorf("queue column preferences: %w", err))
 	}
-	interval, err := loadRefreshInterval(path)
+	interval, err := configfile.ReadRefreshInterval(path)
 	m.refreshIntervalSetting = interval
 	if err != nil {
 		m.preferenceNotice(fmt.Errorf("refresh preferences: %w", err))
@@ -139,56 +139,6 @@ func (m *model) preferenceNotice(err error) {
 	m.setNotice(message, true)
 }
 
-func readPreferences(path, section string) (json.RawMessage, error) {
-	root, err := configfile.Read(path)
-	if err != nil {
-		return nil, err
-	}
-	ui, err := root.Child("ui")
-	if err != nil {
-		return nil, err
-	}
-	return ui[section], nil
-}
-
-func updatePreferences(path, section string, edit func(configfile.Object) (bool, error)) error {
-	return configfile.Update(path, func(root configfile.Object) (bool, error) {
-		ui, err := root.Child("ui")
-		if err != nil {
-			return false, err
-		}
-		fields, err := ui.Child(section)
-		if err != nil {
-			return false, err
-		}
-		changed, err := edit(fields)
-		if err != nil || !changed {
-			return false, err
-		}
-		update, err := json.Marshal(fields)
-		if err != nil {
-			return false, err
-		}
-		ui[section] = update
-		root["ui"], err = json.Marshal(ui)
-		return err == nil, err
-	})
-}
-
-func writePreferences(path, section string, values map[string]string) error {
-	return updatePreferences(path, section, func(fields configfile.Object) (bool, error) {
-		changed := false
-		for key, value := range values {
-			raw, _ := json.Marshal(value)
-			if !bytes.Equal(fields[key], raw) {
-				fields[key] = raw
-				changed = true
-			}
-		}
-		return changed, nil
-	})
-}
-
 func migratePreferences(path, legacyDir string) error {
 	return errors.Join(
 		migratePreferenceFile(path, "queue", filepath.Join(legacyDir, queuePreferencesFileName),
@@ -223,7 +173,7 @@ func migratePreferenceFile(path, section, legacyPath string, validate func(json.
 		return fmt.Errorf("invalid %s: %w", filepath.Base(legacyPath), err)
 	}
 
-	if err := updatePreferences(path, section, func(fields configfile.Object) (bool, error) {
+	if err := configfile.UpdateUISection(path, section, func(fields configfile.Object) (bool, error) {
 		changed := false
 		for key, value := range legacy {
 			if _, exists := fields[key]; !exists {

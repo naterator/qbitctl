@@ -732,13 +732,13 @@ func TestDeleteRejectsBlankSelectorsWithOneTorrent(t *testing.T) {
 	}
 }
 
-func TestConfigPromptsUseCobraStreamsAndSelectedPath(t *testing.T) {
+func TestProfileSetupUsesCobraStreamsAndSelectedPath(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	t.Setenv("QBITCTL_MASTER_KEY", "config-prompt-test-key")
 	path := filepath.Join(t.TempDir(), "alternate.json")
 	cmd := newRootCmd()
-	cmd.SetArgs([]string{"--config", path, "config"})
+	cmd.SetArgs([]string{"--config", path, "profile", "setup"})
 	cmd.SetIn(strings.NewReader(server.creds().URL + "\nadmin\nsecret\n"))
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)

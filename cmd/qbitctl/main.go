@@ -69,11 +69,20 @@ func wrapFields(fields []string, indent string, maxWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
+func printCLIError(cmd *cobra.Command, err error) {
+	prefix := "[ERROR]"
+	if _, inBatch := batchAppFromContext(cmd.Context()); !inBatch && cmd.Name() != "batch" {
+		style := newCLIStyle(cmd.ErrOrStderr(), commandConfigPath(cmd), false)
+		prefix = style.diagnostic(prefix)
+	}
+	cmd.PrintErrf("%s %v\n", prefix, err)
+}
+
 func result(cmd *cobra.Command, err error) error {
 	if err == nil {
 		return nil
 	}
-	cmd.PrintErrf("[ERROR] %v\n", err)
+	printCLIError(cmd, err)
 	var coded *qbt.CodedError
 	if errors.As(err, &coded) {
 		return exitError{code: coded.Code}
@@ -115,7 +124,7 @@ func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*co
 		ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 
-		app, err := qbt.NewClientWithOutput(ctx, &authOpts, cmd.OutOrStdout(), cmd.ErrOrStderr())
+		app, err := qbt.NewClientWithOutput(ctx, &authOpts, cliOutput(cmd.OutOrStdout(), authOpts.ConfigPath), cmd.ErrOrStderr())
 		if err != nil {
 			return result(cmd, err)
 		}
@@ -255,7 +264,7 @@ func execute() int {
 		return codeErr.code
 	}
 
-	cmd.PrintErrf("[ERROR] %v\n", err)
+	printCLIError(cmd, err)
 	return exitBadArgs
 }
 

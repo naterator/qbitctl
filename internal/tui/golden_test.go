@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/terminaltheme"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -48,7 +49,7 @@ func TestStyledGoldenThemes(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("COLORTERM", "truecolor")
-	for _, theme := range []themeID{defaultThemeID, "high-contrast"} {
+	for _, theme := range []terminaltheme.ID{terminaltheme.Default, "high-contrast"} {
 		t.Run(string(theme), func(t *testing.T) {
 			m := newModel(t.Context(), nil)
 			m.width, m.height, m.theme = 80, 24, theme

@@ -65,8 +65,11 @@ Config groups settings under **Connection**, **View**, and **Search**, with a
 ↑/↓ or `j`/`k` to move and Enter to change the selected setting. Under View,
 **Data units** switches between human-readable sizes and speeds (the
 default) and exact bytes and bytes per second. qbitctl saves the choice for
-both the TUI and CLI. View also has options for extra queue columns and a
-fixed refresh interval.
+both the TUI and CLI. **Color scheme** applies to the TUI and CLI terminal
+output across all server profiles in the same config file. Both start with
+**Default**. The CLI honors `NO_COLOR`, and JSON and other structured output
+stay plain. View also has options for extra queue columns and a fixed
+refresh interval.
 
 On the Search tab, the query and current provider are just below the tabs.
 Press `p` (**Providers**) to choose **Enabled search plugins** (the default),

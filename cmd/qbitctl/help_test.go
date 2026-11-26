@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/terminaltheme"
 	"github.com/spf13/cobra"
 )
 
@@ -34,23 +37,55 @@ func TestQbitctlHelpIsGroupedAndPlainWhenRedirected(t *testing.T) {
 	}
 }
 
-func TestQbitctlHelpCanBeForcedIntoColor(t *testing.T) {
+func TestQbitctlHelpUsesTheSharedTheme(t *testing.T) {
 	withoutEnvironment(t, "NO_COLOR")
 	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("COLORTERM", "truecolor")
 	t.Setenv("FORCE_COLOR", "1")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 
-	root := testHelpCommandTree()
-	var output bytes.Buffer
-	root.SetOut(&output)
-	root.SetArgs([]string{"--help"})
-	installHelp(root)
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("execute help: %v", err)
+	run := func(args ...string) string {
+		t.Helper()
+		root := newRootCmd()
+		var output bytes.Buffer
+		root.SetOut(&output)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("execute help: %v", err)
+		}
+		return output.String()
 	}
-	got := output.String()
-	if !strings.Contains(got, "\x1b[38;5;81m") || !strings.Contains(got, "\x1b[38;5;116m") {
-		t.Fatalf("forced-color help is missing heading/command colors:\n%q", got)
+
+	def := run("help", "list")
+	if !strings.Contains(def, "\x1b[38;2;154;200;255;1mUsage:") ||
+		!strings.Contains(def, "\x1b[38;2;133;215;200m") {
+		t.Fatalf("help is missing Default's key and accent colors: %q", def)
+	}
+
+	fallback := "config.json"
+	if err := terminaltheme.Save(fallback, "nord"); err != nil {
+		t.Fatal(err)
+	}
+	nord := run("help", "list")
+	if !strings.Contains(nord, "\x1b[38;2;136;192;208;1mUsage:") {
+		t.Fatalf("help did not use the fallback config's Nord theme: %q", nord)
+	}
+
+	explicit := filepath.Join(t.TempDir(), "theme.json")
+	if err := terminaltheme.Save(explicit, "ocean"); err != nil {
+		t.Fatal(err)
+	}
+	ocean := run("--config", explicit, "--profile", "another", "help", "list")
+	if !strings.Contains(ocean, "\x1b[38;2;125;211;252;1mUsage:") ||
+		!strings.Contains(ocean, "\x1b[38;2;103;232;249m") {
+		t.Fatalf("help is missing Ocean's key and accent colors: %q", ocean)
+	}
+
+	t.Setenv("NO_COLOR", "1")
+	plain := run("--config", explicit, "help", "list")
+	if plain != ansi.Strip(ocean) || plain != ansi.Strip(def) || plain != ansi.Strip(nord) {
+		t.Fatal("themed help changed the underlying text")
 	}
 }
 

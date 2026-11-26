@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/terminaltheme"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -1186,18 +1187,19 @@ func (m *model) updateDialog(msg tea.Msg) tea.Cmd {
 				return nil
 			}
 			if d.kind == dialogTheme {
-				id := themeID(d.items[d.selected].action)
-				if !knownTheme(id) {
+				id := terminaltheme.ID(d.items[d.selected].action)
+				if !terminaltheme.Known(id) {
 					m.themePreview = ""
 					m.dialog = nil
 					return nil
 				}
-				m.theme = id
 				m.themePreview = ""
 				m.dialog = nil
-				if err := m.persistTheme(); err != nil {
+				if err := m.persistTheme(id); err != nil {
 					m.setNotice("Color scheme: "+err.Error(), true)
+					return nil
 				}
+				m.theme = id
 				return nil
 			}
 			if d.kind == dialogResultSort || d.kind == dialogQueueSort || d.kind == dialogQueueColumns {

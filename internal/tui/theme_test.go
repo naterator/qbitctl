@@ -11,25 +11,26 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naterator/qbitctl/internal/terminaltheme"
 )
 
 func TestThemeCatalogHasStableDefaultAndSixteenAlternates(t *testing.T) {
-	themes := allThemes()
+	themes := terminaltheme.All()
 	if got, want := len(themes), 17; got != want {
 		t.Fatalf("theme count = %d, want %d", got, want)
 	}
-	seen := make(map[themeID]bool, len(themes))
+	seen := make(map[terminaltheme.ID]bool, len(themes))
 	for _, theme := range themes {
-		if theme.id == "" || seen[theme.id] {
-			t.Fatalf("theme IDs are not unique: %q", theme.id)
+		if theme.ID == "" || seen[theme.ID] {
+			t.Fatalf("theme IDs are not unique: %q", theme.ID)
 		}
-		seen[theme.id] = true
+		seen[theme.ID] = true
 	}
-	if themes[0].id != defaultThemeID || themes[0].label != "Default" {
+	if themes[0].ID != terminaltheme.Default || themes[0].Label != "Default" {
 		t.Fatalf("first theme = %#v, want Default", themes[0])
 	}
-	for _, id := range []themeID{"ocean", "forest", "amber", "rose", "violet", "mono", "nord", "dracula", "solarized", "gruvbox", "catppuccin", "high-contrast", "paper", "midnight", "terminal", "sunset"} {
-		if !knownTheme(id) {
+	for _, id := range []terminaltheme.ID{"ocean", "forest", "amber", "rose", "violet", "mono", "nord", "dracula", "solarized", "gruvbox", "catppuccin", "high-contrast", "paper", "midnight", "terminal", "sunset"} {
+		if !terminaltheme.Known(id) {
 			t.Errorf("theme %q is missing", id)
 		}
 	}
@@ -37,7 +38,7 @@ func TestThemeCatalogHasStableDefaultAndSixteenAlternates(t *testing.T) {
 
 func TestApplyThemeKeepsDefaultOutputUnchanged(t *testing.T) {
 	content := viewSurface(viewTitleStyle.Render("Theme preview"), 28, 2, viewCanvasColor, viewTextStyle.GetForeground())
-	if got := applyTheme(content, 28, 2, defaultThemeID); got != content {
+	if got := applyTheme(content, 28, 2, terminaltheme.Default); got != content {
 		t.Fatalf("default theme changed rendered content")
 	}
 	if got := applyTheme(content, 28, 2, "ocean"); got == content || !strings.Contains(got, "Theme preview") {
@@ -51,7 +52,7 @@ func TestSaveThemePreservesOtherConfigSections(t *testing.T) {
 	if err := os.WriteFile(path, []byte(initial), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveThemePreference(path, "ocean"); err != nil {
+	if err := terminaltheme.Save(path, "ocean"); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -78,15 +79,6 @@ func TestSaveThemePreservesOtherConfigSections(t *testing.T) {
 	}
 }
 
-func TestUnknownThemeFallsBackToDefault(t *testing.T) {
-	if got, err := decodeTheme(json.RawMessage(`"not-a-theme"`)); err != nil || got != defaultThemeID {
-		t.Fatalf("unknown theme = %q (err %v), want Default", got, err)
-	}
-	if got, err := decodeTheme(json.RawMessage(`{"id":"ocean"}`)); err == nil || got != defaultThemeID {
-		t.Fatalf("object theme = %q (err %v), want rejected and Default", got, err)
-	}
-}
-
 func TestThemePickerPreviewCommitAndCancel(t *testing.T) {
 	m := newModel(context.Background(), nil)
 	m.configPath = filepath.Join(t.TempDir(), "config.json")
@@ -97,11 +89,11 @@ func TestThemePickerPreviewCommitAndCancel(t *testing.T) {
 		t.Fatalf("theme picker dialog = %#v", m.dialog)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.theme != defaultThemeID || m.themePreview == defaultThemeID {
+	if m.theme != terminaltheme.Default || m.themePreview == terminaltheme.Default {
 		t.Fatalf("moving in picker changed saved=%q preview=%q", m.theme, m.themePreview)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.dialog != nil || m.theme != defaultThemeID || m.themePreview != "" {
+	if m.dialog != nil || m.theme != terminaltheme.Default || m.themePreview != "" {
 		t.Fatalf("cancel left picker state: dialog=%v saved=%q preview=%q", m.dialog != nil, m.theme, m.themePreview)
 	}
 	m.openThemePicker()
@@ -112,5 +104,19 @@ func TestThemePickerPreviewCommitAndCancel(t *testing.T) {
 	}
 	if _, err := os.Stat(m.configPath); err != nil {
 		t.Fatalf("theme commit did not create config: %v", err)
+	}
+}
+
+func TestThemePickerKeepsSavedPaletteWhenSavingFails(t *testing.T) {
+	m := newModel(t.Context(), nil)
+	m.configPath = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(m.configPath, []byte(`{"ui":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.openThemePicker()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.activeThemeID() != terminaltheme.Default || m.themePreview != "" || !m.failed {
+		t.Fatalf("theme=%q preview=%q failure=%v", m.theme, m.themePreview, m.failed)
 	}
 }

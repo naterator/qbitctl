@@ -13,6 +13,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/naterator/qbitctl/internal/terminaltheme"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
@@ -152,8 +153,8 @@ type model struct {
 	// already rendering, so finishWork must not let it repopulate that view.
 	remoteGeneration uint64
 	exitErr          error
-	theme            themeID
-	themePreview     themeID
+	theme            terminaltheme.ID
+	themePreview     terminaltheme.ID
 
 	page                            page
 	width, height                   int
@@ -221,7 +222,7 @@ func newModel(ctx context.Context, backend service) *model {
 		savedSearchPlugin:         defaultSearchPluginSelection,
 		searchPluginDefaultActive: true, searchTimeout: 30 * time.Second,
 		dataUnits: client.DataUnitsHuman,
-		theme:     defaultThemeID,
+		theme:     terminaltheme.Default,
 	}
 }
 

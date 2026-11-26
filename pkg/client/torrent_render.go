@@ -184,9 +184,16 @@ func renderBlurb(w io.Writer, rows []labeledRow) {
 			maxLen = len(row.label)
 		}
 	}
+	styled, _ := w.(interface {
+		StyleLabel(string) string
+		StyleRule(string) string
+	})
 	for _, row := range rows {
-		dots := strings.Repeat(".", maxLen-len(row.label)+2)
-		fmt.Fprintf(w, "%s%s| %s\n", row.label, dots, row.value)
+		label, rule := row.label, strings.Repeat(".", maxLen-len(row.label)+2)+"|"
+		if styled != nil {
+			label, rule = styled.StyleLabel(label), styled.StyleRule(rule)
+		}
+		fmt.Fprintf(w, "%s%s %s\n", label, rule, row.value)
 	}
 }
 

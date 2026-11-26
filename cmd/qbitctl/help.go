@@ -3,19 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
-	"github.com/charmbracelet/x/term"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/spf13/cobra"
-)
-
-const (
-	helpReset = "\x1b[0m"
-	helpBold  = "\x1b[1m"
-	helpBlue  = "\x1b[38;5;81m"
-	helpTeal  = "\x1b[38;5;116m"
-	helpSlate = "\x1b[38;5;245m"
 )
 
 // installHelp installs one help function at the root. Cobra automatically
@@ -30,55 +21,12 @@ func installHelp(cmd *cobra.Command) {
 	})
 }
 
-type helpStyle struct {
-	color bool
-}
-
-func newHelpStyle(w io.Writer) helpStyle {
-	// NO_COLOR always wins. FORCE_COLOR is useful for demos and for terminals
-	// wrapped by a logger that does not expose a file descriptor.
-	if _, ok := os.LookupEnv("NO_COLOR"); ok {
-		return helpStyle{}
-	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("TERM")), "dumb") {
-		return helpStyle{}
-	}
-	if force := strings.TrimSpace(os.Getenv("FORCE_COLOR")); force != "" && force != "0" {
-		return helpStyle{color: true}
-	}
-	if file, ok := w.(*os.File); ok && term.IsTerminal(file.Fd()) {
-		return helpStyle{color: true}
-	}
-	return helpStyle{}
-}
-
-func (s helpStyle) heading(value string) string {
-	if !s.color {
-		return value
-	}
-	return helpBlue + helpBold + value + helpReset
-}
-
-func (s helpStyle) command(value string) string {
-	if !s.color {
-		return value
-	}
-	return helpTeal + value + helpReset
-}
-
-func (s helpStyle) description(value string) string {
-	if !s.color {
-		return value
-	}
-	return helpSlate + value + helpReset
-}
-
 func renderQbitctlHelp(cmd *cobra.Command) {
 	if cmd == nil {
 		return
 	}
 	out := cmd.OutOrStdout()
-	style := newHelpStyle(out)
+	style := newCLIStyle(out, commandConfigPath(cmd), true)
 
 	// Keep Cobra's description handling (Long over Short, including whitespace
 	// trimming) and its UsageString output. This means aliases, grouped
@@ -97,8 +45,8 @@ func renderQbitctlHelp(cmd *cobra.Command) {
 	fmt.Fprint(out, colorizeUsage(usage, style))
 }
 
-func writeDescription(out io.Writer, style helpStyle, text string) {
-	if !style.color {
+func writeDescription(out io.Writer, style cliStyle, text string) {
+	if style.profile < colorprofile.ANSI {
 		fmt.Fprintln(out, text)
 		return
 	}
@@ -114,8 +62,8 @@ func writeDescription(out io.Writer, style helpStyle, text string) {
 // colorizeUsage only decorates Cobra's already-formatted usage. In plain
 // output it returns the exact string Cobra generated, which is important for
 // scripts, tests, and users who have customized Cobra's usage template.
-func colorizeUsage(usage string, style helpStyle) string {
-	if !style.color || usage == "" {
+func colorizeUsage(usage string, style cliStyle) string {
+	if style.profile < colorprofile.ANSI || usage == "" {
 		return usage
 	}
 
@@ -133,7 +81,7 @@ func colorizeUsage(usage string, style helpStyle) string {
 	return output.String()
 }
 
-func colorizeUsageLine(line string, section *string, style helpStyle) string {
+func colorizeUsageLine(line string, section *string, style cliStyle) string {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return line

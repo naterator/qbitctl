@@ -7,6 +7,7 @@ HTTP server is the fixture used by ``record_demo.py`` so the smoke check and
 the published terminal recording keep one API contract.
 """
 
+import json
 import os
 import pty
 import re
@@ -271,6 +272,46 @@ def cancel_search_and_confirm_delete(session: Session, fixture):
         raise RuntimeError(f"confirmed delete requests = {fixture.deleted_torrents!r}")
 
 
+def save_ocean_theme(session):
+    session.key("4", "Color scheme")
+    session.key("jjjjjjj")  # The Color scheme row is the eighth setting.
+    session.key("enter", "Ocean")
+    session.key("down")
+    session.key("enter")
+
+
+def check_cli_theme(binary, config, server_url, base):
+    def run(*command):
+        session = Session(binary, config, server_url, base, command)
+        try:
+            session.wait_exit()
+            # Drain output queued by the PTY even if the child already exited.
+            session.read(0)
+            if session.proc.returncode != 0:
+                raise RuntimeError(f"CLI {command} exited with {session.proc.returncode}")
+            return bytes(session.output)
+        finally:
+            session.close()
+
+    if json.loads(config.read_text())["ui"]["theme"] != "ocean":
+        raise RuntimeError("the TUI did not persist Ocean to ui.theme")
+    if b"\x1b[38;2;125;211;252;1mUsage:" not in run("--help"):
+        raise RuntimeError("interactive CLI help is missing Ocean's key color")
+    if b"\x1b[38;2;103;232;249mName" not in run("list"):
+        raise RuntimeError("interactive CLI list is missing Ocean's accent")
+    if b"\x1b[38;2;125;211;252;1mINDEX" not in run("files", ALPHA):
+        raise RuntimeError("interactive CLI table is missing Ocean's heading color")
+    rows = json.loads(run("list", "--json"))
+    if {row["Name"] for row in rows} != {"Ubuntu 24.04 LTS", "Debian 12 Bookworm"}:
+        raise RuntimeError("JSON output changed with the theme")
+    if b"\x1b" in run("list", "--fields", "hash-full,name"):
+        raise RuntimeError("selected-field output contains theme escapes")
+    batch = base / "theme-batch.txt"
+    batch.write_text("list\n")
+    if b"\x1b" in run("batch", str(batch)):
+        raise RuntimeError("batch output contains theme escapes")
+
+
 def check_cli_delete(binary, config, server_url, base, fixture):
     for answer in ("delete", "DELETE", None):
         command = ("delete", ALPHA)
@@ -316,6 +357,7 @@ def main():
             # known-good profile for the subsequent stale-credential run.
             session = Session(binary, config, server_url, base)
             first_launch(session, server_url)
+            save_ocean_theme(session)
             session.key("q")
             session.wait_exit(8)
             session.close()
@@ -336,7 +378,8 @@ def main():
             session.close()
             session = None
             check_cli_delete(binary, config, server_url, base, fixture)
-            print("PTY smoke passed (setup, recovery, details, tracker and add forms, search cancellation, TUI and CLI deletion)")
+            check_cli_theme(binary, config, server_url, base)
+            print("PTY smoke passed (setup, recovery, details, search cancellation, deletion, shared color scheme)")
         finally:
             if session is not None:
                 session.close()

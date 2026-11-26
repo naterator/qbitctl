@@ -51,7 +51,7 @@ func renderSearchPlugins(w io.Writer, plugins []qbt.SearchPlugin, asJSON bool) e
 		return json.NewEncoder(w).Encode(plugins)
 	}
 
-	if _, err := fmt.Fprintln(w, "Name\tID\tEnabled"); err != nil {
+	if _, err := fmt.Fprintln(w, tableHeading(w, "Name\tID\tEnabled")); err != nil {
 		return err
 	}
 	for _, plugin := range plugins {
@@ -157,7 +157,7 @@ func renderSearchTable(w io.Writer, results []qbt.SearchResult, tty bool, width 
 	if nameWidth < 8 {
 		nameWidth = 8
 	}
-	table := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	table := tabwriter.NewWriter(tableOutput(w), 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintf(table, "ID\tName\t%s\tSeeders\tLeechers\tSource\n", unitHeader); err != nil {
 		return err
 	}

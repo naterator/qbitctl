@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
@@ -63,24 +62,9 @@ func ReadSetup(opts Options) (Setup, error) {
 }
 
 func readSetup(opts Options) (Setup, error) {
-	path := opts.ConfigPath
-	if path == "" {
-		for _, candidate := range defaultAuthSearchPaths() {
-			info, err := os.Stat(candidate)
-			if err == nil {
-				if info.IsDir() {
-					return Setup{}, fmt.Errorf("config path %q is a directory", candidate)
-				}
-				path = candidate
-				break
-			}
-			if !errors.Is(err, os.ErrNotExist) {
-				return Setup{}, fmt.Errorf("inspect config path %q: %w", candidate, err)
-			}
-		}
-		if path == "" {
-			path = defaultAuthPath()
-		}
+	path, err := configfile.ResolvePath(opts.ConfigPath)
+	if err != nil {
+		return Setup{}, err
 	}
 
 	object, err := configfile.Read(path)

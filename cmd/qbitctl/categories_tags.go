@@ -165,7 +165,7 @@ func renderCategories(w io.Writer, categories []qbt.Category, jsonOutput bool) e
 		}
 		return nil
 	}
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	tw := tabwriter.NewWriter(tableOutput(w), 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "NAME\tSAVE PATH\tDOWNLOAD PATH"); err != nil {
 		return err
 	}
@@ -337,7 +337,7 @@ func renderTags(w io.Writer, tags []string, jsonOutput bool) error {
 		}
 		return nil
 	}
-	if _, err := fmt.Fprintln(w, "TAG"); err != nil {
+	if _, err := fmt.Fprintln(w, tableHeading(w, "TAG")); err != nil {
 		return err
 	}
 	for _, tag := range tags {

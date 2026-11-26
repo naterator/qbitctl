@@ -105,7 +105,7 @@ func renderTrackerList(w io.Writer, trackers []qbt.TrackerEntry, jsonOutput, ful
 	if fullURL {
 		columns[0] = "URL"
 	}
-	fmt.Fprintln(w, strings.Join(columns, "\t"))
+	fmt.Fprintln(w, tableHeading(w, strings.Join(columns, "\t")))
 	for _, tracker := range trackers {
 		location := qbt.TrackerHost(tracker.URL)
 		if fullURL {

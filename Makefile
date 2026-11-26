@@ -11,7 +11,7 @@ GOFILES := $(shell find cmd internal pkg -name '*.go' -type f | sort)
 CGO_ENABLED ?= 0
 VERSION ?= dev-$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo unknown)
 LDFLAGS ?= -X github.com/naterator/qbitctl/pkg/client.Version=$(VERSION) -s -w
-COVERPKG ?= github.com/naterator/qbitctl/cmd/qbitctl,github.com/naterator/qbitctl/pkg/client,github.com/naterator/qbitctl/internal/configfile,github.com/naterator/qbitctl/internal/releaseattest,github.com/naterator/qbitctl/internal/searchresults,github.com/naterator/qbitctl/internal/tui
+COVERPKG ?= github.com/naterator/qbitctl/cmd/qbitctl,github.com/naterator/qbitctl/pkg/client,github.com/naterator/qbitctl/internal/configfile,github.com/naterator/qbitctl/internal/releaseattest,github.com/naterator/qbitctl/internal/searchresults,github.com/naterator/qbitctl/internal/terminaltheme,github.com/naterator/qbitctl/internal/tui
 COVER_DIR ?= .cover
 COVER_OUT ?= cover.out
 

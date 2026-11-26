@@ -14,7 +14,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -25,8 +24,8 @@ import (
 )
 
 const (
-	defaultAuthDir   = "qbitctl"
-	defaultAuthFile  = "config.json"
+	defaultAuthDir   = configfile.AppDir
+	defaultAuthFile  = configfile.Name
 	defaultConfigURL = "http://localhost:8080"
 	masterKeyService = "qbitctl"
 	masterKeyUser    = "master-key"
@@ -63,24 +62,7 @@ type configFile struct {
 	Password string `json:"password"`
 }
 
-func xdgConfigHome() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return dir
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".config")
-}
-
-func defaultAuthPath() string {
-	base := xdgConfigHome()
-	if base == "" {
-		return filepath.Join(".", defaultAuthFile)
-	}
-	return filepath.Join(base, defaultAuthDir, defaultAuthFile)
-}
+func defaultAuthPath() string { return configfile.DefaultPath() }
 
 func getMasterSecret() (string, error) {
 	if s := os.Getenv("QBITCTL_MASTER_KEY"); s != "" {
@@ -385,14 +367,6 @@ func canAttemptLogin(creds Credentials) bool {
 	return creds.User != "" && creds.Pass != "" && creds.URL != ""
 }
 
-func defaultAuthSearchPaths() []string {
-	homePath := defaultAuthPath()
-	if homePath == defaultAuthFile {
-		return []string{homePath}
-	}
-	return []string{homePath, defaultAuthFile}
-}
-
 func initAuth(opts Options, infoOut io.Writer) (Credentials, error) {
 	creds, _, err := initAuthWithPath(opts, infoOut)
 	return creds, err
@@ -437,7 +411,7 @@ func initAuthWithPathAndProfile(opts Options, infoOut io.Writer) (Credentials, s
 	}
 
 	if !loaded {
-		for _, path := range defaultAuthSearchPaths() {
+		for _, path := range configfile.SearchPaths() {
 			loadedCreds, ok, profileName, err := loadAuthFileForProfileWithName(path, opts.Profile, infoOut)
 			if err != nil {
 				if errors.Is(err, errUnsupportedPasswordFormat) {

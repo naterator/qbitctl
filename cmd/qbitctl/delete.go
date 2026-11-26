@@ -19,8 +19,9 @@ func confirmAndDelete(cmd *cobra.Command, app *App, args []string) error {
 	if err != nil {
 		return err
 	}
+	style := newCLIStyle(cmd.ErrOrStderr(), commandConfigPath(cmd), false)
 	var preview strings.Builder
-	preview.WriteString("Permanently delete the files for these torrents?\n")
+	fmt.Fprintln(&preview, style.warning("Permanently delete the files for these torrents?"))
 	hashes := make([]string, len(torrents))
 	for i, torrent := range torrents {
 		hashes[i] = torrent.Hash

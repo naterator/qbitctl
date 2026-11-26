@@ -466,7 +466,8 @@ func renderRecentSearch(cmd *cobra.Command, opts *CLIOptions, jsonOutput bool, s
 			}
 		}
 	}
-	return renderSearchTable(cmd.OutOrStdout(), results, tuiTerminal(cmd.OutOrStdout()), searchTerminalWidth(cmd.OutOrStdout()), units)
+	out := cliOutput(cmd.OutOrStdout(), commandConfigPath(cmd))
+	return renderSearchTable(out, results, tuiTerminal(out), searchTerminalWidth(out), units)
 }
 
 func sanitizeSearchText(value string) string {

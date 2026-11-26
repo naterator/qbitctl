@@ -161,11 +161,17 @@ func renderTransferInfo(w io.Writer, info qbt.TransferInfo, mode string, units q
 		}
 		return units.FormatRate(value)
 	}
-	fmt.Fprintf(w, "Speed: Download\t%s\n", units.FormatRate(info.DLInfoSpeed))
-	fmt.Fprintf(w, "Speed: Upload\t%s\n", units.FormatRate(info.UPInfoSpeed))
-	fmt.Fprintf(w, "Transferred: Down\t%s\n", units.FormatSize(info.DLInfoData))
-	fmt.Fprintf(w, "Transferred: Up\t%s\n", units.FormatSize(info.UPInfoData))
-	fmt.Fprintf(w, "Limit: Download\t%s\n", formatLimit(info.DLRateLimit))
-	fmt.Fprintf(w, "Limit: Upload\t%s\n", formatLimit(info.UPRateLimit))
-	fmt.Fprintf(w, "Speed limits mode\t%s\n", mode)
+	row := func(label, value string) {
+		if out, ok := w.(*styledCLIOutput); ok {
+			label = out.StyleLabel(label)
+		}
+		fmt.Fprintf(w, "%s\t%s\n", label, value)
+	}
+	row("Speed: Download", units.FormatRate(info.DLInfoSpeed))
+	row("Speed: Upload", units.FormatRate(info.UPInfoSpeed))
+	row("Transferred: Down", units.FormatSize(info.DLInfoData))
+	row("Transferred: Up", units.FormatSize(info.UPInfoData))
+	row("Limit: Download", formatLimit(info.DLRateLimit))
+	row("Limit: Upload", formatLimit(info.UPRateLimit))
+	row("Speed limits mode", mode)
 }

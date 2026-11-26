@@ -14,23 +14,25 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/naterator/qbitctl/internal/terminaltheme"
 	"github.com/naterator/qbitctl/pkg/client"
 )
 
 var (
-	viewCanvasColor = lipgloss.Color("#1D2531")
-	viewPanelColor  = lipgloss.Color("#334155")
-	viewFieldColor  = lipgloss.Color("#242F3F")
-	viewTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E9EEF5"))
+	defaultPalette  = terminaltheme.Lookup(terminaltheme.Default)
+	viewCanvasColor = defaultPalette.Canvas
+	viewPanelColor  = defaultPalette.Panel
+	viewFieldColor  = defaultPalette.Field
+	viewTextStyle   = lipgloss.NewStyle().Foreground(defaultPalette.Text)
 	viewTitleStyle  = viewTextStyle.Bold(true)
-	viewAccentStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#85D7C8"))
-	viewKeyStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#9AC8FF")).Bold(true)
-	viewMutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#AFBCCD"))
-	viewRuleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#536478"))
-	viewSelectedSty = lipgloss.NewStyle().Foreground(lipgloss.Color("#102A2D")).
-			Background(lipgloss.Color("#92DACD")).Bold(true)
-	viewErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAEA9")).Bold(true)
-	viewWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD18E"))
+	viewAccentStyle = lipgloss.NewStyle().Foreground(defaultPalette.Accent)
+	viewKeyStyle    = lipgloss.NewStyle().Foreground(defaultPalette.Key).Bold(true)
+	viewMutedStyle  = lipgloss.NewStyle().Foreground(defaultPalette.Muted)
+	viewRuleStyle   = lipgloss.NewStyle().Foreground(defaultPalette.Rule)
+	viewSelectedSty = lipgloss.NewStyle().Foreground(defaultPalette.SelectedForeground).
+			Background(defaultPalette.SelectedBackground).Bold(true)
+	viewErrorStyle = lipgloss.NewStyle().Foreground(defaultPalette.Error).Bold(true)
+	viewWarnStyle  = lipgloss.NewStyle().Foreground(defaultPalette.Warning)
 )
 
 func viewInputStyle(background color.Color) textinput.Styles {
@@ -65,7 +67,7 @@ func (m *model) View() tea.View {
 	if m.dialog != nil && m.dialog.kind != dialogHelp {
 		panel := m.dialogView(width, height)
 		backdrop := lipgloss.NewLayer(viewSurface(ansi.Strip(content), width, height,
-			lipgloss.Color("#151C26"), lipgloss.Color("#718195")))
+			defaultPalette.ScrimBackground, defaultPalette.ScrimForeground))
 		overlay := lipgloss.NewLayer(panel).
 			X(max(0, (width-lipgloss.Width(panel))/2)).
 			Y(max(0, (height-lipgloss.Height(panel))/2)).Z(1)

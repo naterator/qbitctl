@@ -134,7 +134,7 @@ func parseFileIndexes(values []string) ([]int, error) {
 }
 
 func renderTorrentFiles(w io.Writer, app *App, files []qbt.TorrentFile) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	tw := tabwriter.NewWriter(tableOutput(w), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "INDEX\tPRIORITY\tPROGRESS\tSIZE\tAVAILABILITY\tNAME")
 	for _, file := range files {
 		priority := qbt.FilePriority(file.Priority).String()
@@ -182,7 +182,7 @@ func renderTorrentPeers(w io.Writer, app *App, peers qbt.TorrentPeers) {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	tw := tabwriter.NewWriter(tableOutput(w), 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "PEER\tCLIENT\tPROGRESS\tDOWN\tUP\tCONNECTION")
 	for _, key := range keys {
 		peer := peers.Peers[key]

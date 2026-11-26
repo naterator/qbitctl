@@ -76,8 +76,8 @@ var SetFieldNames = []string{
 
 func canonicalTorrentField(field string) string {
 	switch strings.ToLower(field) {
-	case "hash":
-		return "hash"
+	case "hash-full":
+		return "hash-full"
 	default:
 		return CanonicalGetField(field)
 	}
@@ -101,7 +101,7 @@ func ParseSelectableTorrentFields(value string) ([]string, error) {
 	fields := make([]string, 0, len(parts))
 	for _, part := range parts {
 		field := canonicalTorrentField(strings.TrimSpace(part))
-		if !isSelectableTorrentField(field) {
+		if field != "hash-full" && !isSelectableTorrentField(field) {
 			return nil, fmt.Errorf("unsupported field for list/show output: %s", strings.TrimSpace(part))
 		}
 		fields = append(fields, field)

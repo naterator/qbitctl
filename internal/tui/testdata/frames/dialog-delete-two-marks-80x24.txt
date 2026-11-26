@@ -10,11 +10,11 @@
     Delete 2 torrents?
       · one
       · two
-    This permanently deletes the selected torrent files. Type DELETE to con…
+    Permanently deletes files. Type DELETE to continue.
+    Permanently deletes files. Type DELETE to continue.
     › Confirmation: DELETE
 
     enter delete   esc cancel
-
 
 
 

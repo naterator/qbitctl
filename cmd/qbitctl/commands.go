@@ -287,7 +287,7 @@ func newListCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
-	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
+	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows (use hash-full for full hashes)")
 	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
 	cmd.Flags().StringVar(&state, "state", "", "Filter by torrent state")
 	cmd.Flags().StringVar(&category, "category", "", "Filter by category")
@@ -516,7 +516,7 @@ func newShowCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
 	cmd.Flags().StringVarP(&tmpl, "template", "t", "", "Render output with a Go template")
-	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows")
+	cmd.Flags().StringVar(&fieldsValue, "fields", "", "Render selected fields as tab-separated rows (use hash-full for full hashes)")
 	cmd.Flags().BoolVar(&noHeader, "no-header", false, "Omit the header row when using --fields")
 	cmd.MarkFlagsMutuallyExclusive("server-json", "json", "template", "fields")
 	return cmd
@@ -630,19 +630,30 @@ func newRemoveCmd(opts *CLIOptions, deleteFiles bool) *cobra.Command {
 		short = "Remove torrents and delete data"
 		aliases = []string{"d", "de"}
 	}
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:               use,
 		Aliases:           aliases,
 		Short:             short,
 		GroupID:           "change",
 		Args:              cobra.MinimumNArgs(1),
 		ValidArgsFunction: completeTorrentHashArgs(opts),
-		RunE: authenticatedRun(opts, func(app *App, args []string) error {
-			hashes, err := app.ResolveHashes(args)
-			if err != nil {
-				return err
-			}
-			return app.StopAndRemoveTorrent(strings.Join(hashes, "|"), deleteFiles)
-		}),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return authenticatedRun(opts, func(app *App, args []string) error {
+				_, inBatch := batchAppFromContext(cmd.Context())
+				if deleteFiles && !yes && !inBatch && interactiveWorkspace(cmd) {
+					return confirmAndDelete(cmd, app, args)
+				}
+				hashes, err := app.ResolveHashes(args)
+				if err != nil {
+					return err
+				}
+				return app.StopAndRemoveTorrent(strings.Join(hashes, "|"), deleteFiles)
+			})(cmd, args)
+		},
 	}
+	if deleteFiles {
+		cmd.Flags().BoolVar(&yes, "yes", false, "Delete without interactive confirmation")
+	}
+	return cmd
 }

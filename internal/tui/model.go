@@ -105,6 +105,7 @@ type workDone struct {
 	notice                    string
 	app                       *client.App
 	setup                     setupState
+	profileSwitch             bool
 	setDefault                *bool
 	setDataUnits              *client.DataUnits
 	plugins                   []searchPluginInfo
@@ -132,9 +133,11 @@ type model struct {
 	app             *client.App
 	ownsApp         bool
 	workers         sync.WaitGroup
+	remoteWorkers   *sync.WaitGroup
 	pendingMu       sync.Mutex
 	pendingApps     []*client.App
 	cancel          context.CancelFunc
+	workFinished    <-chan struct{}
 	work            workKind
 	quitting        bool
 	preferencesPath string
@@ -211,7 +214,8 @@ var connectClient = client.NewClientWithOutput
 func newModel(ctx context.Context, backend service) *model {
 	return &model{
 		ctx: ctx, backend: backend, width: 80, height: 24,
-		marked: make(map[string]bool), stateFilter: "all",
+		remoteWorkers: &sync.WaitGroup{},
+		marked:        make(map[string]bool), stateFilter: "all",
 		queueSort: queueActiveFirst, queueColumns: queueColumnsCompact, resultSort: resultOriginal,
 		searchPlugin:              defaultSearchPluginSelection,
 		savedSearchPlugin:         defaultSearchPluginSelection,
@@ -486,9 +490,10 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 	generation := m.remoteGeneration
 	m.cancel, m.work, m.busy = cancel, kind, label
 	done := make(chan workDone, 1)
-	m.workers.Add(1)
-	go func() {
-		defer m.workers.Done()
+	finished := make(chan struct{})
+	m.workFinished = finished
+	m.startRemoteWorker(func() {
+		defer close(finished)
 		defer cancel()
 		result := task(ctx)
 		if result.app != nil {
@@ -499,12 +504,25 @@ func (m *model) startWork(kind workKind, label string, task func(context.Context
 		result.kind = kind
 		result.remoteGeneration = generation
 		done <- result
-	}()
+	})
 	return func() tea.Msg { return <-done }
 }
 
+// startRemoteWorker tracks both program shutdown and retirement of the active
+// session. After a switch, new requests use a different worker group.
+func (m *model) startRemoteWorker(run func()) {
+	workers := m.remoteWorkers
+	workers.Add(1)
+	m.workers.Add(1)
+	go func() {
+		defer m.workers.Done()
+		defer workers.Done()
+		run()
+	}()
+}
+
 func (m *model) finishWork(done workDone) tea.Cmd {
-	if done.remoteGeneration != m.remoteGeneration {
+	if done.kind != searchPluginsWork && done.remoteGeneration != m.remoteGeneration {
 		m.releasePendingApp(done.app)
 		if done.app != nil {
 			done.app.Logout()
@@ -610,6 +628,9 @@ func (m *model) finishWork(done workDone) tea.Cmd {
 	if done.kind == connectWork {
 		canceled := m.connectCanceled
 		m.connectCanceled = false
+		if done.profileSwitch {
+			return m.finishProfileSwitch(done, canceled)
+		}
 		if canceled || errors.Is(done.err, context.Canceled) {
 			return m.finishCanceledConnection(done.app)
 		}
@@ -901,13 +922,11 @@ func (m *model) ensureSearchPlugins(force ...bool) tea.Cmd {
 	m.searchPluginCancel = cancel
 	m.searchPluginsLoading = true
 	done := make(chan workDone, 1)
-	m.workers.Add(1)
-	go func() {
-		defer m.workers.Done()
+	m.startRemoteWorker(func() {
 		defer cancel()
 		plugins, err := provider.searchPlugins(ctx)
 		done <- workDone{kind: searchPluginsWork, plugins: plugins, pluginGeneration: generation, pluginSelectionGeneration: selectionGeneration, err: err}
-	}()
+	})
 	return func() tea.Msg { return <-done }
 }
 

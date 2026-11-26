@@ -4,9 +4,12 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"charm.land/bubbletea/v2"
 	"github.com/naterator/qbitctl/pkg/client"
@@ -39,35 +42,69 @@ func (m *model) switchProfile(name string) tea.Cmd {
 	}
 	state := setupStateFromClient(savedPasswordMetadata(setup))
 
-	// A switch supersedes any in-flight request. Incrementing the generation
-	// before starting the new connection means a late result from the canceled
-	// worker is harmless even if the HTTP stack cannot stop immediately.
+	// Supersede primary work while keeping the active session and its snapshot.
+	// The generation prevents a canceled request from clearing the new attempt.
+	previous := m.workFinished
 	if m.cancel != nil {
 		m.cancel()
 	}
-	if m.searchPluginCancel != nil {
-		m.searchPluginCancel()
-	}
 	m.cancel, m.busy = nil, ""
-	if m.app != nil && m.ownsApp {
-		oldApp := m.app
+	m.remoteGeneration++
+	m.connectExplicit = false
+	m.connectCanceled = false
+	return m.startWork(connectWork, "Connecting to profile "+name, func(ctx context.Context) workDone {
+		// A failed switch leaves the old backend in use. Let its canceled
+		// request finish before the view can submit another on that backend.
+		if previous != nil {
+			<-previous
+		}
+		if err := ctx.Err(); err != nil {
+			return workDone{setup: state, profileSwitch: true, err: err}
+		}
+		app, err := connectClient(ctx, &opts, io.Discard, io.Discard)
+		return workDone{app: app, setup: state, profileSwitch: true, err: err}
+	})
+}
+
+func (m *model) finishProfileSwitch(done workDone, canceled bool) tea.Cmd {
+	canceled = canceled || errors.Is(done.err, context.Canceled)
+	if canceled || done.err != nil || done.app == nil {
+		if m.backend == nil {
+			m.setup = done.setup
+			if canceled {
+				return m.finishCanceledConnection(done.app)
+			}
+			m.page = configPage
+			m.openConfigDialog()
+		}
+		if done.app != nil {
+			done.app.Logout()
+		}
+		status := "Connection failed: client returned no session"
+		if canceled {
+			status = "Connection canceled"
+		} else if done.err != nil {
+			status = "Connection failed: " + done.err.Error()
+		}
+		m.setNotice(status, true)
+		if m.backend == nil && m.dialog != nil {
+			m.dialog.status = status
+		}
+		return nil
+	}
+
+	oldApp, owned, oldWorkers := m.app, m.ownsApp, m.remoteWorkers
+	m.remoteWorkers = &sync.WaitGroup{}
+	m.adoptApp(done.app, done.setup)
+	if oldApp != nil && owned {
 		m.workers.Add(1)
 		go func() {
 			defer m.workers.Done()
+			oldWorkers.Wait()
 			oldApp.Logout()
 		}()
 	}
-	m.app, m.backend, m.ownsApp = nil, nil, false
-	m.remoteGeneration++
-	m.resetRemoteState()
-	m.setup = state
-	m.connectExplicit = false
-	m.connectCanceled = false
-	m.connectTarget = connectionTarget(opts, state)
-	return m.startWork(connectWork, "Connecting to "+m.connectTarget, func(ctx context.Context) workDone {
-		app, err := connectClient(ctx, &opts, nil, nil)
-		return workDone{app: app, setup: state, err: err}
-	})
+	return m.refresh()
 }
 
 // openProfilePicker loads only local profile metadata. Authentication starts

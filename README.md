@@ -125,6 +125,13 @@ Use `set category <name> <hash>` to assign a category to a torrent.
 `tags remove <tag> <hash>` detaches a tag from a torrent. `tags delete <tag>`
 deletes it from the server catalog.
 
+Use `qbitctl list --fields hash-full,name` to export full torrent hashes.
+The existing `hash` field uses an eight-character prefix.
+
+When both stdin and stdout are terminals, `qbitctl delete` previews the
+targets on stderr and asks you to type `DELETE`. Use `--yes` to skip the
+prompt. Redirected invocations and batch commands continue without a prompt.
+
 Use `qbitctl show <hash> --fields name,seeds,leechers,queue-position`
 for a compact view. Fields the server omits are blank. `dl-path` and its
 existing alias `download-path` show the content path. Use

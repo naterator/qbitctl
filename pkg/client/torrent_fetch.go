@@ -32,6 +32,20 @@ func (a *App) ResolveHash(hash string) (string, error) {
 // It fetches the torrent list once and resolves all inputs against it. Full
 // hashes are checked against qBittorrent as well as validated locally.
 func (a *App) ResolveHashes(inputs []string) ([]string, error) {
+	torrents, err := a.ResolveTorrents(inputs)
+	if err != nil {
+		return nil, err
+	}
+	hashes := make([]string, len(torrents))
+	for i, torrent := range torrents {
+		hashes[i] = torrent.Hash
+	}
+	return hashes, nil
+}
+
+// ResolveTorrents resolves full hashes and unambiguous prefixes in one request.
+// It returns distinct torrents in input order with normalized full hashes.
+func (a *App) ResolveTorrents(inputs []string) ([]TorrentInfo, error) {
 	if len(inputs) == 0 {
 		return nil, codedErrf(ExitBadArgs, "At least one hash required for this operation")
 	}
@@ -69,21 +83,22 @@ func (a *App) ResolveHashes(inputs []string) ([]string, error) {
 		return nil, err
 	}
 
-	available := make([]string, 0, len(torrents))
+	available := torrents[:0]
 	for _, torrent := range torrents {
-		if validateHash(strings.ToLower(torrent.Hash)) {
-			available = append(available, strings.ToLower(torrent.Hash))
+		torrent.Hash = strings.ToLower(torrent.Hash)
+		if validateHash(torrent.Hash) {
+			available = append(available, torrent)
 		}
 	}
 
-	resolved := make([]string, 0, len(normalized))
+	resolved := make([]TorrentInfo, 0, len(normalized))
 	seen := make(map[string]struct{}, len(normalized))
 	for _, input := range normalized {
-		match := ""
+		var match *TorrentInfo
 		matches := 0
-		for _, hash := range available {
-			if strings.HasPrefix(hash, input) {
-				match = hash
+		for i := range available {
+			if strings.HasPrefix(available[i].Hash, input) {
+				match = &available[i]
 				matches++
 			}
 		}
@@ -97,9 +112,9 @@ func (a *App) ResolveHashes(inputs []string) ([]string, error) {
 		case matches > 1:
 			return nil, codedErrf(ExitBadArgs, "Short hash is ambiguous: %s", input)
 		}
-		if _, exists := seen[match]; !exists {
-			seen[match] = struct{}{}
-			resolved = append(resolved, match)
+		if _, exists := seen[match.Hash]; !exists {
+			seen[match.Hash] = struct{}{}
+			resolved = append(resolved, *match)
 		}
 	}
 

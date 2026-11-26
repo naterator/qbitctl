@@ -965,7 +965,7 @@ func selectionMessage(m *model, hashes []string, deleteFiles bool) string {
 	suffix := "Downloaded files will be kept."
 	if deleteFiles {
 		verb = "Delete"
-		suffix = "This permanently deletes the selected torrent files. Type DELETE to continue."
+		suffix = "Permanently deletes files. Type DELETE to continue."
 	}
 	count := len(hashes)
 	noun := "torrents"
@@ -1701,7 +1701,11 @@ func (m *model) dialogView(width, height int) string {
 		messageRows := visible
 		footer = viewKeys(innerWidth, "enter", "confirm", "esc", "cancel")
 		if d.kind == dialogDelete {
-			messageRows--
+			if height == 11 || height == 12 {
+				// Use the spare overlay row before dropping target names.
+				messageRows++
+			}
+			messageRows -= 2 // Reserve the consequence and confirmation field.
 			footer = viewKeys(innerWidth, "enter", "delete", "esc", "cancel")
 		}
 		for i, line := range message[:max(0, min(len(message), messageRows))] {
@@ -1712,6 +1716,11 @@ func (m *model) dialogView(width, height int) string {
 			body = append(body, style.Render(viewFit(viewSafe(line), innerWidth)))
 		}
 		if d.kind == dialogDelete && len(d.fields) > 0 {
+			warning := message[len(message)-1]
+			if lipgloss.Width(warning) > innerWidth {
+				warning = "Permanently deletes files"
+			}
+			body = append(body, viewWarnStyle.Render(viewFit(warning, innerWidth)))
 			body = append(body, dialogInputLine(d.fields[0], true, innerWidth))
 		}
 

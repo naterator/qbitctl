@@ -320,6 +320,33 @@ func TestDeleteMessageListsMarkedTorrentNames(t *testing.T) {
 	}
 }
 
+func TestNarrowDeleteFrameKeepsWarningAndConfirmationVisible(t *testing.T) {
+	service := &recordingService{}
+	m := newModel(t.Context(), service)
+	m.width, m.height = 40, 12
+	seedRecordingQueue(m, service,
+		client.TorrentInfo{Hash: "a", Name: "Alpha"},
+		client.TorrentInfo{Hash: "b", Name: "Beta"},
+	)
+	m.toggleMark()
+	m.moveCursor(1)
+	m.toggleMark()
+	m.openRemoveDialog(true)
+	for _, invalid := range []bool{false, true} {
+		if invalid {
+			m.submitDialog()
+		}
+		frame := m.View().Content
+		assertFrameSize(t, frame, m.width, m.height)
+		if !containsAll(normalizeGoldenFrame(frame), "Delete 2 torrents?", "Permanently deletes files", "Confirmation:", "esc cancel") {
+			t.Fatalf("narrow delete frame (invalid = %v):\n%s", invalid, frame)
+		}
+	}
+	if requests := service.recordedActions(); len(requests) != 0 {
+		t.Fatalf("invalid confirmation sent requests: %v", requests)
+	}
+}
+
 func TestEditDialogAppliesToMarkedTorrents(t *testing.T) {
 	service := &recordingService{}
 	m := newModel(t.Context(), service)

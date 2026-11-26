@@ -56,7 +56,7 @@ class DetailsFixture(Fixture):
 
 
 class Session:
-    def __init__(self, binary: Path, config: Path, server_url: str, base: Path):
+    def __init__(self, binary: Path, config: Path, server_url: str, base: Path, command=("tui",)):
         self.master, slave = pty.openpty()
         fcntl_winsize(slave, WIDTH, HEIGHT)
         env = os.environ.copy()
@@ -72,7 +72,7 @@ class Session:
             }
         )
         self.proc = subprocess.Popen(
-            [str(binary), "--config", str(config), "tui"],
+            [str(binary), "--config", str(config), *command],
             cwd=base,
             env=env,
             stdin=slave,
@@ -271,6 +271,32 @@ def cancel_search_and_confirm_delete(session: Session, fixture):
         raise RuntimeError(f"confirmed delete requests = {fixture.deleted_torrents!r}")
 
 
+def check_cli_delete(binary, config, server_url, base, fixture):
+    for answer in ("delete", "DELETE", None):
+        command = ("delete", ALPHA)
+        if answer is None:
+            command += ("--yes",)
+        request_count = len(fixture.deleted_torrents)
+        session = Session(binary, config, server_url, base, command)
+        try:
+            if answer is not None:
+                session.wait("Type DELETE to confirm")
+                output = session.clean_output()
+                if ALPHA.encode() not in output or b"Ubuntu 24.04 LTS" not in output:
+                    raise RuntimeError("delete preview omitted the target hash or name")
+                if len(fixture.deleted_torrents) != request_count:
+                    raise RuntimeError("CLI delete sent a request before confirmation")
+                session.send(answer.encode() + b"\r")
+            session.wait_exit()
+            if session.proc.returncode != 0:
+                raise RuntimeError(f"CLI delete exited with {session.proc.returncode}")
+            expected = [] if answer == "delete" else [{"hashes": [ALPHA], "deleteFiles": ["true"]}]
+            if fixture.deleted_torrents[request_count:] != expected:
+                raise RuntimeError(f"unexpected CLI delete requests for {answer!r}")
+        finally:
+            session.close()
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit(f"usage: {Path(sys.argv[0]).name} /path/to/qbitctl")
@@ -307,7 +333,10 @@ def main():
                 raise RuntimeError(f"qbitctl TUI exited with {session.proc.returncode}")
             if fixture.logouts != 2:
                 raise RuntimeError(f"logout count = {fixture.logouts}, want 2")
-            print("PTY smoke passed (setup, recovery, details, tracker and add forms, search cancellation, deletion)")
+            session.close()
+            session = None
+            check_cli_delete(binary, config, server_url, base, fixture)
+            print("PTY smoke passed (setup, recovery, details, tracker and add forms, search cancellation, TUI and CLI deletion)")
         finally:
             if session is not None:
                 session.close()

@@ -38,10 +38,10 @@ func TestThemeCatalogHasStableDefaultAndSixteenAlternates(t *testing.T) {
 
 func TestApplyThemeKeepsRenderPaletteOutputUnchanged(t *testing.T) {
 	content := viewSurface(viewTitleStyle.Render("Theme preview"), 28, 2, viewCanvasColor, viewTextStyle.GetForeground())
-	if got := applyTheme(content, 28, 2, renderThemeID); got != content {
+	if got := applyTheme(content, 28, 2, renderThemeID, false); got != content {
 		t.Fatalf("render palette changed rendered content")
 	}
-	if got := applyTheme(content, 28, 2, "ocean"); got == content || !strings.Contains(got, "Theme preview") {
+	if got := applyTheme(content, 28, 2, "ocean", false); got == content || !strings.Contains(got, "Theme preview") {
 		t.Fatalf("alternate theme did not remap a rendered cell: %q", got)
 	}
 }

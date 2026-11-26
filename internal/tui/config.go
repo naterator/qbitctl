@@ -363,6 +363,8 @@ func runConfigurableSession(sessionCtx context.Context, stop context.CancelFunc,
 	}
 	m.output = output
 	m.tmux = strings.TrimSpace(os.Getenv("TMUX")) != ""
+	m.paintBackgroundBlanks = os.Getenv("TERM_PROGRAM") == "Apple_Terminal" ||
+		strings.HasPrefix(os.Getenv("TERM"), "nsterm")
 	program := tea.NewProgram(m, tea.WithContext(sessionCtx), tea.WithoutSignalHandler(), tea.WithInput(input), tea.WithOutput(output))
 	_, err := program.Run()
 	if errors.Is(err, tea.ErrProgramKilled) && sessionCtx.Err() != nil {

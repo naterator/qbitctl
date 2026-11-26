@@ -125,17 +125,21 @@ func themeColorMap(theme terminaltheme.Palette) map[themeColorKey]color.Color {
 }
 
 // applyTheme remaps fully painted cells after compositing.
-func applyTheme(content string, width, height int, id terminaltheme.ID) string {
-	if id == renderThemeID || width < 1 || height < 1 {
+func applyTheme(content string, width, height int, id terminaltheme.ID, paintBackgroundBlanks bool) string {
+	if width < 1 || height < 1 || (id == renderThemeID && !paintBackgroundBlanks) {
 		return content
 	}
-	theme := terminaltheme.Lookup(id)
+	var colors map[themeColorKey]color.Color
+	if id != renderThemeID {
+		colors = themeColorMap(terminaltheme.Lookup(id))
+	}
 	canvas := lipgloss.NewCanvas(width, height).Compose(lipgloss.NewLayer(content))
-	colors := themeColorMap(theme)
 	for y := 0; y < height; y++ {
+		previousSpace := false
 		for x := 0; x < width; x++ {
 			cell := canvas.CellAt(x, y)
 			if cell == nil || cell.Width == 0 {
+				previousSpace = false
 				continue
 			}
 			if replacement, ok := colors[colorKeyOrZero(cell.Style.Fg)]; ok {
@@ -146,6 +150,17 @@ func applyTheme(content string, width, height int, id terminaltheme.ID) string {
 			}
 			if replacement, ok := colors[colorKeyOrZero(cell.Style.UnderlineColor)]; ok {
 				cell.Style.UnderlineColor = replacement
+			}
+			if paintBackgroundBlanks {
+				space := cell.Content == " "
+				// Terminal.app can lose the active background on the erase
+				// commands Bubble Tea uses for blank runs. Nonbreaking spaces
+				// force it to paint the padding cells while keeping word gaps.
+				if space && cell.Style.Bg != nil && (x == 0 || x == width-1 || previousSpace ||
+					canvas.CellAt(x+1, y).Content == " ") {
+					cell.Content = "\u00a0"
+				}
+				previousSpace = space
 			}
 		}
 	}

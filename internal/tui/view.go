@@ -75,7 +75,7 @@ func (m *model) View() tea.View {
 	} else {
 		content = viewSurface(content, width, height, viewCanvasColor, viewTextStyle.GetForeground())
 	}
-	content = applyTheme(content, width, height, m.activeThemeID())
+	content = applyTheme(content, width, height, m.activeThemeID(), m.paintBackgroundBlanks)
 
 	v := tea.NewView(viewFillScreen(content, width, height))
 	v.AltScreen = true

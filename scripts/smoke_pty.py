@@ -421,6 +421,34 @@ def check_cli_delete(binary, config, server_url, base, fixture):
             session.close()
 
 
+def check_terminal_app_background(binary, config, server_url, base):
+    apple_terminal = {"TERM_PROGRAM": "Apple_Terminal", "COLORTERM": "", "TMUX": "", "STY": ""}
+    session = Session(binary, config, server_url, base, env_overrides=apple_terminal)
+
+    def check_padding(start):
+        session.read(0.1)
+        frame = bytes(session.output[start:])
+        # Apple Terminal can leave its default color in cells affected by
+        # erase commands. The TUI must send painted padding cells instead.
+        if b"\xc2\xa0" * 8 not in frame or re.search(rb"\x1b\[(?:[012]?K|\d*X)", frame):
+            raise RuntimeError("Terminal.app TUI used erase commands to paint its background")
+
+    try:
+        session.wait("Ubuntu 24.04 LTS")
+        check_padding(0)
+        session.key("4", "Configuration")
+        start = len(session.output)
+        session.key("enter", "Configure qBittorrent")
+        check_padding(start)
+        session.key("escape")
+        session.key("q")
+        session.wait_exit()
+        if session.proc.returncode != 0:
+            raise RuntimeError(f"Terminal.app TUI exited with {session.proc.returncode}")
+    finally:
+        session.close()
+
+
 def check_interactive_profile(binary, base, server_url, fixture, command, name, notice):
     config = base / f"interactive-profile-{name}.json"
     previous = fixture.password
@@ -489,6 +517,7 @@ def main():
             session = None
             check_cli_delete(binary, config, server_url, base, fixture)
             check_cli_theme(binary, config, server_url, base)
+            check_terminal_app_background(binary, config, server_url, base)
             check_interactive_profile(binary, base, server_url, fixture, ("profile", "add", "nate"), "nate", "Saved profile nate")
             check_interactive_profile(binary, base, server_url, fixture, ("profile", "setup"), "default", "Saved config to")
             print("PTY smoke passed (profile setup, recovery, details, search cancellation, deletion, shared color scheme)")

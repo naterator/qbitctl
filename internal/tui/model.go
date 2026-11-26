@@ -200,6 +200,7 @@ type model struct {
 	failed                          bool
 	output                          io.Writer
 	tmux                            bool
+	paintBackgroundBlanks           bool
 	lastMouseIndex                  int
 	lastMouseAt                     time.Time
 	lastDialogMouseIndex            int

@@ -22,8 +22,9 @@ to your user PATH. [Download install.ps1](https://raw.githubusercontent.com/nate
 
 ## Quick start
 
-Open the TUI and enter your qBittorrent Web UI URL, username, and password when
-prompted. To set up a named connection from the CLI, run `qbitctl profile add NAME`.
+Open the TUI or run `qbitctl profile setup` and enter your qBittorrent Web UI
+URL, username, and password when prompted. Either setup saves the first
+connection as `default`. Use `qbitctl profile add NAME` to choose a name.
 
 ```bash
 qbitctl tui
@@ -86,8 +87,12 @@ manage the server's plugins. Press `/` to start a search.
 ## Commands
 
 Run `qbitctl --help` for the command list or `qbitctl help <command>` for its
-flags and aliases. Commands that take a torrent hash also accept an
-unambiguous prefix.
+flags and aliases. Main help displays the logo inline in Kitty, Ghostty,
+iTerm2, and WezTerm. Other terminals, multiplexed sessions, redirected help,
+and `NO_COLOR` use an ASCII logo. Run `QBITCTL_HELP_LOGO=ascii qbitctl --help`
+to use ASCII in an image-capable terminal. The ASCII logo uses the original
+SVG colors in color terminals. Commands that take a torrent hash also
+accept an unambiguous prefix.
 
 | Command | What it does |
 | --- | --- |
@@ -196,6 +201,8 @@ supply the same `QBITCTL_MASTER_KEY` when saving the config and on later runs.
 
 Use `qbitctl profile list` to see saved connections, `--profile NAME` to pick
 one for a command, and `qbitctl profile use NAME` to set the startup default.
+If your config uses the older single-server format, `qbitctl profile use default`
+moves that connection into a named profile.
 Config has separate **Active profile** and **Startup profile** rows. Each
 profile has its own search provider, and view preferences apply across
 profiles.

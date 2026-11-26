@@ -350,7 +350,7 @@ func connectAndSaveSetupWithCAProfile(ctx context.Context, path, profile string,
 	if addOnly {
 		saveErr = AddProfileConfig(path, profile, creds, caFile)
 	} else {
-		saveErr = saveSetupConfigForProfile(path, profile, creds, caToSave, tuiDefault, savedSnapshot)
+		app.profileName, saveErr = writeConnectionConfig(path, profile, creds, caToSave, tuiDefault, savedSnapshot, true)
 	}
 	if saveErr != nil {
 		app.Logout()
@@ -423,51 +423,41 @@ func readSavedPasswordForProfile(path, profile string) (string, string, *setupAu
 	return savedURL, password, snapshot, nil
 }
 
-func saveSetupConfig(path string, creds Credentials, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
-	return saveSetupConfigForProfile(path, "", creds, nil, tuiDefault, snapshot)
-}
-
-func saveSetupConfigWithCA(path string, creds Credentials, caFile *string, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
-	return saveSetupConfigForProfile(path, "", creds, caFile, tuiDefault, snapshot)
-}
-
-func saveSetupConfigForProfile(path, profile string, creds Credentials, caFile *string, tuiDefault *bool, snapshot *setupAuthSnapshot) error {
+func writeConnectionConfig(path, profile string, creds Credentials, caFile *string, tuiDefault *bool, snapshot *setupAuthSnapshot, nameDefault bool) (string, error) {
 	encodedPassword, err := encryptPassword(creds.Pass)
 	if err != nil {
-		return err
+		return "", err
 	}
 	urlValue, err := json.Marshal(creds.URL)
 	if err != nil {
-		return err
+		return "", err
 	}
 	userValue, err := json.Marshal(creds.User)
 	if err != nil {
-		return err
+		return "", err
 	}
 	passwordValue, err := json.Marshal(encodedPassword)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if caFile != nil {
 		normalized, normalizeErr := normalizeSavedCAFile(*caFile)
 		if normalizeErr != nil {
-			return normalizeErr
+			return "", normalizeErr
 		}
 		caFile = &normalized
 	}
-	return configfile.Update(path, func(object configfile.Object) (bool, error) {
+	var savedProfile string
+	err = configfile.Update(path, func(object configfile.Object) (bool, error) {
 		selectedName, selected, profiles, named, err := profileWriteTarget(object, strings.TrimSpace(profile))
 		if err != nil {
 			return false, err
 		}
-		currentDefault := ""
-		if named {
-			currentDefault = configuredDefaultProfile(object, profiles)
-		}
 		if snapshot != nil {
 			currentURL, urlOK := configValue(selected, "url")
 			currentPassword, passwordOK := configValue(selected, "password")
-			if !urlOK || !passwordOK || !bytes.Equal(currentURL, snapshot.url) || !bytes.Equal(currentPassword, snapshot.password) {
+			if selectedName != snapshot.profile || !urlOK || !passwordOK ||
+				!bytes.Equal(currentURL, snapshot.url) || !bytes.Equal(currentPassword, snapshot.password) {
 				return false, ErrSetupChanged
 			}
 		}
@@ -489,18 +479,21 @@ func saveSetupConfigForProfile(path, profile string, creds Credentials, caFile *
 				setConfigValue(selected, caFileConfigKey, encodedCA)
 			}
 		}
+		savedProfile = selectedName
 		if named {
 			encodedProfile, err := json.Marshal(selected)
 			if err != nil {
 				return false, err
 			}
 			profiles[selectedName] = encodedProfile
-			if currentDefault == "" {
-				setDefaultProfileInObject(object, selectedName)
-			}
 			if err := writeProfiles(object, profiles); err != nil {
 				return false, err
 			}
+		} else if nameDefault {
+			if _, _, err := migrateLegacyProfiles(object); err != nil {
+				return false, err
+			}
+			savedProfile = DefaultProfileName
 		}
 		if tuiDefault == nil {
 			return true, nil
@@ -523,6 +516,7 @@ func saveSetupConfigForProfile(path, profile string, creds Credentials, caFile *
 		setConfigValue(object, "ui", encodedUI)
 		return true, nil
 	})
+	return savedProfile, err
 }
 
 // InteractiveConfigAt validates credentials and saves them to the given path.
@@ -543,12 +537,12 @@ func InteractiveConfigContext(ctx context.Context, in io.Reader, out io.Writer, 
 }
 
 // InteractiveConfigProfileContext is the profile-aware setup flow used by
-// `qbitctl profile setup NAME`. The empty profile preserves the legacy
-// single-server behavior.
+// `qbitctl profile setup [NAME]`. With no name, it edits the startup profile
+// or saves the connection as "default" in a first-run or legacy config.
 func InteractiveConfigProfileContext(ctx context.Context, in io.Reader, out io.Writer, hiddenInput HiddenInputFunc, path, profile string) (string, error) {
-	profilePath := path
-	if profilePath == "" {
-		profilePath = defaultAuthPath()
+	profilePath, err := configfile.ResolvePath(path)
+	if err != nil {
+		return "", err
 	}
 	setup, err := readSetup(Options{ConfigPath: profilePath, Profile: profile})
 	if err != nil {

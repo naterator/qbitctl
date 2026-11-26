@@ -23,7 +23,7 @@ func newFilesCmd(opts *CLIOptions) *cobra.Command {
 		Use:     "files <hash>",
 		Short:   "List torrent files",
 		GroupID: "view",
-		Args:    cobra.ExactArgs(1),
+		Args:    authenticatedArgs(opts, cobra.ExactArgs(1)),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]cobra.Completion, cobra.ShellCompDirective) {
 			return completeSingleTorrentHashArgs(opts)(cmd, args, toComplete)
 		},

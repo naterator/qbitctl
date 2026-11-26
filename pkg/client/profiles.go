@@ -11,8 +11,8 @@ import (
 	"github.com/naterator/qbitctl/internal/configfile"
 )
 
-// DefaultProfileName is the name used when a legacy single-server config is
-// first expanded into named profiles.
+// DefaultProfileName is the name used for the first interactive connection
+// and for a migrated single-server config.
 const DefaultProfileName = "default"
 
 const (
@@ -72,7 +72,7 @@ func profileObject(root configfile.Object) (configfile.Object, bool, error) {
 		}
 		return nil, true, fmt.Errorf("decode config field %q: %w", profilesConfigKey, err)
 	}
-	return profiles, true, nil
+	return profiles, len(profiles) > 0, nil
 }
 
 func profileNames(profiles configfile.Object) []string {
@@ -118,9 +118,6 @@ func selectProfileObject(root configfile.Object, requested string) (name string,
 	name = requested
 	if name == "" {
 		name = configuredDefaultProfile(root, profiles)
-	}
-	if name == "" {
-		return "", nil, true, errors.New("no startup profile is configured")
 	}
 	raw, ok := profiles[name]
 	if !ok {
@@ -194,7 +191,11 @@ func ReadProfiles(path string) ([]ProfileSummary, string, error) {
 		return nil, "", err
 	}
 	if !named {
-		if _, hasURL := configValue(root, "url"); !hasURL {
+		url, err := profileString(root, "url")
+		if err != nil {
+			return nil, "", err
+		}
+		if strings.TrimSpace(url) == "" {
 			return nil, "", nil
 		}
 		legacy, err := profileMetadataFromObject(DefaultProfileName, root, true)
@@ -408,7 +409,17 @@ func SetDefaultProfile(path, name string) error {
 			return false, err
 		}
 		if !named {
-			return false, fmt.Errorf("profile %q is not configured; add a named profile first", name)
+			url, err := profileString(root, "url")
+			if err != nil {
+				return false, err
+			}
+			if normalizedName != DefaultProfileName || strings.TrimSpace(url) == "" {
+				return false, fmt.Errorf("profile %q is not configured; add a named profile first", name)
+			}
+			// The legacy connection is listed as "default"; make it a named
+			// profile in the same transaction as the startup selection.
+			_, _, err = migrateLegacyProfiles(root)
+			return err == nil, err
 		}
 		if _, ok := profiles[normalizedName]; !ok {
 			return false, fmt.Errorf("profile %q is not configured", normalizedName)

@@ -79,7 +79,7 @@ func newInfoCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"i", "in"},
 		Short:   "Show qBittorrent server info and transfer stats",
 		GroupID: "view",
-		Args:    jsonModeArgs(cobra.NoArgs),
+		Args:    authenticatedArgs(opts, jsonModeArgs(cobra.NoArgs)),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			switch {
 			case serverJSON:
@@ -159,7 +159,7 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 		Aliases: []string{"a", "ad"},
 		Short:   "Add a torrent file, magnet link, URL, or cached search result",
 		GroupID: "change",
-		Args: func(cmd *cobra.Command, args []string) error {
+		Args: authenticatedArgs(opts, func(cmd *cobra.Command, args []string) error {
 			if err := prepareAddOptions(cmd); err != nil {
 				return codedErr(exitBadArgs, err.Error())
 			}
@@ -170,7 +170,7 @@ func newAddCmd(opts *CLIOptions) *cobra.Command {
 				return codedErr(exitBadArgs, "Provide a positive --search-id without a torrent file or link")
 			}
 			return nil
-		},
+		}),
 		RunE: authenticatedRun(opts, func(app *App, args []string) error {
 			if searchID > 0 {
 				return app.AddSearchResultWithOptions(searchID, addOptions)
@@ -520,7 +520,7 @@ func newGetCmd(opts *CLIOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&serverJSON, "server-json", "J", false, "Output the raw qBittorrent JSON response")
 	cmd.Flags().BoolVarP(&asJSON, "json", "j", false, "Output as JSON")
 	cmd.MarkFlagsMutuallyExclusive("server-json", "json")
-	cmd.Args = cobra.MatchAll(cmd.Args, validateFieldArg(0, qbt.IsGetField, qbt.CanonicalGetField, "get"))
+	cmd.Args = authenticatedArgs(opts, cobra.MatchAll(cmd.Args, validateFieldArg(0, qbt.IsGetField, qbt.CanonicalGetField, "get")))
 	return cmd
 }
 

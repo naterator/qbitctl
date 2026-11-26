@@ -86,7 +86,7 @@ func TestCachedSearchHistoryPreservesQueryDisplayDataAndScope(t *testing.T) {
 	}
 
 	other := &App{creds: Credentials{URL: app.creds.URL, User: "different-user"}}
-	if _, err := other.CachedSearchHistory(); !errors.Is(err, errSearchCacheUnavailable) {
+	if _, err := other.CachedSearchHistory(); !errors.Is(err, ErrSearchCacheUnavailable) {
 		t.Fatalf("other-user history error = %v, want unavailable", err)
 	}
 }
@@ -132,14 +132,14 @@ func TestCacheSearchResultsRetainsSnapshotsAndRejectsOtherScopes(t *testing.T) {
 		{URL: app.creds.URL, User: "another-user"},
 	} {
 		other := &App{creds: creds}
-		if _, err := other.cachedSearchResult(second[0].ID); !errors.Is(err, errSearchCacheUnavailable) {
+		if _, err := other.cachedSearchResult(second[0].ID); !errors.Is(err, ErrSearchCacheUnavailable) {
 			t.Errorf("wrong-scope error = %v", err)
 		}
 		otherResults := []SearchResult{{downloadURL: "https://download.example/other.torrent"}}
 		if err := other.CacheSearchResults(otherResults); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := app.cachedSearchResult(otherResults[0].ID); !errors.Is(err, errSearchCacheUnavailable) {
+		if _, err := app.cachedSearchResult(otherResults[0].ID); !errors.Is(err, ErrSearchCacheUnavailable) {
 			t.Errorf("ID from another profile error = %v", err)
 		}
 		if _, err := app.cachedSearchResult(second[0].ID); err != nil {
@@ -169,7 +169,7 @@ func TestCachedSearchResultRejectsExpiredCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []int64{123456789011, 123456789012} {
-		if _, err := app.cachedSearchResult(id); !errors.Is(err, errSearchCacheUnavailable) {
+		if _, err := app.cachedSearchResult(id); !errors.Is(err, ErrSearchCacheUnavailable) {
 			t.Fatalf("invalid timestamp for %d returned error %v", id, err)
 		}
 	}
@@ -192,7 +192,7 @@ func TestCachedSearchResultReportsMalformedCache(t *testing.T) {
 	if !errors.Is(err, errSearchCacheUnreadable) {
 		t.Fatalf("malformed cache error = %v, want errSearchCacheUnreadable", err)
 	}
-	if errors.Is(err, errSearchCacheUnavailable) {
+	if errors.Is(err, ErrSearchCacheUnavailable) {
 		t.Fatalf("malformed cache error = %v, unexpectedly unavailable", err)
 	}
 	if !strings.Contains(err.Error(), "unexpected end of JSON input") {
@@ -221,7 +221,7 @@ func TestSearchCachePreservesRecentLegacyIDs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := app.cachedSearchResult(123456789012); !errors.Is(err, errSearchCacheUnavailable) {
+	if _, err := app.cachedSearchResult(123456789012); !errors.Is(err, ErrSearchCacheUnavailable) {
 		t.Fatalf("oldest search was not evicted at the per-profile cap: %v", err)
 	}
 }
@@ -341,7 +341,7 @@ func TestCachedSearchResultReportsUnreadableCache(t *testing.T) {
 func TestCachedSearchResultMissingCacheStaysUnavailable(t *testing.T) {
 	app := newSearchCacheTestApp(t, "https://torrent.example/qbt", "admin")
 	_, err := app.cachedSearchResult(123456789012)
-	if !errors.Is(err, errSearchCacheUnavailable) {
-		t.Fatalf("missing cache error = %v, want errSearchCacheUnavailable", err)
+	if !errors.Is(err, ErrSearchCacheUnavailable) {
+		t.Fatalf("missing cache error = %v, want ErrSearchCacheUnavailable", err)
 	}
 }

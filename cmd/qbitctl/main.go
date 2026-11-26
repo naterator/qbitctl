@@ -44,6 +44,10 @@ func (e exitError) Error() string {
 	return "exit"
 }
 
+type setupHintError struct{ error }
+
+func (e setupHintError) Unwrap() error { return e.error }
+
 var (
 	getFieldNames = append(append([]string{}, qbt.GetFieldNames...), "tracker-list")
 	setFieldNames = qbt.SetFieldNames
@@ -70,12 +74,23 @@ func wrapFields(fields []string, indent string, maxWidth int) string {
 }
 
 func printCLIError(cmd *cobra.Command, err error) {
-	prefix := "[ERROR]"
+	var style cliStyle
 	if _, inBatch := batchAppFromContext(cmd.Context()); !inBatch && cmd.Name() != "batch" {
-		style := newCLIStyle(cmd.ErrOrStderr(), commandConfigPath(cmd), false)
-		prefix = style.diagnostic(prefix)
+		style = newCLIStyle(cmd.ErrOrStderr(), commandConfigPath(cmd), false)
 	}
-	cmd.PrintErrf("%s %v\n", prefix, err)
+	message := err.Error()
+	var fieldHelp fieldHelpError
+	switch {
+	case errors.As(err, &fieldHelp):
+		message = strings.Replace(message, fieldHelp.Error(), fieldHelp.message(style.command(fieldHelp.command)), 1)
+	case errors.Is(err, qbt.ErrSearchCacheUnavailable):
+		message = strings.Replace(message, "Run qbitctl search again", "Run "+style.command("qbitctl search")+" again", 1)
+	}
+	cmd.PrintErrf("%s %s\n", style.diagnostic("[ERROR]"), message)
+	var hint setupHintError
+	if errors.Is(err, qbt.ErrNoServerConfigured) || errors.As(err, &hint) {
+		cmd.PrintErrf("Run %s to configure a server.\n", style.command("qbitctl profile setup"))
+	}
 }
 
 func result(cmd *cobra.Command, err error) error {
@@ -91,6 +106,25 @@ func result(cmd *cobra.Command, err error) error {
 		return exitError{code: exitFetchFail}
 	}
 	return exitError{code: exitBadArgs}
+}
+
+// Cobra validates arguments before the command can try to connect. Check
+// only local setup metadata here so the argument error stays intact.
+func authenticatedArgs(opts *CLIOptions, validate cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		err := validate(cmd, args)
+		if err == nil || strings.TrimSpace(opts.URL) != "" {
+			return err
+		}
+		if _, inBatch := batchAppFromContext(cmd.Context()); inBatch {
+			return err
+		}
+		setup, setupErr := qbt.ReadSetup(qbt.Options{ConfigPath: opts.ConfigPath, Profile: opts.Profile})
+		if setupErr == nil && strings.TrimSpace(setup.URL) == "" {
+			return setupHintError{err}
+		}
+		return err
+	}
 }
 
 func authenticatedRun(opts *CLIOptions, run func(*App, []string) error) func(*cobra.Command, []string) error {

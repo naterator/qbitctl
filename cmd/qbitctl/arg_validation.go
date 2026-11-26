@@ -56,6 +56,26 @@ func jsonModeArgs(positional cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
+type fieldHelpError struct {
+	error
+	command string
+}
+
+func (e fieldHelpError) Unwrap() error { return e.error }
+
+func (e fieldHelpError) Error() string { return e.message(e.command) }
+
+func (e fieldHelpError) message(command string) string {
+	return fmt.Sprintf("%s Run %s for the field list.", e.error, command)
+}
+
+func unknownField(field, action string) error {
+	return fieldHelpError{
+		error:   codedErr(exitBadArgs, fmt.Sprintf("Unknown field %q.", field)),
+		command: "qbitctl help " + action,
+	}
+}
+
 func validateFieldArg(index int, isKnown func(string) bool, canonical func(string) string, help string) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		if len(args) <= index {
@@ -65,7 +85,7 @@ func validateFieldArg(index int, isKnown func(string) bool, canonical func(strin
 		if isKnown(field) {
 			return nil
 		}
-		return codedErr(exitBadArgs, fmt.Sprintf("Unknown field %q. Run qbitctl help %s for the field list.", args[index], help))
+		return unknownField(args[index], help)
 	}
 }
 
@@ -75,7 +95,7 @@ func validateSetArgs(cmd *cobra.Command, args []string) error {
 	}
 	field := qbt.CanonicalSetField(args[0])
 	if !qbt.IsSetField(field) {
-		return codedErr(exitBadArgs, fmt.Sprintf("Unknown field %q. Run qbitctl help set for the field list.", args[0]))
+		return unknownField(args[0], "set")
 	}
 	if err := qbt.ValidateSetValue(field, args[1]); err != nil {
 		return codedErr(exitBadArgs, fmt.Sprintf("Invalid value for %s: %v", field, err))

@@ -7,6 +7,7 @@ HTTP server is the fixture used by ``record_demo.py`` so the smoke check and
 the published terminal recording keep one API contract.
 """
 
+import base64
 import json
 import os
 import pty
@@ -23,6 +24,7 @@ from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
 from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -57,11 +59,11 @@ class DetailsFixture(Fixture):
 
 
 class Session:
-    def __init__(self, binary: Path, config: Path, server_url: str, base: Path, command=("tui",)):
+    def __init__(self, binary: Path, config: Path, server_url: str, base: Path, command=("tui",), *, env_overrides=None):
         self.master, slave = pty.openpty()
         fcntl_winsize(slave, WIDTH, HEIGHT)
         env = os.environ.copy()
-        for key in ("QBITCTL_MASTER_KEY", "QBITCTL_PASSWORD", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "NO_COLOR"):
+        for key in ("QBITCTL_MASTER_KEY", "QBITCTL_PASSWORD", "QBITCTL_HELP_LOGO", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "NO_COLOR"):
             env.pop(key, None)
         env.update(
             {
@@ -72,6 +74,8 @@ class Session:
                 "COLORTERM": "truecolor",
             }
         )
+        if env_overrides is not None:
+            env.update(env_overrides)
         self.proc = subprocess.Popen(
             [str(binary), "--config", str(config), *command],
             cwd=base,
@@ -281,8 +285,8 @@ def save_ocean_theme(session):
 
 
 def check_cli_theme(binary, config, server_url, base):
-    def run(*command, exit_code=0):
-        session = Session(binary, config, server_url, base, command)
+    def run(*command, exit_code=0, config_path=config, env_overrides=None):
+        session = Session(binary, config_path, server_url, base, command, env_overrides=env_overrides)
         try:
             session.wait_exit()
             # Drain output queued by the PTY even if the child already exited.
@@ -322,6 +326,71 @@ def check_cli_theme(binary, config, server_url, base):
     batch.write_text("list\n")
     if b"\x1b" in run("batch", str(batch)):
         raise RuntimeError("batch output contains theme escapes")
+    batch.write_text(f"get unknown {ALPHA}\n")
+    batch_error = run("batch", str(batch), exit_code=4)
+    if b'[ERROR] batch line 1: Unknown field "unknown". Run qbitctl help get' not in batch_error or b"\x1b" in batch_error:
+        raise RuntimeError("batch field errors should keep their line number and plain text")
+
+    for command, args in (("get", ("unknown", ALPHA)), ("set", ("unknown", "value", ALPHA))):
+        hint = b"Run \x1b[38;2;103;232;249mqbitctl help " + command.encode() + b"\x1b[m for the field list."
+        if hint not in run(command, *args, exit_code=4):
+            raise RuntimeError(f"the {command} field-help hint is missing Ocean's accent")
+    if b"Run \x1b[38;2;103;232;249mqbitctl search\x1b[m again" not in run("add", "--search-id", "999999999999", exit_code=4):
+        raise RuntimeError("the expired search-result hint is missing Ocean's accent")
+
+    unconfigured = base / "unconfigured-theme.json"
+    for scheme, accent in (("ocean", b"103;232;249"), ("amber", b"244;201;93")):
+        unconfigured.write_text(json.dumps({"ui": {"theme": scheme}}))
+        expected = b"Run \x1b[38;2;" + accent + b"mqbitctl profile setup\x1b[m to configure a server."
+        for command, exit_code in (("add", 4), ("info", 5)):
+            if expected not in run(command, exit_code=exit_code, config_path=unconfigured):
+                raise RuntimeError(f"the {command} setup hint is missing the {scheme} accent")
+
+    root = SCRIPT_DIR.parent
+    png = (root / "cmd" / "qbitctl" / "help_logo.png").read_bytes()
+    png_width, png_height = struct.unpack(">II", png[16:24])
+    svg = ElementTree.parse(root / "assets" / "logo.svg").getroot()
+    _, _, svg_width, svg_height = map(int, svg.attrib["viewBox"].split())
+    if png_width * svg_height != png_height * svg_width:
+        raise RuntimeError("the embedded PNG has a different aspect ratio from the SVG")
+    logo = base64.b64encode(png)
+    kitty_logo = b"\x1b_Ga=T,f=100,q=2,c=36,m=0;" + logo + b"\x1b\\\r\n\r\n"
+    iterm_logo = b"\x1b]1337;File=inline=1;width=36;preserveAspectRatio=1:" + logo + b"\a\r\n\r\n"
+    direct = {"TERM_PROGRAM": "", "TMUX": "", "STY": ""}
+    iterm = dict(direct, TERM_PROGRAM="iTerm.app")
+    kitty = dict(direct, TERM="xterm-kitty")
+    for env, prefix in (
+        (kitty, kitty_logo),
+        (iterm, iterm_logo),
+        (dict(direct, TERM="xterm-ghostty"), kitty_logo),
+        (dict(direct, TERM_PROGRAM="WezTerm"), iterm_logo),
+    ):
+        if not run("--help", env_overrides=env).startswith(b"\r\n" + prefix):
+            raise RuntimeError(f"main help did not begin with a blank line and the inline PNG for {env}")
+        if logo in run("help", "list", env_overrides=env):
+            raise RuntimeError("subcommand help included the inline logo")
+    ascii_logo = dict(iterm, QBITCTL_HELP_LOGO="ascii")
+    def rgb_escape(value, target):
+        return b"\x1b[%d;2;%d;%d;%dm" % (target, *bytes.fromhex(value[1:]))
+
+    panel = svg.find("{*}rect")
+    wordmark = svg.find("{*}g")
+    panel_color = rgb_escape(panel.attrib["fill"], 48)
+    outline_color = rgb_escape(panel.attrib["stroke"], 38)
+    letter_color = rgb_escape(wordmark.attrib["fill"], 38)
+    mint_color = rgb_escape(wordmark.find("{*}rect").attrib["fill"], 38)
+    for env, theme_config in ((direct, config), (ascii_logo, config), (ascii_logo, unconfigured)):
+        banner = run("--help", config_path=theme_config, env_overrides=env).split(b"\r\n\r\n", 1)[0]
+        if not banner.startswith(b"\r\n " + panel_color + outline_color + b"/-----"):
+            raise RuntimeError("the ASCII banner is missing the blank line, SVG panel, or SVG outline")
+        if letter_color + b"#####" not in banner or mint_color + b"++" not in banner or mint_color + b"++++" not in banner:
+            raise RuntimeError("the ASCII banner is missing the SVG lettering or mint accents")
+    tmux_help = run("--help", env_overrides=dict(kitty, TERM="tmux-256color"))
+    if not re.match(rb"\r\n \x1b\[[0-9;]+m\x1b\[[0-9;]+m/-----", tmux_help):
+        raise RuntimeError("multiplexed help did not begin with colored ASCII")
+    for env in (iterm, ascii_logo):
+        if not run("--help", env_overrides=dict(env, NO_COLOR="1")).startswith(b"\r\n /-----"):
+            raise RuntimeError("NO_COLOR did not show the plain ASCII banner")
 
 
 def check_cli_delete(binary, config, server_url, base, fixture):
@@ -334,6 +403,8 @@ def check_cli_delete(binary, config, server_url, base, fixture):
         try:
             if answer is not None:
                 session.wait("Type DELETE to confirm")
+                if b"Type \x1b[38;2;251;203;122mDELETE\x1b[m to confirm" not in session.output:
+                    raise RuntimeError("the DELETE confirmation token is missing Ocean's warning color")
                 output = session.clean_output()
                 if ALPHA.encode() not in output or b"Ubuntu 24.04 LTS" not in output:
                     raise RuntimeError("delete preview omitted the target hash or name")
@@ -350,11 +421,11 @@ def check_cli_delete(binary, config, server_url, base, fixture):
             session.close()
 
 
-def check_interactive_profile_add(binary, base, server_url, fixture):
-    config = base / "interactive-profile.json"
+def check_interactive_profile(binary, base, server_url, fixture, command, name, notice):
+    config = base / f"interactive-profile-{name}.json"
     previous = fixture.password
     fixture.password = "interactive-setup-secret"
-    session = Session(binary, config, server_url, base, ("profile", "add", "nate"))
+    session = Session(binary, config, server_url, base, command)
     try:
         session.wait("URL [")
         session.send(server_url.encode() + b"\r")
@@ -362,10 +433,10 @@ def check_interactive_profile_add(binary, base, server_url, fixture):
         session.send(b"demo\r")
         session.wait("Password:")
         session.send(fixture.password.encode() + b"\r")
-        session.wait("Saved profile nate")
+        session.wait(notice)
         session.wait_exit()
         saved = json.loads(config.read_text())
-        if saved["default_profile"] != "nate" or not saved["profiles"]["nate"]["password"].startswith("enc:v2:"):
+        if saved["default_profile"] != name or not saved["profiles"][name]["password"].startswith("enc:v2:"):
             raise RuntimeError("interactive profile creation did not save encrypted credentials")
         if fixture.password.encode() in session.clean_output():
             raise RuntimeError("interactive profile password was echoed")
@@ -393,6 +464,9 @@ def main():
             # known-good profile for the subsequent stale-credential run.
             session = Session(binary, config, server_url, base)
             first_launch(session, server_url)
+            saved = json.loads(config.read_text())
+            if saved["default_profile"] != "default" or saved["profiles"]["default"]["url"] != server_url:
+                raise RuntimeError("first TUI setup did not create the default profile")
             save_ocean_theme(session)
             session.key("q")
             session.wait_exit(8)
@@ -415,7 +489,8 @@ def main():
             session = None
             check_cli_delete(binary, config, server_url, base, fixture)
             check_cli_theme(binary, config, server_url, base)
-            check_interactive_profile_add(binary, base, server_url, fixture)
+            check_interactive_profile(binary, base, server_url, fixture, ("profile", "add", "nate"), "nate", "Saved profile nate")
+            check_interactive_profile(binary, base, server_url, fixture, ("profile", "setup"), "default", "Saved config to")
             print("PTY smoke passed (profile setup, recovery, details, search cancellation, deletion, shared color scheme)")
         finally:
             if session is not None:

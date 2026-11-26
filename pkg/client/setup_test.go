@@ -161,8 +161,8 @@ func TestConnectAndSaveSetupAuthenticatesBeforeSavingAndPreservesFields(t *testi
 	if err != nil {
 		t.Fatalf("ConnectAndSaveSetup returned error: %v", err)
 	}
-	if app == nil || app.ConfigPath() != path {
-		t.Fatalf("app/config path = %#v, %q", app, app.ConfigPath())
+	if app == nil || app.ConfigPath() != path || app.ProfileName() != DefaultProfileName {
+		t.Fatal("setup app did not use the saved default profile")
 	}
 	app.Logout()
 	if server.LoginCalls != 1 {
@@ -177,9 +177,13 @@ func TestConnectAndSaveSetupAuthenticatesBeforeSavingAndPreservesFields(t *testi
 	if err := json.Unmarshal(data, &object); err != nil {
 		t.Fatal(err)
 	}
+	profiles := decodeSetupProfileObject(t, object[profilesConfigKey])
 	var saved configFile
-	if err := json.Unmarshal(data, &saved); err != nil {
+	if err := json.Unmarshal(profiles[DefaultProfileName], &saved); err != nil {
 		t.Fatal(err)
+	}
+	if setupJSONValue(t, object[defaultProfileConfigKey]) != DefaultProfileName {
+		t.Fatal("setup did not select the new profile at startup")
 	}
 	if saved.URL != server.creds().URL || saved.User != server.creds().User || !strings.HasPrefix(saved.Password, "enc:") {
 		t.Fatalf("saved auth = %#v", saved)
@@ -300,7 +304,7 @@ func TestInteractiveConfigContextVerifiesAndPreservesProfile(t *testing.T) {
 	server := newQBTestServer(t)
 	withQBServerClientFactory(t, server)
 	path := filepath.Join(t.TempDir(), "selected", "config.json")
-	original := `{"url":"http://old.example","user":"old-user","password":"enc:v2:legacy","ui":{"tui_default":true,"queue":{"sort":"progress-desc"}},"future":{"keep":true}}`
+	original := `{"url":"http://old.example","user":"old-user","password":"enc:v2:legacy","default_search_plugin":"jackett","ui":{"tui_default":true,"queue":{"sort":"progress-desc"}},"future":{"keep":true}}`
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -344,6 +348,16 @@ func TestInteractiveConfigContextVerifiesAndPreservesProfile(t *testing.T) {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(data, &object); err != nil {
 		t.Fatal(err)
+	}
+	profiles := decodeSetupProfileObject(t, object[profilesConfigKey])
+	migrated := decodeSetupProfileObject(t, profiles[DefaultProfileName])
+	if setupJSONValue(t, migrated[profileSearchKey]) != "jackett" {
+		t.Fatal("interactive setup lost the saved search plugin during migration")
+	}
+	for _, key := range []string{"url", "user", "password", profileSearchKey} {
+		if _, ok := object[key]; ok {
+			t.Fatalf("interactive setup left legacy field %q at the root", key)
+		}
 	}
 	var ui map[string]json.RawMessage
 	if err := json.Unmarshal(object["ui"], &ui); err != nil {

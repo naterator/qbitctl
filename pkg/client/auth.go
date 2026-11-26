@@ -36,6 +36,9 @@ var errReenterEncryptedPassword = fmt.Errorf("%w; run qbitctl config to re-enter
 var errMacKeychainUnavailable = errors.New("macOS Keychain is unavailable")
 var errMasterKeyUnavailable = errors.New("qbitctl master key is unavailable")
 
+// ErrNoServerConfigured indicates that there is no Web UI address to use.
+var ErrNoServerConfigured = errors.New("no qBittorrent server configured")
+
 // Keep keyring access behind package-local functions so credential loading can
 // be tested without depending on a particular desktop keyring backend. The
 // production values are the go-keyring implementations.
@@ -184,7 +187,8 @@ func decryptPassword(value string) (string, error) {
 }
 
 func saveAuthFile(path string, creds Credentials) error {
-	return saveSetupConfigForProfile(path, "", creds, nil, nil, nil)
+	_, err := writeConnectionConfig(path, "", creds, nil, nil, nil, false)
+	return err
 }
 
 func setConfigValue(object configfile.Object, key string, value json.RawMessage) {
@@ -392,7 +396,11 @@ func initAuthWithPathAndProfile(opts Options, infoOut io.Writer) (Credentials, s
 	if configPath != "" {
 		fileInfo, err := os.Stat(configPath)
 		if err != nil || fileInfo.IsDir() {
-			return Credentials{}, configPath, "", codedErrf(ExitBadArgs, "Config file '%s' does not exist or is not readable", configPath)
+			configErr := codedErrf(ExitBadArgs, "Config file '%s' does not exist or is not readable", configPath)
+			if errors.Is(err, os.ErrNotExist) && strings.TrimSpace(cli.URL) == "" {
+				return Credentials{}, configPath, "", codedErrWrapf(configErr.Code, ErrNoServerConfigured, "%v", configErr)
+			}
+			return Credentials{}, configPath, "", configErr
 		}
 
 		loadedCreds, ok, profileName, err := loadAuthFileForProfileWithName(configPath, opts.Profile, infoOut)
@@ -459,6 +467,9 @@ func initAuthWithPathAndProfile(opts Options, infoOut io.Writer) (Credentials, s
 	}
 
 	if !canAttemptLogin(creds) {
+		if creds.URL == "" {
+			return Credentials{}, selectedPath, selectedProfile, codedErrWrapf(ExitFile, ErrNoServerConfigured, "No credentials supplied")
+		}
 		return Credentials{}, selectedPath, selectedProfile, codedErrf(ExitFile, "No credentials supplied")
 	}
 
@@ -629,11 +640,11 @@ func ExecuteConfigWrite(opts Options, outputPath string, infoOut io.Writer) erro
 	if opts.CAFile != "" {
 		caToSave = &opts.CAFile
 	}
-	if err := saveSetupConfigForProfile(outputPath, opts.Profile, Credentials{
+	if _, err := writeConnectionConfig(outputPath, opts.Profile, Credentials{
 		URL:  normalizedURL,
 		User: userValue,
 		Pass: opts.Pass,
-	}, caToSave, nil, nil); err != nil {
+	}, caToSave, nil, nil, false); err != nil {
 		return codedErrf(ExitFile, "Failed to save config file: %v", err)
 	}
 	if opts.HTTPTimeout > 0 {

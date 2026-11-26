@@ -1,4 +1,4 @@
-"""Check a built CLI against both legacy and modern qBittorrent login responses."""
+"""Check missing setup and both legacy and modern qBittorrent login responses."""
 
 import json
 import os
@@ -61,6 +61,15 @@ def main():
         if "update" not in run("--help") or "--dry-run" not in run("update", "--help"):
             raise RuntimeError("update command missing from binary help")
 
+        bare_add = subprocess.run(
+            [binary, "add"], cwd=temp, env=dict(env, NO_COLOR="1"), capture_output=True, text=True, timeout=15
+        )
+        if bare_add.returncode != 4 or bare_add.stderr.splitlines() != [
+            "[ERROR] accepts 1 arg(s), received 0",
+            "Run qbitctl profile setup to configure a server.",
+        ]:
+            raise RuntimeError(f"bare add did not report its argument error and setup hint: {bare_add.stderr!r}")
+
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -75,7 +84,7 @@ def main():
         finally:
             server.shutdown()
             thread.join()
-    print("native CLI smoke passed (200/SID and 204/QBT_SID login, info, list)")
+    print("native CLI smoke passed (bare add, 200/SID and 204/QBT_SID login, info, list)")
 
 
 if __name__ == "__main__":

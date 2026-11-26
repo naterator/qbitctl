@@ -27,7 +27,10 @@ func TestQbitctlHelpIsGroupedAndPlainWhenRedirected(t *testing.T) {
 		t.Fatalf("execute help: %v", err)
 	}
 	got := output.String()
-	if strings.Contains(got, "\x1b[") {
+	if !strings.HasPrefix(got, "\n"+helpLogoASCII+"\n\n") {
+		t.Fatalf("redirected main help did not start with a blank line and the ASCII logo: %q", got)
+	}
+	if strings.ContainsRune(got, '\x1b') {
 		t.Fatalf("redirected help contains ANSI escapes: %q", got)
 	}
 	for _, want := range []string{"View:", "Setup:", "list", "config", "Flags:", "qbitctl [command] --help"} {
@@ -58,6 +61,9 @@ func TestQbitctlHelpUsesTheSharedTheme(t *testing.T) {
 	}
 
 	def := run("help", "list")
+	if strings.Contains(def, helpLogoASCII) {
+		t.Fatalf("subcommand help contains a logo: %q", def)
+	}
 	if !strings.Contains(def, "\x1b[38;2;236;239;244;1mUsage:") ||
 		!strings.Contains(def, "\x1b[38;2;143;188;187m") {
 		t.Fatalf("help is missing Default's text and accent colors: %q", def)

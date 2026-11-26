@@ -27,7 +27,7 @@ func confirmAndDelete(cmd *cobra.Command, app *App, args []string) error {
 		hashes[i] = torrent.Hash
 		fmt.Fprintf(&preview, "  %s  %q\n", torrent.Hash, torrent.Name)
 	}
-	preview.WriteString("Type DELETE to confirm: ")
+	fmt.Fprintf(&preview, "Type %s to confirm: ", style.warning("DELETE"))
 	if _, err := io.WriteString(cmd.ErrOrStderr(), preview.String()); err != nil {
 		return fmt.Errorf("write delete confirmation: %w", err)
 	}

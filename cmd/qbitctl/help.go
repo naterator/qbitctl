@@ -27,6 +27,9 @@ func renderQbitctlHelp(cmd *cobra.Command) {
 	}
 	out := cmd.OutOrStdout()
 	style := newCLIStyle(out, commandConfigPath(cmd), true)
+	if !cmd.HasParent() {
+		writeHelpLogo(out, style)
+	}
 
 	// Keep Cobra's description handling (Long over Short, including whitespace
 	// trimming) and its UsageString output. This means aliases, grouped

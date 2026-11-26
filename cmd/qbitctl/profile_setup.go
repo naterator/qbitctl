@@ -132,7 +132,7 @@ func collectProfilePassword(cmd *cobra.Command, opts *CLIOptions, creds *qbt.Cre
 func newProfileSetupCmd(opts *CLIOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:               "setup [NAME]",
-		Short:             "Run the text setup for an existing connection or legacy config",
+		Short:             "Set up or update a server connection interactively",
 		Args:              cobra.MaximumNArgs(1),
 		ValidArgsFunction: completeProfileArgs,
 		Annotations:       map[string]string{stdinModeAnnotation: stdinInteractive},

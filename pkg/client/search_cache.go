@@ -26,10 +26,12 @@ const (
 	searchCacheResultMax = int64(999_999_999_999)
 )
 
+// ErrSearchCacheUnavailable reports that there is no matching unexpired search result.
+var ErrSearchCacheUnavailable = errors.New("search result ID is unavailable or expired. Run qbitctl search again")
+
 var (
-	errSearchCacheUnavailable = errors.New("search result ID is unavailable or expired. Run qbitctl search again")
-	errSearchCacheUnreadable  = errors.New("could not read the local search cache")
-	errSearchCacheWrite       = errors.New("could not save result IDs to the local search cache")
+	errSearchCacheUnreadable = errors.New("could not read the local search cache")
+	errSearchCacheWrite      = errors.New("could not save result IDs to the local search cache")
 )
 
 type cachedSearchTarget struct {
@@ -169,7 +171,7 @@ func (a *App) CachedSearchHistory() ([]CachedSearch, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, errSearchCacheUnavailable
+			return nil, ErrSearchCacheUnavailable
 		}
 		return nil, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
 	}
@@ -193,7 +195,7 @@ func (a *App) CachedSearchHistory() ([]CachedSearch, error) {
 		history = append(history, CachedSearch{SavedAt: time.Unix(snapshot.SavedAt, 0), Query: snapshot.Query, Results: results})
 	}
 	if len(history) == 0 {
-		return nil, errSearchCacheUnavailable
+		return nil, ErrSearchCacheUnavailable
 	}
 	return history, nil
 }
@@ -225,7 +227,7 @@ func ReadCachedSearchHistory(opts Options) ([]CachedSearch, error) {
 
 func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {
 	if id <= 0 {
-		return cachedSearchTarget{}, errSearchCacheUnavailable
+		return cachedSearchTarget{}, ErrSearchCacheUnavailable
 	}
 	path, err := SearchResultsCachePath()
 	if err != nil {
@@ -236,7 +238,7 @@ func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return cachedSearchTarget{}, fmt.Errorf("%w: %w", errSearchCacheUnreadable, err)
 		}
-		return cachedSearchTarget{}, errSearchCacheUnavailable
+		return cachedSearchTarget{}, ErrSearchCacheUnavailable
 	}
 	searches, err := parseSearches(data)
 	if err != nil {
@@ -253,7 +255,7 @@ func (a *App) cachedSearchResult(id int64) (cachedSearchTarget, error) {
 			}
 		}
 	}
-	return cachedSearchTarget{}, errSearchCacheUnavailable
+	return cachedSearchTarget{}, ErrSearchCacheUnavailable
 }
 
 func (a *App) searchScope() searchScope {
